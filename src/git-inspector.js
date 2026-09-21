@@ -128,7 +128,6 @@ export async function getWorktrees(repoPath) {
  * 获取分支列表及冗余分析
  */
 export async function getBranches(repoPath) {
-  // 获取当前默认主分支 (main 或 master)
   let mainBranch = 'main';
   try {
     const symref = await runGit(repoPath, ['symbolic-ref', 'refs/remotes/origin/HEAD']);
@@ -197,7 +196,6 @@ export async function getBranches(repoPath) {
 export async function deleteBranch(repoPath, branchName, force = false) {
   const flag = force ? '-D' : '-d';
   await runGit(repoPath, ['branch', flag, branchName]);
-  // 精确验证是否已删除
   const stillExists = await checkBranchExists(repoPath, branchName);
   return { deleted: !stillExists, branchName };
 }
@@ -210,7 +208,6 @@ export async function removeWorktree(repoPath, worktreePath, force = false) {
   if (force) args.push('--force');
   args.push(worktreePath);
   await runGit(repoPath, args);
-  // 精确验证是否已从 git worktree 登记中移除
   const stillExists = await checkWorktreeExists(repoPath, worktreePath);
   return { removed: !stillExists, worktreePath };
 }
@@ -223,9 +220,28 @@ export async function pruneWorktrees(repoPath) {
 }
 
 /**
+ * 将 unified diff 拆分为按文件归类的映射表
+ */
+function splitDiffByFiles(rawDiff) {
+  const fileDiffs = {};
+  if (!rawDiff) return fileDiffs;
+
+  const chunks = rawDiff.split(/^(?=diff --git )/m);
+  for (const chunk of chunks) {
+    if (!chunk.trim()) continue;
+    const m = chunk.match(/^diff --git a\/(.+?) b\/(.+?)(?:\r?\n|$)/m);
+    if (m) {
+      const filePath = m[2];
+      fileDiffs[filePath] = chunk;
+    }
+  }
+  return fileDiffs;
+}
+
+/**
  * 解析并对比两个 Worktree 之间的 Diff
- * 优化点：使用三点语法 `base...target`，确保只显示 Target 领先于 Base 的自身新增改动（类似 PR/MR 视图），
- * 绝不把 Base 领先的提交倒置显示为负改动（-），并计算 ahead / behind 提交偏差。
+ * 优化点：使用三点语法 `base...target`，确保只显示 Target 领先于 Base 的自身新增改动，
+ * 并支持按每个文件独立归类 diffChunk，支持前端独立展开/收起。
  */
 export async function getWorktreeDiff(repoPath, sourcePath, targetPath) {
   const worktrees = await getWorktrees(repoPath);
@@ -247,14 +263,14 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath) {
     const revCounts = await runGit(repoPath, ['rev-list', '--left-right', '--count', tripleDotRange]);
     const parts = revCounts.trim().split(/\s+/).map(Number);
     if (parts.length >= 2) {
-      behind = parts[0]; // 左侧 source/base 独有的提交数，即 target 落后数量
-      ahead = parts[1];  // 右侧 target 独有的提交数，即 target 领先数量
+      behind = parts[0];
+      ahead = parts[1];
     }
   } catch {
     // ignore
   }
 
-  // 2. 使用三点语法获取 diff stat 摘要（仅反映 target 领先于 base 的独有改动）
+  // 2. 使用三点语法获取 diff stat 摘要
   let statSummary = '';
   try {
     statSummary = await runGit(repoPath, ['diff', '--stat', tripleDotRange]);
@@ -262,7 +278,18 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath) {
     statSummary = '';
   }
 
-  // 3. 获取变更文件列表与增删行 (numstat)
+  // 3. 获取完整 unified diff 内容 (base...target)
+  let rawDiff = '';
+  try {
+    rawDiff = await runGit(repoPath, ['diff', '-p', '-U3', tripleDotRange]);
+  } catch (err) {
+    rawDiff = `获取 Diff 失败: ${err.message}`;
+  }
+
+  // 按文件拆分 diff 内容
+  const fileDiffMap = splitDiffByFiles(rawDiff);
+
+  // 4. 获取变更文件列表与增删行 (numstat)
   const files = [];
   try {
     const numstatOut = await runGit(repoPath, ['diff', '--numstat', tripleDotRange]);
@@ -273,19 +300,12 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath) {
         filePath,
         added: added === '-' ? 0 : parseInt(added, 10),
         deleted: deleted === '-' ? 0 : parseInt(deleted, 10),
-        isBinary: added === '-' || deleted === '-'
+        isBinary: added === '-' || deleted === '-',
+        diffChunk: fileDiffMap[filePath] || ''
       });
     }
   } catch {
     // ignore
-  }
-
-  // 4. 获取完整 unified diff 内容 (base...target)
-  let rawDiff = '';
-  try {
-    rawDiff = await runGit(repoPath, ['diff', '-p', '-U3', tripleDotRange]);
-  } catch (err) {
-    rawDiff = `获取 Diff 失败: ${err.message}`;
   }
 
   return {
@@ -310,5 +330,108 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath) {
     statSummary,
     files,
     rawDiff
+  };
+}
+
+/**
+ * 获取单个 Worktree 本地未提交代码的 Diff (包含已暂存与未暂存修改)
+ */
+export async function getUncommittedDiff(worktreePath) {
+  try {
+    const stat = await fs.stat(worktreePath);
+    if (!stat.isDirectory()) throw new Error('Worktree 路径不存在');
+  } catch {
+    throw new Error('Worktree 路径不存在或不可读');
+  }
+
+  // 1. 获取工作区状态简报
+  const statusOutput = await runGit(worktreePath, ['status', '--porcelain']);
+  const statusLines = statusOutput.split('\n').filter(Boolean);
+
+  // 2. 获取暂存区 + 工作区的统计 numstat 对比 HEAD
+  let numstatOut = '';
+  try {
+    numstatOut = await runGit(worktreePath, ['diff', 'HEAD', '--numstat']);
+  } catch {}
+
+  // 3. 获取暂存区 + 工作区的完整 diff 对比 HEAD
+  let rawDiff = '';
+  try {
+    rawDiff = await runGit(worktreePath, ['diff', 'HEAD', '-p', '-U3']);
+  } catch (err) {
+    rawDiff = `获取未提交 Diff 失败: ${err.message}`;
+  }
+
+  // 按文件拆分 diff 内容
+  const fileDiffMap = splitDiffByFiles(rawDiff);
+
+  const files = [];
+  const processedFiles = new Set();
+
+  if (numstatOut) {
+    for (const line of numstatOut.split('\n')) {
+      if (!line.trim()) continue;
+      const [added, deleted, filePath] = line.split('\t');
+      processedFiles.add(filePath);
+      files.push({
+        filePath,
+        status: 'M',
+        added: added === '-' ? 0 : parseInt(added, 10),
+        deleted: deleted === '-' ? 0 : parseInt(deleted, 10),
+        isBinary: added === '-' || deleted === '-',
+        diffChunk: fileDiffMap[filePath] || ''
+      });
+    }
+  }
+
+  // 4. 检查是否有新增加但尚未 git add 的未跟踪文件 (Untracked ??)
+  try {
+    const untrackedRaw = await runGit(worktreePath, ['ls-files', '--others', '--exclude-standard']);
+    for (const f of untrackedRaw.split('\n')) {
+      const filePath = f.trim();
+      if (!filePath || processedFiles.has(filePath)) continue;
+      processedFiles.add(filePath);
+      
+      // 读取新文件内容估算新增行数
+      let addedLines = 0;
+      let newContent = '';
+      try {
+        const full = path.join(worktreePath, filePath);
+        const st = await fs.stat(full);
+        if (st.size < 512 * 1024) { // 小于 512KB 读取
+          const content = await fs.readFile(full, 'utf-8');
+          const lines = content.split('\n');
+          addedLines = lines.length;
+          newContent = lines.map(l => '+' + l).join('\n');
+        }
+      } catch {}
+
+      const customChunk = `diff --git a/${filePath} b/${filePath}\nnew file mode 100644\n--- /dev/null\n+++ b/${filePath}\n@@ -0,0 +1,${addedLines} @@\n${newContent}\n`;
+
+      files.push({
+        filePath,
+        status: '?',
+        added: addedLines,
+        deleted: 0,
+        isBinary: false,
+        diffChunk: customChunk
+      });
+    }
+  } catch {}
+
+  let totalAdded = 0;
+  let totalDeleted = 0;
+  files.forEach(f => {
+    totalAdded += f.added || 0;
+    totalDeleted += f.deleted || 0;
+  });
+
+  return {
+    worktreePath,
+    totalFiles: files.length,
+    totalAdded,
+    totalDeleted,
+    statusCount: statusLines.length,
+    files
   };
 }
