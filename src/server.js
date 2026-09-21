@@ -9,7 +9,10 @@ import {
   getBranches,
   deleteBranch,
   removeWorktree,
-  pruneWorktrees
+  pruneWorktrees,
+  checkBranchExists,
+  checkWorktreeExists,
+  getWorktreeDiff
 } from './git-inspector.js';
 
 const PORT = process.env.PORT || 9527;
@@ -109,25 +112,59 @@ const server = http.createServer(async (req, res) => {
       req.on('error', reject);
     });
 
-    // 3. API: 清理分支
+    // 3. API: 清理分支 (精细化判定，返回单项删除状态)
     if (pathname === '/api/delete-branch' && req.method === 'POST') {
       const { repoPath, branchName, force } = await readJson();
       if (!repoPath || !branchName) throw new Error('Missing repoPath or branchName');
-      const out = await deleteBranch(repoPath, branchName, force);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, output: out }));
+      const result = await deleteBranch(repoPath, branchName, force);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: true, ...result }));
     }
 
-    // 4. API: 移除 Worktree
+    // 4. API: 移除 Worktree (精细化判定，返回单项移除状态)
     if (pathname === '/api/remove-worktree' && req.method === 'POST') {
       const { repoPath, worktreePath, force } = await readJson();
       if (!repoPath || !worktreePath) throw new Error('Missing repoPath or worktreePath');
-      const out = await removeWorktree(repoPath, worktreePath, force);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, output: out }));
+      const result = await removeWorktree(repoPath, worktreePath, force);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: true, ...result }));
     }
 
-    // 5. API: Worktree Prune
+    // 5. API: 单项检查分支状态
+    if (pathname === '/api/check-branch' && req.method === 'GET') {
+      const repoPath = parsed.query.path;
+      const branchName = parsed.query.branch;
+      if (!repoPath || !branchName) throw new Error('Missing repoPath or branchName');
+      const exists = await checkBranchExists(repoPath, branchName);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: true, branchName, exists }));
+    }
+
+    // 6. API: 单项检查 Worktree 状态
+    if (pathname === '/api/check-worktree' && req.method === 'GET') {
+      const repoPath = parsed.query.path;
+      const worktreePath = parsed.query.worktree;
+      if (!repoPath || !worktreePath) throw new Error('Missing repoPath or worktreePath');
+      const exists = await checkWorktreeExists(repoPath, worktreePath);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: true, worktreePath, exists }));
+    }
+
+    // 7. API: 获取两个 Worktree 之间的对比 Diff
+    if (pathname === '/api/diff-worktrees' && req.method === 'GET') {
+      const repoPath = parsed.query.path;
+      const source = parsed.query.source;
+      const target = parsed.query.target;
+      if (!repoPath || !source || !target) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: 'Missing path, source, or target parameter' }));
+      }
+      const diffData = await getWorktreeDiff(repoPath, source, target);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: true, diff: diffData }));
+    }
+
+    // 8. API: Worktree Prune
     if (pathname === '/api/prune-worktrees' && req.method === 'POST') {
       const { repoPath } = await readJson();
       if (!repoPath) throw new Error('Missing repoPath');

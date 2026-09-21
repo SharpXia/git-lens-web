@@ -10,7 +10,7 @@ const exec = promisify(execFile);
  */
 async function runGit(cwd, args) {
   try {
-    const { stdout } = await exec('git', args, { cwd, maxBuffer: 10 * 1024 * 1024 });
+    const { stdout } = await exec('git', args, { cwd, maxBuffer: 20 * 1024 * 1024 });
     return stdout.trim();
   } catch (err) {
     throw new Error(`Git error in ${cwd}: ${err.message}`);
@@ -25,6 +25,39 @@ export async function isGitRepo(targetPath) {
     const gitDir = path.join(targetPath, '.git');
     const stat = await fs.stat(gitDir);
     return stat.isDirectory() || stat.isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 检查指定分支是否存在于本地
+ */
+export async function checkBranchExists(repoPath, branchName) {
+  try {
+    const branches = await runGit(repoPath, ['branch', '--list', branchName]);
+    const list = branches.split('\n').map(b => b.replace('*', '').trim()).filter(Boolean);
+    return list.includes(branchName);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 检查指定 Worktree 是否仍登记在仓库中
+ */
+export async function checkWorktreeExists(repoPath, worktreePath) {
+  try {
+    const output = await runGit(repoPath, ['worktree', 'list', '--porcelain']);
+    const lines = output.split('\n');
+    const targetNorm = path.resolve(worktreePath);
+    for (const line of lines) {
+      if (line.startsWith('worktree ')) {
+        const p = path.resolve(line.slice(9).trim());
+        if (p === targetNorm) return true;
+      }
+    }
+    return false;
   } catch {
     return false;
   }
@@ -101,13 +134,11 @@ export async function getBranches(repoPath) {
     const symref = await runGit(repoPath, ['symbolic-ref', 'refs/remotes/origin/HEAD']);
     mainBranch = symref.split('/').pop() || 'main';
   } catch {
-    // 若无 remote，检查本地分支
     const branches = await runGit(repoPath, ['branch', '--list']);
     if (branches.includes('main')) mainBranch = 'main';
     else if (branches.includes('master')) mainBranch = 'master';
   }
 
-  // 获取已合并到主分支的分支
   let mergedBranches = [];
   try {
     const mergedOut = await runGit(repoPath, ['branch', '--merged', mainBranch]);
@@ -116,11 +147,9 @@ export async function getBranches(repoPath) {
     // ignore
   }
 
-  // 获取正在被 worktree 使用的分支集合
   const worktrees = await getWorktrees(repoPath);
   const activeWorktreeBranches = new Set(worktrees.map(w => w.branch).filter(Boolean));
 
-  // 获取详细分支列表及最后提交时间
   const format = '%(refname:short)|%(authordate:relative)|%(authorname)|%(subject)|%(committerdate:iso8601)';
   const rawBranches = await runGit(repoPath, ['for-each-ref', '--format=' + format, 'refs/heads/']);
 
@@ -133,11 +162,9 @@ export async function getBranches(repoPath) {
     const isMerged = mergedBranches.includes(name);
     const inUseByWorktree = activeWorktreeBranches.has(name);
 
-    // 计算是否陈旧 (超过30天未更新且非主分支)
     const daysOld = Math.floor((Date.now() - new Date(isoDate).getTime()) / (1000 * 60 * 60 * 24));
     const isStale = !isMain && daysOld > 30;
 
-    // 冗余研判
     let redundancyReason = null;
     if (!isMain) {
       if (isMerged && !inUseByWorktree) {
@@ -169,7 +196,10 @@ export async function getBranches(repoPath) {
  */
 export async function deleteBranch(repoPath, branchName, force = false) {
   const flag = force ? '-D' : '-d';
-  return await runGit(repoPath, ['branch', flag, branchName]);
+  await runGit(repoPath, ['branch', flag, branchName]);
+  // 精确验证是否已删除
+  const stillExists = await checkBranchExists(repoPath, branchName);
+  return { deleted: !stillExists, branchName };
 }
 
 /**
@@ -179,7 +209,10 @@ export async function removeWorktree(repoPath, worktreePath, force = false) {
   const args = ['worktree', 'remove'];
   if (force) args.push('--force');
   args.push(worktreePath);
-  return await runGit(repoPath, args);
+  await runGit(repoPath, args);
+  // 精确验证是否已从 git worktree 登记中移除
+  const stillExists = await checkWorktreeExists(repoPath, worktreePath);
+  return { removed: !stillExists, worktreePath };
 }
 
 /**
@@ -187,4 +220,76 @@ export async function removeWorktree(repoPath, worktreePath, force = false) {
  */
 export async function pruneWorktrees(repoPath) {
   return await runGit(repoPath, ['worktree', 'prune']);
+}
+
+/**
+ * 解析并对比两个 Worktree 之间的 Diff
+ */
+export async function getWorktreeDiff(repoPath, sourcePath, targetPath) {
+  const worktrees = await getWorktrees(repoPath);
+  const sourceWt = worktrees.find(w => path.resolve(w.path) === path.resolve(sourcePath));
+  const targetWt = worktrees.find(w => path.resolve(w.path) === path.resolve(targetPath));
+
+  if (!sourceWt || !targetWt) {
+    throw new Error('指定的 Worktree 路径不存在或未被 Git 登记');
+  }
+
+  const sourceRef = sourceWt.branch || sourceWt.head || 'HEAD';
+  const targetRef = targetWt.branch || targetWt.head || 'HEAD';
+
+  // 1. 获取 diff stat 摘要
+  let statSummary = '';
+  try {
+    statSummary = await runGit(repoPath, ['diff', '--stat', sourceRef, targetRef]);
+  } catch {
+    statSummary = '无法计算统计信息';
+  }
+
+  // 2. 获取变更文件列表与增删行 (numstat)
+  const files = [];
+  try {
+    const numstatOut = await runGit(repoPath, ['diff', '--numstat', sourceRef, targetRef]);
+    for (const line of numstatOut.split('\n')) {
+      if (!line.trim()) continue;
+      const [added, deleted, filePath] = line.split('\t');
+      files.push({
+        filePath,
+        added: added === '-' ? 0 : parseInt(added, 10),
+        deleted: deleted === '-' ? 0 : parseInt(deleted, 10),
+        isBinary: added === '-' || deleted === '-'
+      });
+    }
+  } catch {
+    // ignore
+  }
+
+  // 3. 获取完整 unified diff 内容
+  let rawDiff = '';
+  try {
+    rawDiff = await runGit(repoPath, ['diff', '-p', '-U3', sourceRef, targetRef]);
+  } catch (err) {
+    rawDiff = `获取 Diff 失败: ${err.message}`;
+  }
+
+  return {
+    source: {
+      path: sourceWt.path,
+      branch: sourceWt.branch || 'HEAD',
+      head: sourceWt.head,
+      isMain: sourceWt.isMain,
+      isDirty: sourceWt.isDirty,
+      lastCommit: sourceWt.lastCommit
+    },
+    target: {
+      path: targetWt.path,
+      branch: targetWt.branch || 'HEAD',
+      head: targetWt.head,
+      isMain: targetWt.isMain,
+      isDirty: targetWt.isDirty,
+      lastCommit: targetWt.lastCommit
+    },
+    statSummary,
+    files,
+    rawDiff
+  };
 }

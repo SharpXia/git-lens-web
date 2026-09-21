@@ -3,18 +3,27 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Git Lens · 本地仓库透镜</title>
+  <title>Git Lens · 本地仓库透镜与 Worktree 对比</title>
   <style>
     :root {
       --bg: #0d1117;
       --card-bg: #161b22;
+      --card-alt: #21262d;
       --border: #30363d;
+      --border-muted: #21262d;
       --text: #c9d1d9;
       --text-muted: #8b949e;
+      --text-bright: #f0f6fc;
       --accent: #58a6ff;
       --danger: #f85149;
       --warning: #d29922;
       --success: #3fb950;
+      --diff-add-bg: rgba(46, 160, 67, 0.15);
+      --diff-add-text: #3fb950;
+      --diff-del-bg: rgba(248, 81, 73, 0.15);
+      --diff-del-text: #f85149;
+      --diff-hunk-bg: rgba(56, 139, 253, 0.15);
+      --diff-hunk-text: #79c0ff;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -28,11 +37,11 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 24px;
+      margin-bottom: 20px;
       padding-bottom: 16px;
       border-bottom: 1px solid var(--border);
     }
-    h1 { font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    h1 { font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; color: var(--text-bright); }
     .badge {
       font-size: 11px;
       padding: 2px 8px;
@@ -40,6 +49,8 @@
       background: rgba(88, 166, 255, 0.15);
       color: var(--accent);
       border: 1px solid rgba(88, 166, 255, 0.3);
+      font-weight: 500;
+      white-space: nowrap;
     }
     .badge-danger {
       background: rgba(248, 81, 73, 0.15);
@@ -56,11 +67,44 @@
       color: var(--success);
       border-color: rgba(63, 185, 80, 0.3);
     }
+
+    /* 顶部导航与标签页切换 */
+    .tab-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 12px;
+    }
+    .tab-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-muted);
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+    .tab-btn:hover {
+      color: var(--text-bright);
+      background: var(--card-bg);
+    }
+    .tab-btn.active {
+      color: var(--accent);
+      background: var(--card-bg);
+      border-color: var(--border);
+      font-weight: 600;
+    }
+
     .project-bar {
       display: flex;
       flex-wrap: wrap;
       gap: 12px;
-      margin-bottom: 24px;
+      margin-bottom: 20px;
       align-items: center;
     }
     select, button, input {
@@ -76,7 +120,7 @@
     button {
       cursor: pointer;
       font-weight: 500;
-      transition: background 0.2s, border-color 0.2s;
+      transition: background 0.2s, border-color 0.2s, opacity 0.2s;
     }
     button:hover { border-color: var(--accent); }
     button.btn-danger {
@@ -93,16 +137,27 @@
       color: #fff;
     }
     button.btn-primary:hover { background: #2ea043; }
+    button.btn-outline {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    button.btn-outline:hover {
+      background: var(--card-alt);
+      color: var(--accent);
+    }
+
     #searchInput {
       flex: 1 1 240px;
       min-width: 200px;
       max-width: 420px;
     }
+
     .metrics-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 16px;
-      margin-bottom: 24px;
+      margin-bottom: 20px;
     }
     .metric-card {
       background: var(--card-bg);
@@ -111,13 +166,14 @@
       padding: 16px;
     }
     .metric-title { font-size: 13px; color: var(--text-muted); margin-bottom: 4px; }
-    .metric-val { font-size: 24px; font-weight: 700; }
+    .metric-val { font-size: 24px; font-weight: 700; color: var(--text-bright); }
+
     .panels {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 24px;
     }
-    @media (max-width: 900px) {
+    @media (max-width: 960px) {
       .panels { grid-template-columns: 1fr; }
     }
     .panel {
@@ -134,7 +190,7 @@
       justify-content: space-between;
       align-items: center;
     }
-    .panel-header h2 { font-size: 15px; font-weight: 600; }
+    .panel-header h2 { font-size: 15px; font-weight: 600; color: var(--text-bright); }
     .list-item {
       padding: 12px 16px;
       border-bottom: 1px solid var(--border);
@@ -142,6 +198,7 @@
       justify-content: space-between;
       align-items: flex-start;
       gap: 12px;
+      transition: opacity 0.3s ease, transform 0.3s ease;
     }
     .list-item:last-child { border-bottom: none; }
     .item-main { flex: 1; min-width: 0; }
@@ -167,61 +224,244 @@
       gap: 4px;
     }
     .loading { color: var(--text-muted); padding: 32px; text-align: center; }
+
+    /* Diff 视图容器样式 */
+    .diff-view-container {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .diff-picker-bar {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 16px;
+    }
+    .picker-col {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      flex: 1 1 300px;
+    }
+    .picker-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .picker-select {
+      width: 100%;
+      padding: 8px 12px;
+    }
+    .swap-btn {
+      padding: 8px 12px;
+      align-self: flex-end;
+      margin-bottom: 2px;
+    }
+    .diff-summary-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .stat-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+      font-size: 14px;
+      margin-bottom: 12px;
+      color: var(--text-bright);
+    }
+    .file-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: var(--card-alt);
+      border: 1px solid var(--border);
+      font-size: 12px;
+      margin: 4px 4px 0 0;
+      cursor: pointer;
+      transition: border-color 0.2s;
+    }
+    .file-pill:hover {
+      border-color: var(--accent);
+    }
+    .add-count { color: var(--success); font-weight: 600; }
+    .del-count { color: var(--danger); font-weight: 600; }
+
+    /* 代码 Diff 容器与高亮美化 */
+    .diff-code-wrapper {
+      background: #090d13;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      margin-top: 12px;
+    }
+    .diff-code-header {
+      background: #161b22;
+      padding: 8px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-bright);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .diff-pre {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      padding: 12px 0;
+      overflow-x: auto;
+      margin: 0;
+    }
+    .diff-line {
+      padding: 1px 16px;
+      white-space: pre;
+      display: block;
+    }
+    .diff-line.line-add {
+      background-color: var(--diff-add-bg);
+      color: var(--diff-add-text);
+    }
+    .diff-line.line-del {
+      background-color: var(--diff-del-bg);
+      color: var(--diff-del-text);
+    }
+    .diff-line.line-hunk {
+      background-color: var(--diff-hunk-bg);
+      color: var(--diff-hunk-text);
+      font-weight: 600;
+    }
+    .diff-line.line-file {
+      background-color: rgba(255, 255, 255, 0.05);
+      color: var(--text-bright);
+      font-weight: 600;
+      border-top: 1px solid var(--border-muted);
+      border-bottom: 1px solid var(--border-muted);
+      margin-top: 8px;
+    }
+    .diff-line.line-file:first-child {
+      border-top: none;
+      margin-top: 0;
+    }
+    .empty-diff-box {
+      padding: 48px;
+      text-align: center;
+      color: var(--text-muted);
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>🔍 Git Lens <span class="badge">Local Project Worktree & Branch Guard</span></h1>
+    <h1>🔍 Git Lens <span class="badge">Worktree & Branch Guard + Diff Inspector</span></h1>
     <span id="headerPath" style="font-size: 13px; color: var(--text-muted);"></span>
   </header>
+
+  <!-- 顶部功能切换 TAB -->
+  <div class="tab-bar">
+    <button id="tabOverview" class="tab-btn active" onclick="switchTab('overview')">
+      <span>📊 仓库总览与管理</span>
+    </button>
+    <button id="tabDiff" class="tab-btn" onclick="switchTab('diff')">
+      <span>⚡ Worktree 差异对比 (Diff View)</span>
+    </button>
+  </div>
 
   <div class="project-bar">
     <label for="repoSelect" style="font-size: 13px; color: var(--text-muted);">选择本地仓库：</label>
     <select id="repoSelect" style="min-width: 320px;"></select>
     <input id="searchInput" type="search" placeholder="搜索分支或 Worktree..." autocomplete="off" aria-label="搜索分支或 Worktree">
-    <button id="refreshBtn" class="secondary">重新扫描</button>
+    <button id="refreshBtn" class="btn-outline">全量刷新</button>
     <button id="pruneBtn" class="btn-primary" style="margin-left: auto;">一键 Prune 无效引用</button>
   </div>
 
-  <div class="metrics-grid">
-    <div class="metric-card">
-      <div class="metric-title">总 Worktree 数</div>
-      <div id="mTotalWt" class="metric-val">0</div>
+  <!-- TAB 1: 仓库透视与管理面板 -->
+  <div id="viewOverview">
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-title">总 Worktree 数</div>
+        <div id="mTotalWt" class="metric-val">0</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-title">可清理 / 失联 Worktree</div>
+        <div id="mStaleWt" class="metric-val" style="color: var(--danger);">0</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-title">总本地分支数</div>
+        <div id="mTotalBr" class="metric-val">0</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-title">冗余 / 过期分支</div>
+        <div id="mRedundantBr" class="metric-val" style="color: var(--warning);">0</div>
+      </div>
     </div>
-    <div class="metric-card">
-      <div class="metric-title">可清理 / 失联 Worktree</div>
-      <div id="mStaleWt" class="metric-val" style="color: var(--danger);">0</div>
-    </div>
-    <div class="metric-card">
-      <div class="metric-title">总本地分支数</div>
-      <div id="mTotalBr" class="metric-val">0</div>
-    </div>
-    <div class="metric-card">
-      <div class="metric-title">冗余 / 过期分支</div>
-      <div id="mRedundantBr" class="metric-val" style="color: var(--warning);">0</div>
+
+    <div class="panels">
+      <!-- Worktrees 面板 -->
+      <div class="panel">
+        <div class="panel-header">
+          <h2>🌳 Git Worktrees 隔离工作区</h2>
+          <span id="wtCountBadge" class="badge">0 个</span>
+        </div>
+        <div id="wtList">
+          <div class="loading">加载中...</div>
+        </div>
+      </div>
+
+      <!-- 分支透视面板 -->
+      <div class="panel">
+        <div class="panel-header">
+          <h2>🌿 本地分支透视 (按冗余度排序)</h2>
+          <span id="brCountBadge" class="badge">0 个</span>
+        </div>
+        <div id="brList">
+          <div class="loading">加载中...</div>
+        </div>
+      </div>
     </div>
   </div>
 
-  <div class="panels">
-    <!-- Worktrees 面板 -->
-    <div class="panel">
-      <div class="panel-header">
-        <h2>🌳 Git Worktrees 隔离工作区</h2>
-        <span id="wtCountBadge" class="badge">0 个</span>
-      </div>
-      <div id="wtList">
-        <div class="loading">加载中...</div>
-      </div>
-    </div>
+  <!-- TAB 2: Worktree Diff 对比视图 -->
+  <div id="viewDiff" style="display: none;">
+    <div class="diff-view-container">
+      <div class="diff-picker-bar">
+        <div class="picker-col">
+          <label class="picker-label" for="diffBaseSelect">
+            <span>基准 Worktree (Base / 原始分支)：</span>
+          </label>
+          <select id="diffBaseSelect" class="picker-select"></select>
+        </div>
 
-    <!-- 分支透视面板 -->
-    <div class="panel">
-      <div class="panel-header">
-        <h2>🌿 本地分支透视 (按冗余度排序)</h2>
-        <span id="brCountBadge" class="badge">0 个</span>
+        <button class="swap-btn btn-outline" onclick="swapDiffTargets()" title="对调两边工作区">⇄ 对调</button>
+
+        <div class="picker-col">
+          <label class="picker-label" for="diffTargetSelect">
+            <span>对比 Worktree (Target / 变更分支)：</span>
+          </label>
+          <select id="diffTargetSelect" class="picker-select"></select>
+        </div>
+
+        <button class="btn-primary" style="align-self: flex-end; margin-bottom: 2px;" onclick="fetchAndRenderDiff()">生成 Diff 对比</button>
       </div>
-      <div id="brList">
-        <div class="loading">加载中...</div>
+
+      <div id="diffResultsContainer">
+        <div class="empty-diff-box">
+          <div style="font-size: 16px; margin-bottom: 8px;">请选择两个不同的 Worktree 进行对比</div>
+          <div style="font-size: 13px;">实时分析分支提交、修改文件数、代码行增删及高可读性 Diff 详情</div>
+        </div>
       </div>
     </div>
   </div>
@@ -232,6 +472,20 @@
     let currentBranches = [];
     let currentMainBranch = '';
     let searchKeyword = '';
+    let activeTab = 'overview';
+
+    function switchTab(tab) {
+      activeTab = tab;
+      document.getElementById('tabOverview').className = tab === 'overview' ? 'tab-btn active' : 'tab-btn';
+      document.getElementById('tabDiff').className = tab === 'diff' ? 'tab-btn active' : 'tab-btn';
+
+      document.getElementById('viewOverview').style.display = tab === 'overview' ? 'block' : 'none';
+      document.getElementById('viewDiff').style.display = tab === 'diff' ? 'block' : 'none';
+
+      if (tab === 'diff') {
+        populateDiffSelectors();
+      }
+    }
 
     async function loadProjects() {
       const res = await fetch('/api/projects');
@@ -264,19 +518,31 @@
         const data = await res.json();
         if (!data.ok) throw new Error(data.error);
 
-        // 指标
-        document.getElementById('mTotalWt').textContent = data.summary.totalWorktrees;
-        document.getElementById('mStaleWt').textContent = data.summary.staleWorktreesCount;
-        document.getElementById('mTotalBr').textContent = data.summary.totalBranches;
-        document.getElementById('mRedundantBr').textContent = data.summary.redundantBranchesCount;
-
         currentWorktrees = data.worktrees || [];
         currentBranches = data.branches || [];
         currentMainBranch = data.mainBranch;
+
+        // 指标更新
+        updateMetrics();
+
+        // 渲染列表
         renderFilteredLists();
+
+        // 同步更新 Diff 对比下拉框
+        populateDiffSelectors();
       } catch (err) {
         alert('分析失败: ' + err.message);
       }
+    }
+
+    function updateMetrics() {
+      const staleWt = currentWorktrees.filter(w => !w.isMain && (!w.existsOnDisk || w.isPrunable));
+      const redundantBr = currentBranches.filter(b => b.redundancyReason);
+
+      document.getElementById('mTotalWt').textContent = currentWorktrees.length;
+      document.getElementById('mStaleWt').textContent = staleWt.length;
+      document.getElementById('mTotalBr').textContent = currentBranches.length;
+      document.getElementById('mRedundantBr').textContent = redundantBr.length;
     }
 
     function includesKeyword(values, keyword) {
@@ -313,6 +579,7 @@
       worktrees.forEach(wt => {
         const div = document.createElement('div');
         div.className = 'list-item';
+        div.id = 'wt-item-' + encodeURIComponent(wt.path).replace(/%/g, '_');
 
         const isSafeMain = wt.isMain;
         let tags = [];
@@ -333,7 +600,10 @@
             <div class="item-desc">${lastInfo}</div>
             ${!wt.existsOnDisk || wt.isPrunable ? '<div class="item-alert">⚠️ 该 Worktree 已损坏或可被安全 prune 清理</div>' : ''}
           </div>
-          ${!isSafeMain ? `<button class="btn-danger" onclick="removeWt('${wt.path}')">移除</button>` : ''}
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button class="btn-outline" onclick="viewDiffAgainstMain('${wt.path}')" style="font-size: 12px; padding: 4px 8px;">与主干对比</button>
+            ${!isSafeMain ? `<button class="btn-danger" id="btn-rm-wt-${encodeURIComponent(wt.path).replace(/%/g, '_')}" onclick="removeWt('${wt.path}')">移除</button>` : ''}
+          </div>
         `;
         container.appendChild(div);
       });
@@ -346,7 +616,6 @@
         return;
       }
 
-      // 排序：有冗余原因的排前面，其次按陈旧天数
       const sortedBranches = [...branches].sort((a, b) => {
         if (a.redundancyReason && !b.redundancyReason) return -1;
         if (!a.redundancyReason && b.redundancyReason) return 1;
@@ -357,6 +626,7 @@
       sortedBranches.forEach(b => {
         const div = document.createElement('div');
         div.className = 'list-item';
+        div.id = 'br-item-' + encodeURIComponent(b.name).replace(/%/g, '_');
 
         let tags = [];
         if (b.isMain) tags.push('<span class="badge badge-success">主分支</span>');
@@ -372,43 +642,317 @@
             <div class="item-desc">${b.relativeTime} 由 ${b.author} 提交: "${b.subject || '-'}"</div>
             ${b.redundancyReason ? `<div class="item-alert">⚠️ ${b.redundancyReason}</div>` : ''}
           </div>
-          ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" onclick="delBranch('${b.name}', ${!b.isMerged})">删除</button>` : ''}
+          ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${b.name}', ${!b.isMerged})">删除</button>` : ''}
         `;
         container.appendChild(div);
       });
     }
 
+    /* 优化 1：精细化单个 Worktree 移除判断与单项 DOM 剔除，避免全量重新扫描 */
     async function removeWt(worktreePath) {
       if (!confirm(`确认从 Git 登记中移除 Worktree 目录:\n${worktreePath}`)) return;
-      const res = await fetch('/api/remove-worktree', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repoPath: currentRepo, worktreePath, force: true })
-      });
-      const data = await res.json();
-      if (data.ok) {
-        inspectRepo(currentRepo);
-      } else {
-        alert('移除失败: ' + data.error);
+
+      const domKey = encodeURIComponent(worktreePath).replace(/%/g, '_');
+      const btn = document.getElementById(`btn-rm-wt-${domKey}`);
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '移除中...';
+      }
+
+      try {
+        const res = await fetch('/api/remove-worktree', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoPath: currentRepo, worktreePath, force: true })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error);
+
+        // 单项检查确认是否真的已从 git 中移除
+        const checkRes = await fetch(`/api/check-worktree?path=${encodeURIComponent(currentRepo)}&worktree=${encodeURIComponent(worktreePath)}`);
+        const checkData = await checkRes.json();
+
+        if (!checkData.exists) {
+          // 精准单项移除：从本地数组中剔除
+          currentWorktrees = currentWorktrees.filter(w => w.path !== worktreePath);
+
+          // 动效平滑移除对应 DOM 元素
+          const itemDom = document.getElementById(`wt-item-${domKey}`);
+          if (itemDom) {
+            itemDom.style.opacity = '0';
+            itemDom.style.transform = 'translateX(20px)';
+            setTimeout(() => {
+              itemDom.remove();
+              updateMetrics();
+              populateDiffSelectors();
+            }, 250);
+          } else {
+            renderFilteredLists();
+          }
+        } else {
+          alert('Worktree 尚未被完全移除，请重试或强制清理。');
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = '移除';
+          }
+        }
+      } catch (err) {
+        alert('移除失败: ' + err.message);
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = '移除';
+        }
       }
     }
 
+    /* 优化 2：精细化单个分支删除判断与单项 DOM 剔除，避免全量重新扫描 */
     async function delBranch(branchName, force) {
       const mode = force ? '强制删除 (分支未完全合入)' : '安全删除';
       if (!confirm(`确认${mode}本地分支 [${branchName}]?`)) return;
-      const res = await fetch('/api/delete-branch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repoPath: currentRepo, branchName, force })
-      });
-      const data = await res.json();
-      if (data.ok) {
-        inspectRepo(currentRepo);
-      } else {
-        alert('删除失败: ' + data.error);
+
+      const domKey = encodeURIComponent(branchName).replace(/%/g, '_');
+      const btn = document.getElementById(`btn-del-br-${domKey}`);
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '删除中...';
+      }
+
+      try {
+        const res = await fetch('/api/delete-branch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoPath: currentRepo, branchName, force })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error);
+
+        // 单项检查确认该分支是否真的已消失
+        const checkRes = await fetch(`/api/check-branch?path=${encodeURIComponent(currentRepo)}&branch=${encodeURIComponent(branchName)}`);
+        const checkData = await checkRes.json();
+
+        if (!checkData.exists) {
+          // 精准单项移除：从本地分支数组中剔除
+          currentBranches = currentBranches.filter(b => b.name !== branchName);
+
+          // 动效平滑移除对应 DOM 元素
+          const itemDom = document.getElementById(`br-item-${domKey}`);
+          if (itemDom) {
+            itemDom.style.opacity = '0';
+            itemDom.style.transform = 'translateX(20px)';
+            setTimeout(() => {
+              itemDom.remove();
+              updateMetrics();
+            }, 250);
+          } else {
+            renderFilteredLists();
+          }
+        } else {
+          alert('分支未能成功删除，请确认是否有未提交冲突。');
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = '删除';
+          }
+        }
+      } catch (err) {
+        alert('删除失败: ' + err.message);
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = '删除';
+        }
       }
     }
 
+    /* 优化 3：Worktree Diff 视图支持 */
+    function populateDiffSelectors() {
+      const baseSel = document.getElementById('diffBaseSelect');
+      const targetSel = document.getElementById('diffTargetSelect');
+      if (!baseSel || !targetSel) return;
+
+      const curBase = baseSel.value;
+      const curTarget = targetSel.value;
+
+      baseSel.innerHTML = '';
+      targetSel.innerHTML = '';
+
+      if (currentWorktrees.length === 0) {
+        baseSel.innerHTML = '<option value="">无可用 Worktree</option>';
+        targetSel.innerHTML = '<option value="">无可用 Worktree</option>';
+        return;
+      }
+
+      currentWorktrees.forEach((w, idx) => {
+        const label = `${w.isMain ? '⭐ [Main] ' : '🌳 '}${w.branch || 'HEAD'} (${w.path.split('/').pop()})`;
+        const optA = document.createElement('option');
+        optA.value = w.path;
+        optA.textContent = label;
+        baseSel.appendChild(optA);
+
+        const optB = document.createElement('option');
+        optB.value = w.path;
+        optB.textContent = label;
+        targetSel.appendChild(optB);
+      });
+
+      // 智能默认选中：Base 为主干，Target 为第一个非主干
+      if (curBase && currentWorktrees.some(w => w.path === curBase)) {
+        baseSel.value = curBase;
+      } else {
+        baseSel.value = currentWorktrees[0].path;
+      }
+
+      if (curTarget && currentWorktrees.some(w => w.path === curTarget)) {
+        targetSel.value = curTarget;
+      } else if (currentWorktrees.length > 1) {
+        targetSel.value = currentWorktrees[1].path;
+      } else {
+        targetSel.value = currentWorktrees[0].path;
+      }
+    }
+
+    function swapDiffTargets() {
+      const baseSel = document.getElementById('diffBaseSelect');
+      const targetSel = document.getElementById('diffTargetSelect');
+      const temp = baseSel.value;
+      baseSel.value = targetSel.value;
+      targetSel.value = temp;
+      fetchAndRenderDiff();
+    }
+
+    function viewDiffAgainstMain(targetWorktreePath) {
+      switchTab('diff');
+      const baseSel = document.getElementById('diffBaseSelect');
+      const targetSel = document.getElementById('diffTargetSelect');
+      if (currentWorktrees.length > 0) {
+        baseSel.value = currentWorktrees[0].path;
+        targetSel.value = targetWorktreePath;
+        fetchAndRenderDiff();
+      }
+    }
+
+    async function fetchAndRenderDiff() {
+      const base = document.getElementById('diffBaseSelect').value;
+      const target = document.getElementById('diffTargetSelect').value;
+      const container = document.getElementById('diffResultsContainer');
+
+      if (!base || !target) {
+        alert('请选择两个工作区进行对比');
+        return;
+      }
+
+      if (base === target) {
+        container.innerHTML = `
+          <div class="empty-diff-box">
+            <div style="font-size: 16px; margin-bottom: 8px;">所选 Base 与 Target 为同一个工作区</div>
+            <div style="font-size: 13px;">请在下拉菜单中选择两个不同的 Worktree</div>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = '<div class="loading">正在比对工作区 Diff 详情...</div>';
+
+      try {
+        const url = `/api/diff-worktrees?path=${encodeURIComponent(currentRepo)}&source=${encodeURIComponent(base)}&target=${encodeURIComponent(target)}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error);
+
+        renderDiffView(data.diff);
+      } catch (err) {
+        container.innerHTML = `<div class="empty-diff-box" style="color: var(--danger);">Diff 计算失败: ${err.message}</div>`;
+      }
+    }
+
+    function escapeHtml(str) {
+      return (str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function renderDiffView(diff) {
+      const container = document.getElementById('diffResultsContainer');
+      const files = diff.files || [];
+
+      if (files.length === 0) {
+        container.innerHTML = `
+          <div class="diff-summary-card">
+            <div class="stat-bar">
+              <div>基准: <span class="badge">${escapeHtml(diff.source.branch)}</span> <code>${diff.source.path}</code></div>
+              <div>目标: <span class="badge">${escapeHtml(diff.target.branch)}</span> <code>${diff.target.path}</code></div>
+            </div>
+            <div class="empty-diff-box" style="padding: 24px; border: none; background: transparent;">
+              🎉 两个 Worktree 提交点完全一致，无任何文件差异。
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      let totalAdd = 0;
+      let totalDel = 0;
+      files.forEach(f => {
+        totalAdd += f.added || 0;
+        totalDel += f.deleted || 0;
+      });
+
+      // 渲染文件列表 Pills
+      const filePills = files.map(f => {
+        return `<span class="file-pill">
+          📄 ${escapeHtml(f.filePath)}
+          <span class="add-count">+${f.added}</span>
+          <span class="del-count">-${f.deleted}</span>
+        </span>`;
+      }).join('');
+
+      // 格式化并高亮 Diff 内容
+      const lines = (diff.rawDiff || '').split('\n');
+      const formattedLines = lines.map(line => {
+        const escaped = escapeHtml(line);
+        if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff --git')) {
+          return `<span class="diff-line line-file">${escaped}</span>`;
+        } else if (line.startsWith('@@')) {
+          return `<span class="diff-line line-hunk">${escaped}</span>`;
+        } else if (line.startsWith('+')) {
+          return `<span class="diff-line line-add">${escaped}</span>`;
+        } else if (line.startsWith('-')) {
+          return `<span class="diff-line line-del">${escaped}</span>`;
+        } else {
+          return `<span class="diff-line">${escaped || '&nbsp;'}</span>`;
+        }
+      }).join('');
+
+      container.innerHTML = `
+        <div class="diff-summary-card">
+          <div class="stat-bar">
+            <div>基准 (Base): <span class="badge badge-success">${escapeHtml(diff.source.branch)}</span> <code>${escapeHtml(diff.source.head ? diff.source.head.slice(0, 8) : '-')}</code></div>
+            <div>目标 (Target): <span class="badge">${escapeHtml(diff.target.branch)}</span> <code>${escapeHtml(diff.target.head ? diff.target.head.slice(0, 8) : '-')}</code></div>
+            <div style="margin-left: auto;">
+              改动文件: <b>${files.length}</b> 个 · 
+              新增: <span class="add-count">+${totalAdd}</span> 行 · 
+              删除: <span class="del-count">-${totalDel}</span> 行
+            </div>
+          </div>
+
+          <div style="margin-top: 12px;">
+            <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 6px;">变更文件清单：</div>
+            <div style="display: flex; flex-wrap: wrap;">${filePills}</div>
+          </div>
+        </div>
+
+        <div class="diff-code-wrapper">
+          <div class="diff-code-header">
+            <span>Unified Diff 代码高亮视图</span>
+            <span style="font-size: 12px; color: var(--text-muted);">共 ${lines.length} 行对比</span>
+          </div>
+          <pre class="diff-pre"><code>${formattedLines}</code></pre>
+        </div>
+      `;
+    }
+
+    /* 页面事件监听 */
     document.getElementById('repoSelect').addEventListener('change', (e) => {
       inspectRepo(e.target.value);
     });
