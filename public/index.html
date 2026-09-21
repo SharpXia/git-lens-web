@@ -18,6 +18,7 @@
       --danger: #f85149;
       --warning: #d29922;
       --success: #3fb950;
+      --star-color: #e3b341;
       --diff-add-bg: rgba(46, 160, 67, 0.15);
       --diff-add-text: #3fb950;
       --diff-del-bg: rgba(248, 81, 73, 0.15);
@@ -100,6 +101,7 @@
       font-weight: 600;
     }
 
+    /* 仓库搜索与选择栏容器 */
     .project-bar {
       display: flex;
       flex-wrap: wrap;
@@ -147,10 +149,153 @@
       color: var(--accent);
     }
 
+    /* 仓库自定义下拉菜单与模糊搜索 */
+    .repo-picker-wrapper {
+      position: relative;
+      display: inline-block;
+      min-width: 320px;
+      max-width: 480px;
+      flex: 1 1 320px;
+    }
+    .repo-trigger {
+      width: 100%;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+      font-size: 14px;
+      transition: border-color 0.2s;
+    }
+    .repo-trigger:hover {
+      border-color: var(--accent);
+    }
+    .repo-trigger-text {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .repo-dropdown {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      width: 100%;
+      min-width: 380px;
+      background: #161b22;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      z-index: 1000;
+      display: none;
+      overflow: hidden;
+    }
+    .repo-dropdown.show {
+      display: block;
+    }
+    .repo-search-box {
+      padding: 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--card-alt);
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .repo-search-input {
+      flex: 1;
+      background: #0d1117;
+      border: 1px solid var(--border);
+      color: var(--text-bright);
+      padding: 6px 10px;
+      font-size: 13px;
+      border-radius: 6px;
+    }
+    .repo-search-input:focus {
+      border-color: var(--accent);
+    }
+    .filter-starred-btn {
+      padding: 6px 10px;
+      font-size: 12px;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .filter-starred-btn.active {
+      background: rgba(227, 179, 65, 0.15);
+      border-color: var(--star-color);
+      color: var(--star-color);
+    }
+    .repo-list-container {
+      max-height: 320px;
+      overflow-y: auto;
+    }
+    .repo-list-group-title {
+      padding: 6px 12px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      background: rgba(255, 255, 255, 0.02);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .repo-item {
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      font-size: 13px;
+      transition: background 0.15s;
+    }
+    .repo-item:hover {
+      background: var(--card-alt);
+    }
+    .repo-item.selected {
+      background: rgba(88, 166, 255, 0.12);
+      border-left: 3px solid var(--accent);
+    }
+    .repo-item-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      overflow: hidden;
+    }
+    .repo-item-name {
+      font-weight: 600;
+      color: var(--text-bright);
+    }
+    .repo-item-group {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .star-icon {
+      cursor: pointer;
+      font-size: 14px;
+      color: var(--text-muted);
+      padding: 2px 6px;
+      border-radius: 4px;
+      transition: color 0.15s, transform 0.15s;
+    }
+    .star-icon:hover {
+      color: var(--star-color);
+      transform: scale(1.15);
+    }
+    .star-icon.starred {
+      color: var(--star-color);
+    }
+
     #searchInput {
-      flex: 1 1 240px;
-      min-width: 200px;
-      max-width: 420px;
+      flex: 1 1 200px;
+      min-width: 180px;
+      max-width: 360px;
     }
 
     .metrics-grid {
@@ -281,7 +426,7 @@
     .add-count { color: var(--success); font-weight: 600; }
     .del-count { color: var(--danger); font-weight: 600; }
 
-    /* 仿 GitHub / IDE 风格的文件列表与手风琴 Diff 组件 */
+    /* 文件列表与手风琴 Diff 组件 */
     .diff-tools-bar {
       display: flex;
       justify-content: space-between;
@@ -306,7 +451,6 @@
       gap: 8px;
     }
 
-    /* 单个文件的 Diff 折叠卡片 */
     .file-diff-card {
       background: #090d13;
       border: 1px solid var(--border);
@@ -434,8 +578,33 @@
   </div>
 
   <div class="project-bar">
-    <label for="repoSelect" style="font-size: 13px; color: var(--text-muted);">选择本地仓库：</label>
-    <select id="repoSelect" style="min-width: 320px;"></select>
+    <label style="font-size: 13px; color: var(--text-muted);">选择本地仓库：</label>
+    
+    <!-- 智能搜索与星标收藏的仓库下拉选择器 -->
+    <div class="repo-picker-wrapper" id="repoPickerWrapper">
+      <div class="repo-trigger" id="repoTrigger" onclick="toggleRepoDropdown()">
+        <div class="repo-trigger-text" id="repoTriggerText">
+          <span>加载中...</span>
+        </div>
+        <span style="color: var(--text-muted); font-size: 11px;">▼</span>
+      </div>
+
+      <div class="repo-dropdown" id="repoDropdown">
+        <div class="repo-search-box">
+          <input type="text" id="repoFilterInput" class="repo-search-input" placeholder="模糊搜索仓库名或路径..." autocomplete="off">
+          <button type="button" id="starredFilterBtn" class="btn-outline filter-starred-btn" onclick="toggleStarredOnlyFilter()">
+            <span>⭐ 只看星标</span>
+          </button>
+        </div>
+        <div class="repo-list-container" id="repoDropdownList">
+          <div class="loading">加载仓库中...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 兼容隐藏的原生选择器 -->
+    <select id="repoSelect" style="display: none;"></select>
+
     <input id="searchInput" type="search" placeholder="搜索分支或 Worktree..." autocomplete="off" aria-label="搜索分支或 Worktree">
     <button id="refreshBtn" class="btn-outline">全量刷新</button>
     <button id="pruneBtn" class="btn-primary" style="margin-left: auto;">一键 Prune 无效引用</button>
@@ -520,12 +689,179 @@
   </div>
 
   <script>
+    let allRepos = [];
     let currentRepo = '';
     let currentWorktrees = [];
     let currentBranches = [];
     let currentMainBranch = '';
     let searchKeyword = '';
+    let repoFilterKeyword = '';
+    let filterStarredOnly = false;
     let activeTab = 'overview';
+
+    const STARRED_STORAGE_KEY = 'git_lens_starred_repos';
+
+    function getStarredRepos() {
+      try {
+        const raw = localStorage.getItem(STARRED_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function isRepoStarred(repoPath) {
+      const stars = getStarredRepos();
+      return stars.includes(repoPath);
+    }
+
+    function toggleStarRepo(repoPath, e) {
+      if (e) e.stopPropagation();
+      let stars = getStarredRepos();
+      if (stars.includes(repoPath)) {
+        stars = stars.filter(p => p !== repoPath);
+      } else {
+        stars.push(repoPath);
+      }
+      localStorage.setItem(STARRED_STORAGE_KEY, JSON.stringify(stars));
+      renderRepoDropdownList();
+      updateRepoTriggerText();
+    }
+
+    function toggleStarredOnlyFilter() {
+      filterStarredOnly = !filterStarredOnly;
+      const btn = document.getElementById('starredFilterBtn');
+      if (filterStarredOnly) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+      renderRepoDropdownList();
+    }
+
+    function toggleRepoDropdown() {
+      const dd = document.getElementById('repoDropdown');
+      const isShow = dd.classList.contains('show');
+      if (isShow) {
+        dd.classList.remove('show');
+      } else {
+        dd.classList.add('show');
+        const inp = document.getElementById('repoFilterInput');
+        setTimeout(() => inp.focus(), 50);
+      }
+    }
+
+    document.addEventListener('click', (e) => {
+      const wrapper = document.getElementById('repoPickerWrapper');
+      if (wrapper && !wrapper.contains(e.target)) {
+        document.getElementById('repoDropdown').classList.remove('show');
+      }
+    });
+
+    function renderRepoDropdownList() {
+      const container = document.getElementById('repoDropdownList');
+      const kw = repoFilterKeyword.trim().toLowerCase();
+      const starred = getStarredRepos();
+
+      let filtered = allRepos.filter(r => {
+        const matchesKw = !kw || r.name.toLowerCase().includes(kw) || r.path.toLowerCase().includes(kw) || (r.group && r.group.toLowerCase().includes(kw));
+        const matchesStar = !filterStarredOnly || starred.includes(r.path);
+        return matchesKw && matchesStar;
+      });
+
+      // 排序：已星标的置顶排前面，其余按拼音/字母排序
+      filtered.sort((a, b) => {
+        const aStar = starred.includes(a.path) ? 1 : 0;
+        const bStar = starred.includes(b.path) ? 1 : 0;
+        if (aStar !== bStar) return bStar - aStar;
+        return a.name.localeCompare(b.name);
+      });
+
+      if (filtered.length === 0) {
+        container.innerHTML = `<div class="loading" style="padding: 20px;">没有匹配的仓库</div>`;
+        return;
+      }
+
+      container.innerHTML = '';
+
+      // 分组渲染：星标仓库区 & 普通分组
+      const starredItems = filtered.filter(r => starred.includes(r.path));
+      const normalItems = filtered.filter(r => !starred.includes(r.path));
+
+      if (starredItems.length > 0 && !filterStarredOnly) {
+        const gTitle = document.createElement('div');
+        gTitle.className = 'repo-list-group-title';
+        gTitle.textContent = `⭐ 星标收藏 (${starredItems.length})`;
+        container.appendChild(gTitle);
+
+        starredItems.forEach(r => {
+          container.appendChild(createRepoItemDom(r, true));
+        });
+      }
+
+      // 其他仓库按 group 组织
+      const groups = {};
+      normalItems.forEach(r => {
+        const g = r.group || '其他仓库';
+        if (!groups[g]) groups[g] = [];
+        groups[g].push(r);
+      });
+
+      Object.keys(groups).forEach(gName => {
+        const gTitle = document.createElement('div');
+        gTitle.className = 'repo-list-group-title';
+        gTitle.textContent = `${gName} (${groups[gName].length})`;
+        container.appendChild(gTitle);
+
+        groups[gName].forEach(r => {
+          container.appendChild(createRepoItemDom(r, false));
+        });
+      });
+    }
+
+    function createRepoItemDom(repo, isStarred) {
+      const item = document.createElement('div');
+      item.className = 'repo-item' + (repo.path === currentRepo ? ' selected' : '');
+      item.onclick = () => {
+        selectRepo(repo.path);
+        document.getElementById('repoDropdown').classList.remove('show');
+      };
+
+      item.innerHTML = `
+        <div class="repo-item-left">
+          <span class="repo-item-name">${escapeHtml(repo.name)}</span>
+          <span class="repo-item-group">${escapeHtml(repo.group || '')}</span>
+        </div>
+        <span class="star-icon ${isStarred ? 'starred' : ''}" title="${isStarred ? '取消收藏' : '加入星标'}" onclick="toggleStarRepo('${escapeHtml(repo.path)}', event)">
+          ${isStarred ? '★' : '☆'}
+        </span>
+      `;
+      return item;
+    }
+
+    function updateRepoTriggerText() {
+      const repo = allRepos.find(r => r.path === currentRepo);
+      const textDom = document.getElementById('repoTriggerText');
+      if (repo) {
+        const starred = isRepoStarred(repo.path);
+        textDom.innerHTML = `
+          ${starred ? '<span style="color: var(--star-color);">★</span>' : ''}
+          <span style="font-weight: 600; color: var(--text-bright);">${escapeHtml(repo.name)}</span>
+          <span style="font-size: 12px; color: var(--text-muted);">[${escapeHtml(repo.group || '')}]</span>
+        `;
+      } else {
+        textDom.innerHTML = `<span>未选择仓库</span>`;
+      }
+    }
+
+    function selectRepo(repoPath) {
+      if (!repoPath || repoPath === currentRepo) return;
+      currentRepo = repoPath;
+      document.getElementById('repoSelect').value = repoPath;
+      updateRepoTriggerText();
+      renderRepoDropdownList();
+      inspectRepo(repoPath);
+    }
 
     function switchTab(tab) {
       activeTab = tab;
@@ -543,19 +879,30 @@
     async function loadProjects() {
       const res = await fetch('/api/projects');
       const data = await res.json();
+      allRepos = data.repos || [];
+
       const sel = document.getElementById('repoSelect');
       sel.innerHTML = '';
-      if (data.repos && data.repos.length > 0) {
-        data.repos.forEach(r => {
+      if (allRepos.length > 0) {
+        allRepos.forEach(r => {
           const opt = document.createElement('option');
           opt.value = r.path;
           opt.textContent = `[${r.group}] ${r.name}`;
           sel.appendChild(opt);
         });
-        currentRepo = data.repos[0].path;
+
+        // 优先默认选中第一个星标仓库，若无则选第一个仓库
+        const starred = getStarredRepos();
+        const firstStarred = allRepos.find(r => starred.includes(r.path));
+        currentRepo = firstStarred ? firstStarred.path : allRepos[0].path;
+
+        sel.value = currentRepo;
+        updateRepoTriggerText();
+        renderRepoDropdownList();
         inspectRepo(currentRepo);
       } else {
         sel.innerHTML = '<option value="">未扫描到仓库</option>';
+        document.getElementById('repoTriggerText').textContent = '未扫描到仓库';
       }
     }
 
@@ -1016,7 +1363,6 @@
         totalDel += f.deleted || 0;
       });
 
-      // 渲染每个文件的卡片
       const fileCardsHtml = files.map((f, idx) => {
         const cardId = `diff-card-${idx}`;
         const formattedCode = formatDiffLines(f.diffChunk);
@@ -1157,8 +1503,9 @@
     }
 
     /* 页面事件监听 */
-    document.getElementById('repoSelect').addEventListener('change', (e) => {
-      inspectRepo(e.target.value);
+    document.getElementById('repoFilterInput').addEventListener('input', (e) => {
+      repoFilterKeyword = e.target.value;
+      renderRepoDropdownList();
     });
     document.getElementById('refreshBtn').addEventListener('click', () => {
       inspectRepo(currentRepo);
