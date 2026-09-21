@@ -58,6 +58,7 @@
     }
     .project-bar {
       display: flex;
+      flex-wrap: wrap;
       gap: 12px;
       margin-bottom: 24px;
       align-items: center;
@@ -92,6 +93,11 @@
       color: #fff;
     }
     button.btn-primary:hover { background: #2ea043; }
+    #searchInput {
+      flex: 1 1 240px;
+      min-width: 200px;
+      max-width: 420px;
+    }
     .metrics-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -172,6 +178,7 @@
   <div class="project-bar">
     <label for="repoSelect" style="font-size: 13px; color: var(--text-muted);">选择本地仓库：</label>
     <select id="repoSelect" style="min-width: 320px;"></select>
+    <input id="searchInput" type="search" placeholder="搜索分支或 Worktree..." autocomplete="off" aria-label="搜索分支或 Worktree">
     <button id="refreshBtn" class="secondary">重新扫描</button>
     <button id="pruneBtn" class="btn-primary" style="margin-left: auto;">一键 Prune 无效引用</button>
   </div>
@@ -221,6 +228,10 @@
 
   <script>
     let currentRepo = '';
+    let currentWorktrees = [];
+    let currentBranches = [];
+    let currentMainBranch = '';
+    let searchKeyword = '';
 
     async function loadProjects() {
       const res = await fetch('/api/projects');
@@ -258,23 +269,44 @@
         document.getElementById('mStaleWt').textContent = data.summary.staleWorktreesCount;
         document.getElementById('mTotalBr').textContent = data.summary.totalBranches;
         document.getElementById('mRedundantBr').textContent = data.summary.redundantBranchesCount;
-        document.getElementById('wtCountBadge').textContent = `${data.summary.totalWorktrees} 个`;
-        document.getElementById('brCountBadge').textContent = `${data.summary.totalBranches} 个`;
 
-        // 渲染 Worktrees
-        renderWorktrees(data.worktrees);
-
-        // 渲染分支
-        renderBranches(data.branches, data.mainBranch);
+        currentWorktrees = data.worktrees || [];
+        currentBranches = data.branches || [];
+        currentMainBranch = data.mainBranch;
+        renderFilteredLists();
       } catch (err) {
         alert('分析失败: ' + err.message);
       }
     }
 
-    function renderWorktrees(worktrees) {
+    function includesKeyword(values, keyword) {
+      return values.filter(Boolean).join(' ').toLocaleLowerCase().includes(keyword);
+    }
+
+    function renderFilteredLists() {
+      const keyword = searchKeyword.trim().toLocaleLowerCase();
+      const worktrees = keyword
+        ? currentWorktrees.filter(wt => includesKeyword([wt.path, wt.branch, wt.lastCommit?.relativeTime, wt.lastCommit?.author, wt.lastCommit?.subject], keyword))
+        : currentWorktrees;
+      const branches = keyword
+        ? currentBranches.filter(b => includesKeyword([b.name, b.relativeTime, b.author, b.subject, b.redundancyReason], keyword))
+        : currentBranches;
+
+      document.getElementById('wtCountBadge').textContent = keyword
+        ? `${worktrees.length} / ${currentWorktrees.length} 个`
+        : `${currentWorktrees.length} 个`;
+      document.getElementById('brCountBadge').textContent = keyword
+        ? `${branches.length} / ${currentBranches.length} 个`
+        : `${currentBranches.length} 个`;
+
+      renderWorktrees(worktrees, keyword);
+      renderBranches(branches, currentMainBranch, keyword);
+    }
+
+    function renderWorktrees(worktrees, keyword) {
       const container = document.getElementById('wtList');
       if (!worktrees || worktrees.length === 0) {
-        container.innerHTML = '<div class="loading">无任何独立 Worktree</div>';
+        container.innerHTML = `<div class="loading">${keyword ? '没有匹配的 Worktree' : '无任何独立 Worktree'}</div>`;
         return;
       }
       container.innerHTML = '';
@@ -307,22 +339,22 @@
       });
     }
 
-    function renderBranches(branches, mainBranch) {
+    function renderBranches(branches, mainBranch, keyword) {
       const container = document.getElementById('brList');
       if (!branches || branches.length === 0) {
-        container.innerHTML = '<div class="loading">无本地分支</div>';
+        container.innerHTML = `<div class="loading">${keyword ? '没有匹配的分支' : '无本地分支'}</div>`;
         return;
       }
 
       // 排序：有冗余原因的排前面，其次按陈旧天数
-      branches.sort((a, b) => {
+      const sortedBranches = [...branches].sort((a, b) => {
         if (a.redundancyReason && !b.redundancyReason) return -1;
         if (!a.redundancyReason && b.redundancyReason) return 1;
         return b.daysOld - a.daysOld;
       });
 
       container.innerHTML = '';
-      branches.forEach(b => {
+      sortedBranches.forEach(b => {
         const div = document.createElement('div');
         div.className = 'list-item';
 
@@ -382,6 +414,10 @@
     });
     document.getElementById('refreshBtn').addEventListener('click', () => {
       inspectRepo(currentRepo);
+    });
+    document.getElementById('searchInput').addEventListener('input', (e) => {
+      searchKeyword = e.target.value;
+      renderFilteredLists();
     });
     document.getElementById('pruneBtn').addEventListener('click', async () => {
       const res = await fetch('/api/prune-worktrees', {
