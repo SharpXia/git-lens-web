@@ -224,6 +224,8 @@ export async function pruneWorktrees(repoPath) {
 
 /**
  * 解析并对比两个 Worktree 之间的 Diff
+ * 优化点：使用三点语法 `base...target`，确保只显示 Target 领先于 Base 的自身新增改动（类似 PR/MR 视图），
+ * 绝不把 Base 领先的提交倒置显示为负改动（-），并计算 ahead / behind 提交偏差。
  */
 export async function getWorktreeDiff(repoPath, sourcePath, targetPath) {
   const worktrees = await getWorktrees(repoPath);
@@ -236,19 +238,34 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath) {
 
   const sourceRef = sourceWt.branch || sourceWt.head || 'HEAD';
   const targetRef = targetWt.branch || targetWt.head || 'HEAD';
+  const tripleDotRange = `${sourceRef}...${targetRef}`;
 
-  // 1. 获取 diff stat 摘要
-  let statSummary = '';
+  // 1. 获取两者的提交相对位置：behind（落后 Base 提交数）与 ahead（领先 Base 提交数）
+  let ahead = 0;
+  let behind = 0;
   try {
-    statSummary = await runGit(repoPath, ['diff', '--stat', sourceRef, targetRef]);
+    const revCounts = await runGit(repoPath, ['rev-list', '--left-right', '--count', tripleDotRange]);
+    const parts = revCounts.trim().split(/\s+/).map(Number);
+    if (parts.length >= 2) {
+      behind = parts[0]; // 左侧 source/base 独有的提交数，即 target 落后数量
+      ahead = parts[1];  // 右侧 target 独有的提交数，即 target 领先数量
+    }
   } catch {
-    statSummary = '无法计算统计信息';
+    // ignore
   }
 
-  // 2. 获取变更文件列表与增删行 (numstat)
+  // 2. 使用三点语法获取 diff stat 摘要（仅反映 target 领先于 base 的独有改动）
+  let statSummary = '';
+  try {
+    statSummary = await runGit(repoPath, ['diff', '--stat', tripleDotRange]);
+  } catch {
+    statSummary = '';
+  }
+
+  // 3. 获取变更文件列表与增删行 (numstat)
   const files = [];
   try {
-    const numstatOut = await runGit(repoPath, ['diff', '--numstat', sourceRef, targetRef]);
+    const numstatOut = await runGit(repoPath, ['diff', '--numstat', tripleDotRange]);
     for (const line of numstatOut.split('\n')) {
       if (!line.trim()) continue;
       const [added, deleted, filePath] = line.split('\t');
@@ -263,10 +280,10 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath) {
     // ignore
   }
 
-  // 3. 获取完整 unified diff 内容
+  // 4. 获取完整 unified diff 内容 (base...target)
   let rawDiff = '';
   try {
-    rawDiff = await runGit(repoPath, ['diff', '-p', '-U3', sourceRef, targetRef]);
+    rawDiff = await runGit(repoPath, ['diff', '-p', '-U3', tripleDotRange]);
   } catch (err) {
     rawDiff = `获取 Diff 失败: ${err.message}`;
   }
@@ -288,6 +305,8 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath) {
       isDirty: targetWt.isDirty,
       lastCommit: targetWt.lastCommit
     },
+    ahead,
+    behind,
     statSummary,
     files,
     rawDiff

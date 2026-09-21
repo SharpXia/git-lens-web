@@ -875,16 +875,35 @@
     function renderDiffView(diff) {
       const container = document.getElementById('diffResultsContainer');
       const files = diff.files || [];
+      const ahead = diff.ahead || 0;
+      const behind = diff.behind || 0;
+
+      // 状态标签
+      let syncStatusBadge = '';
+      if (ahead === 0 && behind === 0) {
+        syncStatusBadge = '<span class="badge badge-success">两分支提交完全同步</span>';
+      } else {
+        const parts = [];
+        if (ahead > 0) parts.push(`<span class="badge badge-success">领先 ${ahead} 个提交</span>`);
+        if (behind > 0) parts.push(`<span class="badge badge-warning">落后 ${behind} 个提交</span>`);
+        syncStatusBadge = parts.join(' ');
+      }
 
       if (files.length === 0) {
+        let emptyDesc = '🎉 两个 Worktree 提交点完全一致，无任何文件差异。';
+        if (behind > 0 && ahead === 0) {
+          emptyDesc = `ℹ️ <b>对比分支当前落后于基准分支（落后 ${behind} 个提交）</b>，且没有领先的独有代码修改。<br><span style="color: var(--text-muted); font-size: 13px;">已过滤反向差异，避免将基准分支的更新误显示为被删除。若需查看基准分支引入的新代码，可点击上方<b>【⇄ 对调】</b>。</span>`;
+        }
+
         container.innerHTML = `
           <div class="diff-summary-card">
             <div class="stat-bar">
-              <div>基准: <span class="badge">${escapeHtml(diff.source.branch)}</span> <code>${diff.source.path}</code></div>
-              <div>目标: <span class="badge">${escapeHtml(diff.target.branch)}</span> <code>${diff.target.path}</code></div>
+              <div>基准 (Base): <span class="badge badge-outline">${escapeHtml(diff.source.branch)}</span> <code>${diff.source.path}</code></div>
+              <div>对比 (Target): <span class="badge badge-outline">${escapeHtml(diff.target.branch)}</span> <code>${diff.target.path}</code></div>
+              <div style="margin-left: auto;">${syncStatusBadge}</div>
             </div>
-            <div class="empty-diff-box" style="padding: 24px; border: none; background: transparent;">
-              🎉 两个 Worktree 提交点完全一致，无任何文件差异。
+            <div class="empty-diff-box" style="padding: 28px; border: none; background: transparent; line-height: 1.8;">
+              ${emptyDesc}
             </div>
           </div>
         `;
@@ -927,13 +946,19 @@
       container.innerHTML = `
         <div class="diff-summary-card">
           <div class="stat-bar">
-            <div>基准 (Base): <span class="badge badge-success">${escapeHtml(diff.source.branch)}</span> <code>${escapeHtml(diff.source.head ? diff.source.head.slice(0, 8) : '-')}</code></div>
-            <div>目标 (Target): <span class="badge">${escapeHtml(diff.target.branch)}</span> <code>${escapeHtml(diff.target.head ? diff.target.head.slice(0, 8) : '-')}</code></div>
-            <div style="margin-left: auto;">
-              改动文件: <b>${files.length}</b> 个 · 
-              新增: <span class="add-count">+${totalAdd}</span> 行 · 
-              删除: <span class="del-count">-${totalDel}</span> 行
+            <div>基准 (Base): <span class="badge">${escapeHtml(diff.source.branch)}</span> <code>${escapeHtml(diff.source.head ? diff.source.head.slice(0, 8) : '-')}</code></div>
+            <div>对比 (Target): <span class="badge">${escapeHtml(diff.target.branch)}</span> <code>${escapeHtml(diff.target.head ? diff.target.head.slice(0, 8) : '-')}</code></div>
+            <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
+              ${syncStatusBadge}
+              <span style="color: var(--text-muted);">|</span>
+              <span>改动文件: <b>${files.length}</b> 个</span>
+              <span>新增: <span class="add-count">+${totalAdd}</span> 行</span>
+              <span>删除: <span class="del-count">-${totalDel}</span> 行</span>
             </div>
+          </div>
+
+          <div style="margin-top: 10px; font-size: 12px; color: var(--text-muted); background: rgba(88, 166, 255, 0.08); padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(88, 166, 255, 0.2);">
+            💡 <b>仅对比分支领先改动 (三点比较 <code>base...target</code>)</b>：只展示对比分支自身引入的提交与修改，绝不反向倒置显示基准分支代码。
           </div>
 
           <div style="margin-top: 12px;">
@@ -944,7 +969,7 @@
 
         <div class="diff-code-wrapper">
           <div class="diff-code-header">
-            <span>Unified Diff 代码高亮视图</span>
+            <span>Unified Diff 代码高亮视图 (Target 独有改动)</span>
             <span style="font-size: 12px; color: var(--text-muted);">共 ${lines.length} 行对比</span>
           </div>
           <pre class="diff-pre"><code>${formattedLines}</code></pre>
