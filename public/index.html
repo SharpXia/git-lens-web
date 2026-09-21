@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Git Lens · 本地仓库透镜</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --text-muted: #8b949e;
+      --accent: #58a6ff;
+      --danger: #f85149;
+      --warning: #d29922;
+      --success: #3fb950;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 24px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    h1 { font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      background: rgba(88, 166, 255, 0.15);
+      color: var(--accent);
+      border: 1px solid rgba(88, 166, 255, 0.3);
+    }
+    .badge-danger {
+      background: rgba(248, 81, 73, 0.15);
+      color: var(--danger);
+      border-color: rgba(248, 81, 73, 0.3);
+    }
+    .badge-warning {
+      background: rgba(210, 153, 34, 0.15);
+      color: var(--warning);
+      border-color: rgba(210, 153, 34, 0.3);
+    }
+    .badge-success {
+      background: rgba(63, 185, 80, 0.15);
+      color: var(--success);
+      border-color: rgba(63, 185, 80, 0.3);
+    }
+    .project-bar {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+      align-items: center;
+    }
+    select, button, input {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      outline: none;
+    }
+    select:focus, input:focus { border-color: var(--accent); }
+    button {
+      cursor: pointer;
+      font-weight: 500;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    button:hover { border-color: var(--accent); }
+    button.btn-danger {
+      color: var(--danger);
+      border-color: rgba(248, 81, 73, 0.4);
+    }
+    button.btn-danger:hover {
+      background: rgba(248, 81, 73, 0.15);
+      border-color: var(--danger);
+    }
+    button.btn-primary {
+      background: #238636;
+      border-color: #2ea043;
+      color: #fff;
+    }
+    button.btn-primary:hover { background: #2ea043; }
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .metric-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .metric-title { font-size: 13px; color: var(--text-muted); margin-bottom: 4px; }
+    .metric-val { font-size: 24px; font-weight: 700; }
+    .panels {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+    @media (max-width: 900px) {
+      .panels { grid-template-columns: 1fr; }
+    }
+    .panel {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .panel-header {
+      padding: 12px 16px;
+      background: rgba(255, 255, 255, 0.02);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .panel-header h2 { font-size: 15px; font-weight: 600; }
+    .list-item {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .list-item:last-child { border-bottom: none; }
+    .item-main { flex: 1; min-width: 0; }
+    .item-title {
+      font-weight: 600;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+      word-break: break-all;
+    }
+    .item-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+    .item-alert {
+      font-size: 12px;
+      color: var(--warning);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .loading { color: var(--text-muted); padding: 32px; text-align: center; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🔍 Git Lens <span class="badge">Local Project Worktree & Branch Guard</span></h1>
+    <span id="headerPath" style="font-size: 13px; color: var(--text-muted);"></span>
+  </header>
+
+  <div class="project-bar">
+    <label for="repoSelect" style="font-size: 13px; color: var(--text-muted);">选择本地仓库：</label>
+    <select id="repoSelect" style="min-width: 320px;"></select>
+    <button id="refreshBtn" class="secondary">重新扫描</button>
+    <button id="pruneBtn" class="btn-primary" style="margin-left: auto;">一键 Prune 无效引用</button>
+  </div>
+
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="metric-title">总 Worktree 数</div>
+      <div id="mTotalWt" class="metric-val">0</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-title">可清理 / 失联 Worktree</div>
+      <div id="mStaleWt" class="metric-val" style="color: var(--danger);">0</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-title">总本地分支数</div>
+      <div id="mTotalBr" class="metric-val">0</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-title">冗余 / 过期分支</div>
+      <div id="mRedundantBr" class="metric-val" style="color: var(--warning);">0</div>
+    </div>
+  </div>
+
+  <div class="panels">
+    <!-- Worktrees 面板 -->
+    <div class="panel">
+      <div class="panel-header">
+        <h2>🌳 Git Worktrees 隔离工作区</h2>
+        <span id="wtCountBadge" class="badge">0 个</span>
+      </div>
+      <div id="wtList">
+        <div class="loading">加载中...</div>
+      </div>
+    </div>
+
+    <!-- 分支透视面板 -->
+    <div class="panel">
+      <div class="panel-header">
+        <h2>🌿 本地分支透视 (按冗余度排序)</h2>
+        <span id="brCountBadge" class="badge">0 个</span>
+      </div>
+      <div id="brList">
+        <div class="loading">加载中...</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentRepo = '';
+
+    async function loadProjects() {
+      const res = await fetch('/api/projects');
+      const data = await res.json();
+      const sel = document.getElementById('repoSelect');
+      sel.innerHTML = '';
+      if (data.repos && data.repos.length > 0) {
+        data.repos.forEach(r => {
+          const opt = document.createElement('option');
+          opt.value = r.path;
+          opt.textContent = `[${r.group}] ${r.name}`;
+          sel.appendChild(opt);
+        });
+        currentRepo = data.repos[0].path;
+        inspectRepo(currentRepo);
+      } else {
+        sel.innerHTML = '<option value="">未扫描到仓库</option>';
+      }
+    }
+
+    async function inspectRepo(repoPath) {
+      if (!repoPath) return;
+      currentRepo = repoPath;
+      document.getElementById('headerPath').textContent = repoPath;
+      document.getElementById('wtList').innerHTML = '<div class="loading">正在分析 Worktrees...</div>';
+      document.getElementById('brList').innerHTML = '<div class="loading">正在分析分支...</div>';
+
+      try {
+        const res = await fetch(`/api/inspect?path=${encodeURIComponent(repoPath)}`);
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error);
+
+        // 指标
+        document.getElementById('mTotalWt').textContent = data.summary.totalWorktrees;
+        document.getElementById('mStaleWt').textContent = data.summary.staleWorktreesCount;
+        document.getElementById('mTotalBr').textContent = data.summary.totalBranches;
+        document.getElementById('mRedundantBr').textContent = data.summary.redundantBranchesCount;
+        document.getElementById('wtCountBadge').textContent = `${data.summary.totalWorktrees} 个`;
+        document.getElementById('brCountBadge').textContent = `${data.summary.totalBranches} 个`;
+
+        // 渲染 Worktrees
+        renderWorktrees(data.worktrees);
+
+        // 渲染分支
+        renderBranches(data.branches, data.mainBranch);
+      } catch (err) {
+        alert('分析失败: ' + err.message);
+      }
+    }
+
+    function renderWorktrees(worktrees) {
+      const container = document.getElementById('wtList');
+      if (!worktrees || worktrees.length === 0) {
+        container.innerHTML = '<div class="loading">无任何独立 Worktree</div>';
+        return;
+      }
+      container.innerHTML = '';
+      worktrees.forEach(wt => {
+        const div = document.createElement('div');
+        div.className = 'list-item';
+
+        const isSafeMain = wt.isMain;
+        let tags = [];
+        if (wt.isMain) tags.push('<span class="badge badge-success">Main 工作区</span>');
+        if (wt.branch) tags.push(`<span class="badge">🌿 ${wt.branch}</span>`);
+        if (!wt.existsOnDisk) tags.push('<span class="badge badge-danger">磁盘已失联</span>');
+        if (wt.isDirty) tags.push(`<span class="badge badge-warning">未提交修改 (${wt.dirtyCount})</span>`);
+        if (wt.isLocked) tags.push('<span class="badge">已加锁</span>');
+
+        let lastInfo = wt.lastCommit ? `最新提交: ${wt.lastCommit.relativeTime} by ${wt.lastCommit.author} · "${wt.lastCommit.subject}"` : '';
+
+        div.innerHTML = `
+          <div class="item-main">
+            <div class="item-title">
+              <span>${wt.path}</span>
+              ${tags.join(' ')}
+            </div>
+            <div class="item-desc">${lastInfo}</div>
+            ${!wt.existsOnDisk || wt.isPrunable ? '<div class="item-alert">⚠️ 该 Worktree 已损坏或可被安全 prune 清理</div>' : ''}
+          </div>
+          ${!isSafeMain ? `<button class="btn-danger" onclick="removeWt('${wt.path}')">移除</button>` : ''}
+        `;
+        container.appendChild(div);
+      });
+    }
+
+    function renderBranches(branches, mainBranch) {
+      const container = document.getElementById('brList');
+      if (!branches || branches.length === 0) {
+        container.innerHTML = '<div class="loading">无本地分支</div>';
+        return;
+      }
+
+      // 排序：有冗余原因的排前面，其次按陈旧天数
+      branches.sort((a, b) => {
+        if (a.redundancyReason && !b.redundancyReason) return -1;
+        if (!a.redundancyReason && b.redundancyReason) return 1;
+        return b.daysOld - a.daysOld;
+      });
+
+      container.innerHTML = '';
+      branches.forEach(b => {
+        const div = document.createElement('div');
+        div.className = 'list-item';
+
+        let tags = [];
+        if (b.isMain) tags.push('<span class="badge badge-success">主分支</span>');
+        if (b.inUseByWorktree) tags.push('<span class="badge">🌳 Worktree 绑定中</span>');
+        if (b.isMerged) tags.push('<span class="badge">已合入主干</span>');
+
+        div.innerHTML = `
+          <div class="item-main">
+            <div class="item-title">
+              <span>${b.name}</span>
+              ${tags.join(' ')}
+            </div>
+            <div class="item-desc">${b.relativeTime} 由 ${b.author} 提交: "${b.subject || '-'}"</div>
+            ${b.redundancyReason ? `<div class="item-alert">⚠️ ${b.redundancyReason}</div>` : ''}
+          </div>
+          ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" onclick="delBranch('${b.name}', ${!b.isMerged})">删除</button>` : ''}
+        `;
+        container.appendChild(div);
+      });
+    }
+
+    async function removeWt(worktreePath) {
+      if (!confirm(`确认从 Git 登记中移除 Worktree 目录:\n${worktreePath}`)) return;
+      const res = await fetch('/api/remove-worktree', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoPath: currentRepo, worktreePath, force: true })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        inspectRepo(currentRepo);
+      } else {
+        alert('移除失败: ' + data.error);
+      }
+    }
+
+    async function delBranch(branchName, force) {
+      const mode = force ? '强制删除 (分支未完全合入)' : '安全删除';
+      if (!confirm(`确认${mode}本地分支 [${branchName}]?`)) return;
+      const res = await fetch('/api/delete-branch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoPath: currentRepo, branchName, force })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        inspectRepo(currentRepo);
+      } else {
+        alert('删除失败: ' + data.error);
+      }
+    }
+
+    document.getElementById('repoSelect').addEventListener('change', (e) => {
+      inspectRepo(e.target.value);
+    });
+    document.getElementById('refreshBtn').addEventListener('click', () => {
+      inspectRepo(currentRepo);
+    });
+    document.getElementById('pruneBtn').addEventListener('click', async () => {
+      const res = await fetch('/api/prune-worktrees', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoPath: currentRepo })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        alert('Worktrees prune 执行成功！');
+        inspectRepo(currentRepo);
+      } else {
+        alert('Prune 失败: ' + data.error);
+      }
+    });
+
+    loadProjects();
+  </script>
+</body>
+</html>
