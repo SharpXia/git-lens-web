@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Git Lens · 本地仓库透镜与 Worktree 对比</title>
+  <title>Git Lens · 本地仓库透镜与代码 Diff 审计</title>
   <style>
     :root {
       --bg: #0d1117;
@@ -273,56 +273,113 @@
     .stat-bar {
       display: flex;
       flex-wrap: wrap;
-      gap: 20px;
+      gap: 16px;
       font-size: 14px;
-      margin-bottom: 12px;
-      color: var(--text-bright);
-    }
-    .file-pill {
-      display: inline-flex;
       align-items: center;
-      gap: 6px;
-      padding: 4px 10px;
-      border-radius: 6px;
-      background: var(--card-alt);
-      border: 1px solid var(--border);
-      font-size: 12px;
-      margin: 4px 4px 0 0;
-      cursor: pointer;
-      transition: border-color 0.2s;
-    }
-    .file-pill:hover {
-      border-color: var(--accent);
+      color: var(--text-bright);
     }
     .add-count { color: var(--success); font-weight: 600; }
     .del-count { color: var(--danger); font-weight: 600; }
 
-    /* 代码 Diff 容器与高亮美化 */
-    .diff-code-wrapper {
-      background: #090d13;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      overflow: hidden;
-      margin-top: 12px;
-    }
-    .diff-code-header {
-      background: #161b22;
-      padding: 8px 16px;
-      border-bottom: 1px solid var(--border);
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--text-bright);
+    /* 仿 GitHub / IDE 风格的文件列表与手风琴 Diff 组件 */
+    .diff-tools-bar {
       display: flex;
       justify-content: space-between;
       align-items: center;
+      padding: 10px 16px;
+      background: var(--card-alt);
+      border: 1px solid var(--border);
+      border-radius: 8px 8px 0 0;
+      margin-top: 16px;
+      border-bottom: none;
     }
+    .diff-tools-left {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-bright);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .diff-tools-right {
+      display: flex;
+      gap: 8px;
+    }
+
+    /* 单个文件的 Diff 折叠卡片 */
+    .file-diff-card {
+      background: #090d13;
+      border: 1px solid var(--border);
+      margin-bottom: 12px;
+      border-radius: 6px;
+      overflow: hidden;
+      transition: border-color 0.2s;
+    }
+    .file-diff-card:hover {
+      border-color: #444c56;
+    }
+    .file-diff-card.expanded {
+      border-color: #388bfd66;
+    }
+    .file-header {
+      background: #161b22;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+      border-bottom: 1px solid transparent;
+      transition: background 0.15s;
+    }
+    .file-header:hover {
+      background: #1c2128;
+    }
+    .file-diff-card.expanded .file-header {
+      border-bottom-color: var(--border);
+    }
+    .file-title-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-bright);
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    }
+    .file-status-badge {
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 700;
+    }
+    .status-modified { background: rgba(210, 153, 34, 0.2); color: var(--warning); border: 1px solid rgba(210, 153, 34, 0.4); }
+    .status-added { background: rgba(63, 185, 80, 0.2); color: var(--success); border: 1px solid rgba(63, 185, 80, 0.4); }
+    .status-deleted { background: rgba(248, 81, 73, 0.2); color: var(--danger); border: 1px solid rgba(248, 81, 73, 0.4); }
+
+    .file-arrow {
+      color: var(--text-muted);
+      font-size: 11px;
+      transition: transform 0.2s;
+    }
+    .file-diff-card.expanded .file-arrow {
+      transform: rotate(90deg);
+    }
+    .file-body {
+      display: none;
+    }
+    .file-diff-card.expanded .file-body {
+      display: block;
+    }
+
     .diff-pre {
       font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
       font-size: 12px;
       line-height: 1.6;
-      padding: 12px 0;
+      padding: 8px 0;
       overflow-x: auto;
       margin: 0;
+      background: #090d13;
     }
     .diff-line {
       padding: 1px 16px;
@@ -343,16 +400,12 @@
       font-weight: 600;
     }
     .diff-line.line-file {
-      background-color: rgba(255, 255, 255, 0.05);
+      background-color: rgba(255, 255, 255, 0.04);
       color: var(--text-bright);
       font-weight: 600;
       border-top: 1px solid var(--border-muted);
       border-bottom: 1px solid var(--border-muted);
-      margin-top: 8px;
-    }
-    .diff-line.line-file:first-child {
-      border-top: none;
-      margin-top: 0;
+      margin-top: 6px;
     }
     .empty-diff-box {
       padding: 48px;
@@ -366,7 +419,7 @@
 </head>
 <body>
   <header>
-    <h1>🔍 Git Lens <span class="badge">Worktree & Branch Guard + Diff Inspector</span></h1>
+    <h1>🔍 Git Lens <span class="badge">Worktree & Branch Guard + Code Diff Inspector</span></h1>
     <span id="headerPath" style="font-size: 13px; color: var(--text-muted);"></span>
   </header>
 
@@ -376,7 +429,7 @@
       <span>📊 仓库总览与管理</span>
     </button>
     <button id="tabDiff" class="tab-btn" onclick="switchTab('diff')">
-      <span>⚡ Worktree 差异对比 (Diff View)</span>
+      <span>⚡ Worktree 差异对比 (Branch Diff)</span>
     </button>
   </div>
 
@@ -440,7 +493,7 @@
       <div class="diff-picker-bar">
         <div class="picker-col">
           <label class="picker-label" for="diffBaseSelect">
-            <span>基准 Worktree (Base / 原始分支)：</span>
+            <span>基准工作区 (Base / 原始分支)：</span>
           </label>
           <select id="diffBaseSelect" class="picker-select"></select>
         </div>
@@ -449,18 +502,18 @@
 
         <div class="picker-col">
           <label class="picker-label" for="diffTargetSelect">
-            <span>对比 Worktree (Target / 变更分支)：</span>
+            <span>对比工作区 (Target / 变更分支)：</span>
           </label>
           <select id="diffTargetSelect" class="picker-select"></select>
         </div>
 
-        <button class="btn-primary" style="align-self: flex-end; margin-bottom: 2px;" onclick="fetchAndRenderDiff()">生成 Diff 对比</button>
+        <button class="btn-primary" style="align-self: flex-end; margin-bottom: 2px;" onclick="fetchAndRenderDiff()">比对工作区 Diff</button>
       </div>
 
       <div id="diffResultsContainer">
         <div class="empty-diff-box">
-          <div style="font-size: 16px; margin-bottom: 8px;">请选择两个不同的 Worktree 进行对比</div>
-          <div style="font-size: 13px;">实时分析分支提交、修改文件数、代码行增删及高可读性 Diff 详情</div>
+          <div style="font-size: 16px; margin-bottom: 8px;">请选择两个不同的 Worktree 进行比对，或在总览列表点击【查看未提交代码】</div>
+          <div style="font-size: 13px;">支持跨工作区领先改动对比与本地未提交（Dirty）代码审查</div>
         </div>
       </div>
     </div>
@@ -522,13 +575,8 @@
         currentBranches = data.branches || [];
         currentMainBranch = data.mainBranch;
 
-        // 指标更新
         updateMetrics();
-
-        // 渲染列表
         renderFilteredLists();
-
-        // 同步更新 Diff 对比下拉框
         populateDiffSelectors();
       } catch (err) {
         alert('分析失败: ' + err.message);
@@ -600,7 +648,8 @@
             <div class="item-desc">${lastInfo}</div>
             ${!wt.existsOnDisk || wt.isPrunable ? '<div class="item-alert">⚠️ 该 Worktree 已损坏或可被安全 prune 清理</div>' : ''}
           </div>
-          <div style="display: flex; gap: 8px; align-items: center;">
+          <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+            ${wt.isDirty ? `<button class="btn-outline" onclick="viewUncommittedDiff('${wt.path}')" style="font-size: 12px; padding: 4px 8px; color: var(--warning); border-color: rgba(210, 153, 34, 0.4);">未提交 Diff (${wt.dirtyCount})</button>` : ''}
             <button class="btn-outline" onclick="viewDiffAgainstMain('${wt.path}')" style="font-size: 12px; padding: 4px 8px;">与主干对比</button>
             ${!isSafeMain ? `<button class="btn-danger" id="btn-rm-wt-${encodeURIComponent(wt.path).replace(/%/g, '_')}" onclick="removeWt('${wt.path}')">移除</button>` : ''}
           </div>
@@ -648,7 +697,7 @@
       });
     }
 
-    /* 优化 1：精细化单个 Worktree 移除判断与单项 DOM 剔除，避免全量重新扫描 */
+    /* 优化 1：精细化单个 Worktree 移除判断与单项 DOM 剔除 */
     async function removeWt(worktreePath) {
       if (!confirm(`确认从 Git 登记中移除 Worktree 目录:\n${worktreePath}`)) return;
 
@@ -668,15 +717,12 @@
         const data = await res.json();
         if (!data.ok) throw new Error(data.error);
 
-        // 单项检查确认是否真的已从 git 中移除
         const checkRes = await fetch(`/api/check-worktree?path=${encodeURIComponent(currentRepo)}&worktree=${encodeURIComponent(worktreePath)}`);
         const checkData = await checkRes.json();
 
         if (!checkData.exists) {
-          // 精准单项移除：从本地数组中剔除
           currentWorktrees = currentWorktrees.filter(w => w.path !== worktreePath);
 
-          // 动效平滑移除对应 DOM 元素
           const itemDom = document.getElementById(`wt-item-${domKey}`);
           if (itemDom) {
             itemDom.style.opacity = '0';
@@ -705,7 +751,7 @@
       }
     }
 
-    /* 优化 2：精细化单个分支删除判断与单项 DOM 剔除，避免全量重新扫描 */
+    /* 优化 2：精细化单个分支删除判断与单项 DOM 剔除 */
     async function delBranch(branchName, force) {
       const mode = force ? '强制删除 (分支未完全合入)' : '安全删除';
       if (!confirm(`确认${mode}本地分支 [${branchName}]?`)) return;
@@ -726,15 +772,12 @@
         const data = await res.json();
         if (!data.ok) throw new Error(data.error);
 
-        // 单项检查确认该分支是否真的已消失
         const checkRes = await fetch(`/api/check-branch?path=${encodeURIComponent(currentRepo)}&branch=${encodeURIComponent(branchName)}`);
         const checkData = await checkRes.json();
 
         if (!checkData.exists) {
-          // 精准单项移除：从本地分支数组中剔除
           currentBranches = currentBranches.filter(b => b.name !== branchName);
 
-          // 动效平滑移除对应 DOM 元素
           const itemDom = document.getElementById(`br-item-${domKey}`);
           if (itemDom) {
             itemDom.style.opacity = '0';
@@ -762,7 +805,7 @@
       }
     }
 
-    /* 优化 3：Worktree Diff 视图支持 */
+    /* 优化 3：Diff 选择器更新与操作 */
     function populateDiffSelectors() {
       const baseSel = document.getElementById('diffBaseSelect');
       const targetSel = document.getElementById('diffTargetSelect');
@@ -780,7 +823,7 @@
         return;
       }
 
-      currentWorktrees.forEach((w, idx) => {
+      currentWorktrees.forEach((w) => {
         const label = `${w.isMain ? '⭐ [Main] ' : '🌳 '}${w.branch || 'HEAD'} (${w.path.split('/').pop()})`;
         const optA = document.createElement('option');
         optA.value = w.path;
@@ -793,7 +836,6 @@
         targetSel.appendChild(optB);
       });
 
-      // 智能默认选中：Base 为主干，Target 为第一个非主干
       if (curBase && currentWorktrees.some(w => w.path === curBase)) {
         baseSel.value = curBase;
       } else {
@@ -826,6 +868,23 @@
         baseSel.value = currentWorktrees[0].path;
         targetSel.value = targetWorktreePath;
         fetchAndRenderDiff();
+      }
+    }
+
+    /* 查看指定 Worktree 未提交修改 (Dirty Diff) */
+    async function viewUncommittedDiff(worktreePath) {
+      switchTab('diff');
+      const container = document.getElementById('diffResultsContainer');
+      container.innerHTML = '<div class="loading">正在加载工作区未提交代码修改...</div>';
+
+      try {
+        const res = await fetch(`/api/uncommitted-diff?worktree=${encodeURIComponent(worktreePath)}`);
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error);
+
+        renderUncommittedDiffView(data.uncommitted);
+      } catch (err) {
+        container.innerHTML = `<div class="empty-diff-box" style="color: var(--danger);">加载失败: ${err.message}</div>`;
       }
     }
 
@@ -872,13 +931,53 @@
         .replace(/'/g, '&#039;');
     }
 
+    /* 格式化代码块 */
+    function formatDiffLines(rawDiff) {
+      if (!rawDiff) return '<div style="padding: 16px; color: var(--text-muted);">无代码差异或二进制文件变更</div>';
+      const lines = rawDiff.split('\n');
+      return lines.map(line => {
+        const escaped = escapeHtml(line);
+        if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff --git')) {
+          return `<span class="diff-line line-file">${escaped}</span>`;
+        } else if (line.startsWith('@@')) {
+          return `<span class="diff-line line-hunk">${escaped}</span>`;
+        } else if (line.startsWith('+')) {
+          return `<span class="diff-line line-add">${escaped}</span>`;
+        } else if (line.startsWith('-')) {
+          return `<span class="diff-line line-del">${escaped}</span>`;
+        } else {
+          return `<span class="diff-line">${escaped || '&nbsp;'}</span>`;
+        }
+      }).join('');
+    }
+
+    /* 手风琴开关单个文件 Diff */
+    function toggleFileDiff(cardId) {
+      const card = document.getElementById(cardId);
+      if (card) {
+        card.classList.toggle('expanded');
+      }
+    }
+
+    /* 全部展开 / 全部收起控制 */
+    function toggleAllDiffs(expand) {
+      const cards = document.querySelectorAll('.file-diff-card');
+      cards.forEach(card => {
+        if (expand) {
+          card.classList.add('expanded');
+        } else {
+          card.classList.remove('expanded');
+        }
+      });
+    }
+
+    /* 渲染两个 Worktree 之间的 Diff 视图 */
     function renderDiffView(diff) {
       const container = document.getElementById('diffResultsContainer');
       const files = diff.files || [];
       const ahead = diff.ahead || 0;
       const behind = diff.behind || 0;
 
-      // 状态标签
       let syncStatusBadge = '';
       if (ahead === 0 && behind === 0) {
         syncStatusBadge = '<span class="badge badge-success">两分支提交完全同步</span>';
@@ -898,8 +997,8 @@
         container.innerHTML = `
           <div class="diff-summary-card">
             <div class="stat-bar">
-              <div>基准 (Base): <span class="badge badge-outline">${escapeHtml(diff.source.branch)}</span> <code>${diff.source.path}</code></div>
-              <div>对比 (Target): <span class="badge badge-outline">${escapeHtml(diff.target.branch)}</span> <code>${diff.target.path}</code></div>
+              <div>基准 (Base): <span class="badge">${escapeHtml(diff.source.branch)}</span> <code>${diff.source.path}</code></div>
+              <div>对比 (Target): <span class="badge">${escapeHtml(diff.target.branch)}</span> <code>${diff.target.path}</code></div>
               <div style="margin-left: auto;">${syncStatusBadge}</div>
             </div>
             <div class="empty-diff-box" style="padding: 28px; border: none; background: transparent; line-height: 1.8;">
@@ -917,30 +1016,31 @@
         totalDel += f.deleted || 0;
       });
 
-      // 渲染文件列表 Pills
-      const filePills = files.map(f => {
-        return `<span class="file-pill">
-          📄 ${escapeHtml(f.filePath)}
-          <span class="add-count">+${f.added}</span>
-          <span class="del-count">-${f.deleted}</span>
-        </span>`;
-      }).join('');
+      // 渲染每个文件的卡片
+      const fileCardsHtml = files.map((f, idx) => {
+        const cardId = `diff-card-${idx}`;
+        const formattedCode = formatDiffLines(f.diffChunk);
+        let statusTag = '<span class="file-status-badge status-modified">MODIFIED</span>';
+        if (f.deleted === 0 && f.added > 0) statusTag = '<span class="file-status-badge status-added">ADDED</span>';
+        if (f.added === 0 && f.deleted > 0) statusTag = '<span class="file-status-badge status-deleted">DELETED</span>';
 
-      // 格式化并高亮 Diff 内容
-      const lines = (diff.rawDiff || '').split('\n');
-      const formattedLines = lines.map(line => {
-        const escaped = escapeHtml(line);
-        if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff --git')) {
-          return `<span class="diff-line line-file">${escaped}</span>`;
-        } else if (line.startsWith('@@')) {
-          return `<span class="diff-line line-hunk">${escaped}</span>`;
-        } else if (line.startsWith('+')) {
-          return `<span class="diff-line line-add">${escaped}</span>`;
-        } else if (line.startsWith('-')) {
-          return `<span class="diff-line line-del">${escaped}</span>`;
-        } else {
-          return `<span class="diff-line">${escaped || '&nbsp;'}</span>`;
-        }
+        return `
+          <div id="${cardId}" class="file-diff-card">
+            <div class="file-header" onclick="toggleFileDiff('${cardId}')">
+              <div class="file-title-left">
+                <span class="file-arrow">▶</span>
+                ${statusTag}
+                <span>${escapeHtml(f.filePath)}</span>
+              </div>
+              <div style="display: flex; gap: 12px; align-items: center; font-size: 12px;">
+                <span><span class="add-count">+${f.added}</span> <span class="del-count">-${f.deleted}</span></span>
+              </div>
+            </div>
+            <div class="file-body">
+              <pre class="diff-pre"><code>${formattedCode}</code></pre>
+            </div>
+          </div>
+        `;
       }).join('');
 
       container.innerHTML = `
@@ -951,28 +1051,107 @@
             <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
               ${syncStatusBadge}
               <span style="color: var(--text-muted);">|</span>
-              <span>改动文件: <b>${files.length}</b> 个</span>
-              <span>新增: <span class="add-count">+${totalAdd}</span> 行</span>
-              <span>删除: <span class="del-count">-${totalDel}</span> 行</span>
+              <span>变更文件: <b>${files.length}</b> 个</span>
+              <span>新增: <span class="add-count">+${totalAdd}</span></span>
+              <span>删除: <span class="del-count">-${totalDel}</span></span>
             </div>
           </div>
 
           <div style="margin-top: 10px; font-size: 12px; color: var(--text-muted); background: rgba(88, 166, 255, 0.08); padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(88, 166, 255, 0.2);">
-            💡 <b>仅对比分支领先改动 (三点比较 <code>base...target</code>)</b>：只展示对比分支自身引入的提交与修改，绝不反向倒置显示基准分支代码。
-          </div>
-
-          <div style="margin-top: 12px;">
-            <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 6px;">变更文件清单：</div>
-            <div style="display: flex; flex-wrap: wrap;">${filePills}</div>
+            💡 <b>仅对比分支领先改动 (三点比较 <code>base...target</code>)</b>：只展示对比分支自身引入的代码修改。
           </div>
         </div>
 
-        <div class="diff-code-wrapper">
-          <div class="diff-code-header">
-            <span>Unified Diff 代码高亮视图 (Target 独有改动)</span>
-            <span style="font-size: 12px; color: var(--text-muted);">共 ${lines.length} 行对比</span>
+        <div class="diff-tools-bar">
+          <div class="diff-tools-left">
+            <span>📁 变更文件列表 (${files.length})</span>
+            <span style="font-size: 12px; color: var(--text-muted); font-weight: normal;">单击单个文件展开/收起详情</span>
           </div>
-          <pre class="diff-pre"><code>${formattedLines}</code></pre>
+          <div class="diff-tools-right">
+            <button class="btn-outline" onclick="toggleAllDiffs(true)" style="font-size: 12px; padding: 4px 10px;">展开全部</button>
+            <button class="btn-outline" onclick="toggleAllDiffs(false)" style="font-size: 12px; padding: 4px 10px;">收起全部</button>
+          </div>
+        </div>
+
+        <div style="margin-top: 8px;">
+          ${fileCardsHtml}
+        </div>
+      `;
+    }
+
+    /* 渲染未提交代码 (Dirty Diff) 视图 */
+    function renderUncommittedDiffView(uncommitted) {
+      const container = document.getElementById('diffResultsContainer');
+      const files = uncommitted.files || [];
+
+      if (files.length === 0) {
+        container.innerHTML = `
+          <div class="diff-summary-card">
+            <div class="stat-bar">
+              <div>工作区: <code>${escapeHtml(uncommitted.worktreePath)}</code></div>
+              <div style="margin-left: auto;"><span class="badge badge-success">工作树干净 (Clean)</span></div>
+            </div>
+            <div class="empty-diff-box" style="padding: 28px; border: none; background: transparent;">
+              🎉 该工作区没有任何未暂存或未提交的修改。
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      const fileCardsHtml = files.map((f, idx) => {
+        const cardId = `uncommitted-card-${idx}`;
+        const formattedCode = formatDiffLines(f.diffChunk);
+        let statusTag = '<span class="file-status-badge status-modified">MODIFIED</span>';
+        if (f.status === '?') statusTag = '<span class="file-status-badge status-added">UNTRACKED</span>';
+        else if (f.deleted === 0 && f.added > 0) statusTag = '<span class="file-status-badge status-added">ADDED</span>';
+        else if (f.added === 0 && f.deleted > 0) statusTag = '<span class="file-status-badge status-deleted">DELETED</span>';
+
+        return `
+          <div id="${cardId}" class="file-diff-card">
+            <div class="file-header" onclick="toggleFileDiff('${cardId}')">
+              <div class="file-title-left">
+                <span class="file-arrow">▶</span>
+                ${statusTag}
+                <span>${escapeHtml(f.filePath)}</span>
+              </div>
+              <div style="display: flex; gap: 12px; align-items: center; font-size: 12px;">
+                <span><span class="add-count">+${f.added}</span> <span class="del-count">-${f.deleted}</span></span>
+              </div>
+            </div>
+            <div class="file-body">
+              <pre class="diff-pre"><code>${formattedCode}</code></pre>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      container.innerHTML = `
+        <div class="diff-summary-card">
+          <div class="stat-bar">
+            <div>本地工作区: <code>${escapeHtml(uncommitted.worktreePath)}</code></div>
+            <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
+              <span class="badge badge-warning">未提交代码 (${files.length} 个文件)</span>
+              <span style="color: var(--text-muted);">|</span>
+              <span>新增: <span class="add-count">+${uncommitted.totalAdded}</span> 行</span>
+              <span>删除: <span class="del-count">-${uncommitted.totalDeleted}</span> 行</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="diff-tools-bar">
+          <div class="diff-tools-left">
+            <span>📝 未提交代码文件清单 (${files.length})</span>
+            <span style="font-size: 12px; color: var(--text-muted); font-weight: normal;">单击单项展开/收起代码审查</span>
+          </div>
+          <div class="diff-tools-right">
+            <button class="btn-outline" onclick="toggleAllDiffs(true)" style="font-size: 12px; padding: 4px 10px;">展开全部</button>
+            <button class="btn-outline" onclick="toggleAllDiffs(false)" style="font-size: 12px; padding: 4px 10px;">收起全部</button>
+          </div>
+        </div>
+
+        <div style="margin-top: 8px;">
+          ${fileCardsHtml}
         </div>
       `;
     }

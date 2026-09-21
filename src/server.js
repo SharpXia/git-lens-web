@@ -12,7 +12,8 @@ import {
   pruneWorktrees,
   checkBranchExists,
   checkWorktreeExists,
-  getWorktreeDiff
+  getWorktreeDiff,
+  getUncommittedDiff
 } from './git-inspector.js';
 
 const PORT = process.env.PORT || 9527;
@@ -117,7 +118,7 @@ const server = http.createServer(async (req, res) => {
       const { repoPath, branchName, force } = await readJson();
       if (!repoPath || !branchName) throw new Error('Missing repoPath or branchName');
       const result = await deleteBranch(repoPath, branchName, force);
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ ok: true, ...result }));
     }
 
@@ -126,7 +127,7 @@ const server = http.createServer(async (req, res) => {
       const { repoPath, worktreePath, force } = await readJson();
       if (!repoPath || !worktreePath) throw new Error('Missing repoPath or worktreePath');
       const result = await removeWorktree(repoPath, worktreePath, force);
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ ok: true, ...result }));
     }
 
@@ -164,7 +165,19 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ ok: true, diff: diffData }));
     }
 
-    // 8. API: Worktree Prune
+    // 8. API: 获取指定 Worktree 的本地未提交改动 (Dirty/Uncommitted Diff)
+    if (pathname === '/api/uncommitted-diff' && req.method === 'GET') {
+      const worktreePath = parsed.query.worktree;
+      if (!worktreePath) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: 'Missing worktree parameter' }));
+      }
+      const uncommitted = await getUncommittedDiff(worktreePath);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: true, uncommitted }));
+    }
+
+    // 9. API: Worktree Prune
     if (pathname === '/api/prune-worktrees' && req.method === 'POST') {
       const { repoPath } = await readJson();
       if (!repoPath) throw new Error('Missing repoPath');
