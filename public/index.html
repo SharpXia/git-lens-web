@@ -337,29 +337,88 @@
     }
     .panel-header h2 { font-size: 15px; font-weight: 600; color: var(--text-bright); }
     .list-item {
-      padding: 12px 16px;
+      padding: 14px 16px;
       border-bottom: 1px solid var(--border);
       display: flex;
       justify-content: space-between;
       align-items: flex-start;
-      gap: 12px;
+      gap: 16px;
       transition: opacity 0.3s ease, transform 0.3s ease;
     }
     .list-item:last-child { border-bottom: none; }
-    .item-main { flex: 1; min-width: 0; }
-    .item-title {
-      font-weight: 600;
-      font-size: 14px;
+    .item-main {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .item-header-row {
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 8px;
-      margin-bottom: 4px;
+    }
+    .item-name {
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--text-bright);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      word-break: break-word;
+    }
+    .item-tags {
+      display: inline-flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .item-tags .badge {
+      max-width: 380px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .item-path-box {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 12px;
+      color: var(--text-muted);
+      width: fit-content;
+      max-width: 100%;
       word-break: break-all;
+    }
+    .item-path-text {
+      color: #8b949e;
+      user-select: all;
+    }
+    .copy-path-btn {
+      background: transparent;
+      border: none;
+      padding: 2px 4px;
+      font-size: 11px;
+      color: var(--text-muted);
+      cursor: pointer;
+      opacity: 0.6;
+      border-radius: 4px;
+      transition: opacity 0.15s, color 0.15s;
+    }
+    .copy-path-btn:hover {
+      opacity: 1;
+      color: var(--accent);
+      border: none;
     }
     .item-desc {
       font-size: 12px;
       color: var(--text-muted);
-      margin-bottom: 4px;
+      line-height: 1.4;
     }
     .item-alert {
       font-size: 12px;
@@ -367,6 +426,20 @@
       display: flex;
       align-items: center;
       gap: 4px;
+      background: rgba(210, 153, 34, 0.1);
+      border: 1px solid rgba(210, 153, 34, 0.25);
+      padding: 4px 8px;
+      border-radius: 4px;
+      width: fit-content;
+    }
+    .item-actions {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+      justify-content: flex-end;
+      padding-top: 2px;
     }
     .loading { color: var(--text-muted); padding: 32px; text-align: center; }
 
@@ -979,26 +1052,34 @@
         const isSafeMain = wt.isMain;
         let tags = [];
         if (wt.isMain) tags.push('<span class="badge badge-success">Main 工作区</span>');
-        if (wt.branch) tags.push(`<span class="badge">🌿 ${wt.branch}</span>`);
+        if (wt.branch) tags.push(`<span class="badge" title="${escapeHtml(wt.branch)}">🌿 ${escapeHtml(wt.branch)}</span>`);
         if (!wt.existsOnDisk) tags.push('<span class="badge badge-danger">磁盘已失联</span>');
         if (wt.isDirty) tags.push(`<span class="badge badge-warning">未提交修改 (${wt.dirtyCount})</span>`);
         if (wt.isLocked) tags.push('<span class="badge">已加锁</span>');
 
+        const dirName = wt.path.split('/').filter(Boolean).pop() || wt.path;
         let lastInfo = wt.lastCommit ? `最新提交: ${wt.lastCommit.relativeTime} by ${wt.lastCommit.author} · "${wt.lastCommit.subject}"` : '';
 
         div.innerHTML = `
           <div class="item-main">
-            <div class="item-title">
-              <span>${wt.path}</span>
-              ${tags.join(' ')}
+            <div class="item-header-row">
+              <div class="item-name" title="${escapeHtml(wt.path)}">
+                <span>📁</span>
+                <span>${escapeHtml(dirName)}</span>
+              </div>
+              <div class="item-tags">${tags.join(' ')}</div>
             </div>
-            <div class="item-desc">${lastInfo}</div>
+            <div class="item-path-box">
+              <span class="item-path-text">${escapeHtml(wt.path)}</span>
+              <button class="copy-path-btn" onclick="copyText('${escapeHtml(wt.path)}', this)" title="复制完整路径">复制</button>
+            </div>
+            ${lastInfo ? `<div class="item-desc">${lastInfo}</div>` : ''}
             ${!wt.existsOnDisk || wt.isPrunable ? '<div class="item-alert">⚠️ 该 Worktree 已损坏或可被安全 prune 清理</div>' : ''}
           </div>
-          <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
-            ${wt.isDirty ? `<button class="btn-outline" onclick="viewUncommittedDiff('${wt.path}')" style="font-size: 12px; padding: 4px 8px; color: var(--warning); border-color: rgba(210, 153, 34, 0.4);">未提交 Diff (${wt.dirtyCount})</button>` : ''}
-            <button class="btn-outline" onclick="viewDiffAgainstMain('${wt.path}')" style="font-size: 12px; padding: 4px 8px;">与主干对比</button>
-            ${!isSafeMain ? `<button class="btn-danger" id="btn-rm-wt-${encodeURIComponent(wt.path).replace(/%/g, '_')}" onclick="removeWt('${wt.path}')">移除</button>` : ''}
+          <div class="item-actions">
+            ${wt.isDirty ? `<button class="btn-outline" onclick="viewUncommittedDiff('${escapeHtml(wt.path)}')" style="font-size: 12px; padding: 4px 8px; color: var(--warning); border-color: rgba(210, 153, 34, 0.4);">未提交 Diff (${wt.dirtyCount})</button>` : ''}
+            <button class="btn-outline" onclick="viewDiffAgainstMain('${escapeHtml(wt.path)}')" style="font-size: 12px; padding: 4px 8px;">与主干对比</button>
+            ${!isSafeMain ? `<button class="btn-danger" id="btn-rm-wt-${encodeURIComponent(wt.path).replace(/%/g, '_')}" onclick="removeWt('${escapeHtml(wt.path)}')">移除</button>` : ''}
           </div>
         `;
         container.appendChild(div);
@@ -1031,14 +1112,19 @@
 
         div.innerHTML = `
           <div class="item-main">
-            <div class="item-title">
-              <span>${b.name}</span>
-              ${tags.join(' ')}
+            <div class="item-header-row">
+              <div class="item-name">
+                <span>🌿</span>
+                <span>${escapeHtml(b.name)}</span>
+              </div>
+              <div class="item-tags">${tags.join(' ')}</div>
             </div>
-            <div class="item-desc">${b.relativeTime} 由 ${b.author} 提交: "${b.subject || '-'}"</div>
-            ${b.redundancyReason ? `<div class="item-alert">⚠️ ${b.redundancyReason}</div>` : ''}
+            <div class="item-desc">${b.relativeTime} 由 ${escapeHtml(b.author)} 提交: "${escapeHtml(b.subject || '-')}"</div>
+            ${b.redundancyReason ? `<div class="item-alert">⚠️ ${escapeHtml(b.redundancyReason)}</div>` : ''}
           </div>
-          ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${b.name}', ${!b.isMerged})">删除</button>` : ''}
+          <div class="item-actions">
+            ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${escapeHtml(b.name)}', ${!b.isMerged})">删除</button>` : ''}
+          </div>
         `;
         container.appendChild(div);
       });
@@ -1500,6 +1586,28 @@
           ${fileCardsHtml}
         </div>
       `;
+    }
+
+    function copyText(text, btn) {
+      if (!navigator.clipboard) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      } else {
+        navigator.clipboard.writeText(text);
+      }
+      if (btn) {
+        const orig = btn.textContent;
+        btn.textContent = '已复制!';
+        btn.style.color = 'var(--success)';
+        setTimeout(() => {
+          btn.textContent = orig;
+          btn.style.color = '';
+        }, 1500);
+      }
     }
 
     /* 页面事件监听 */
