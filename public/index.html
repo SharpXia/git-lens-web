@@ -341,7 +341,7 @@
       border-bottom: 1px solid var(--border);
       display: flex;
       justify-content: space-between;
-      align-items: flex-start;
+      align-items: stretch;
       gap: 16px;
       transition: opacity 0.3s ease, transform 0.3s ease;
     }
@@ -434,12 +434,29 @@
     }
     .item-actions {
       display: flex;
-      gap: 6px;
-      align-items: center;
-      flex-wrap: wrap;
+      flex-direction: column;
+      align-items: stretch;
       flex-shrink: 0;
-      justify-content: flex-end;
-      padding-top: 2px;
+      min-width: 108px;
+      gap: 6px;
+    }
+    .item-actions-diff-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      width: 100%;
+    }
+    .item-actions .btn-outline,
+    .item-actions .btn-danger {
+      width: 100%;
+      text-align: center;
+      box-sizing: border-box;
+      font-size: 12px;
+      padding: 4px 8px;
+      white-space: nowrap;
+    }
+    .item-actions .btn-remove-wt {
+      margin-top: auto;
     }
     .loading { color: var(--text-muted); padding: 32px; text-align: center; }
 
@@ -1077,9 +1094,11 @@
             ${!wt.existsOnDisk || wt.isPrunable ? '<div class="item-alert">⚠️ 该 Worktree 已损坏或可被安全 prune 清理</div>' : ''}
           </div>
           <div class="item-actions">
-            ${wt.isDirty ? `<button class="btn-outline" onclick="viewUncommittedDiff('${escapeHtml(wt.path)}')" style="font-size: 12px; padding: 4px 8px; color: var(--warning); border-color: rgba(210, 153, 34, 0.4);">未提交 Diff (${wt.dirtyCount})</button>` : ''}
-            <button class="btn-outline" onclick="viewDiffAgainstMain('${escapeHtml(wt.path)}')" style="font-size: 12px; padding: 4px 8px;">与主干对比</button>
-            ${!isSafeMain ? `<button class="btn-danger" id="btn-rm-wt-${encodeURIComponent(wt.path).replace(/%/g, '_')}" onclick="removeWt('${escapeHtml(wt.path)}')">移除</button>` : ''}
+            <div class="item-actions-diff-group">
+              ${wt.isDirty ? `<button class="btn-outline" onclick="viewUncommittedDiff('${escapeHtml(wt.path)}')" style="color: var(--warning); border-color: rgba(210, 153, 34, 0.4);">未提交 Diff (${wt.dirtyCount})</button>` : ''}
+              <button class="btn-outline" onclick="viewDiffAgainstMain('${escapeHtml(wt.path)}')">与主干对比</button>
+            </div>
+            ${!isSafeMain ? `<button class="btn-danger btn-remove-wt" id="btn-rm-wt-${encodeURIComponent(wt.path).replace(/%/g, '_')}" onclick="removeWt('${escapeHtml(wt.path)}')">移除</button>` : ''}
           </div>
         `;
         container.appendChild(div);
