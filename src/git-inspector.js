@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 const exec = promisify(execFile);
 
 /**
- * 执行 git 命令辅助函数
+ * 执行 git 命令辅助函数 (返回字符串)
  */
 async function runGit(cwd, args) {
   try {
@@ -14,6 +14,67 @@ async function runGit(cwd, args) {
     return stdout.trim();
   } catch (err) {
     throw new Error(`Git error in ${cwd}: ${err.message}`);
+  }
+}
+
+/**
+ * 执行 git 命令辅助函数 (返回二进制 Buffer)
+ */
+function runGitRaw(cwd, args) {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, { cwd, encoding: 'buffer', maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) return reject(new Error(stderr.toString() || err.message));
+      resolve(stdout);
+    });
+  });
+}
+
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.avif']);
+
+export function isImageFile(filePath) {
+  if (!filePath) return false;
+  const ext = path.extname(filePath).toLowerCase();
+  return IMAGE_EXTENSIONS.has(ext);
+}
+
+const MIME_MAP = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.avif': 'image/avif'
+};
+
+export function getMimeType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  return MIME_MAP[ext] || 'application/octet-stream';
+}
+
+/**
+ * 获取 Git 提交或工作区中的文件二进制 Buffer
+ */
+export async function getFileContentBuffer(repoPath, revision, filePath, worktreePath = null) {
+  // 如果指定了 worktreePath 且 revision 是 'WORKTREE'，直接从磁盘读取工作区最新文件
+  if (revision === 'WORKTREE' && worktreePath) {
+    const full = path.resolve(worktreePath, filePath);
+    try {
+      return await fs.readFile(full);
+    } catch {
+      return null;
+    }
+  }
+
+  // 否则通过 git show 从对应版本获取
+  try {
+    const targetCwd = worktreePath || repoPath;
+    const buf = await runGitRaw(targetCwd, ['show', `${revision}:${filePath}`]);
+    return buf;
+  } catch {
+    return null;
   }
 }
 
@@ -120,6 +181,31 @@ export async function getWorktrees(repoPath) {
       wt.isPrunable = true;
     }
   }
+
+  // 并发检查每个分支相比 Main 分支是否有领先提交 (ahead)
+  const mainWt = worktrees.find(w => w.isMain);
+  const mainRef = (mainWt && (mainWt.branch || mainWt.head)) || 'main';
+
+  await Promise.all(worktrees.map(async (wt) => {
+    if (wt.isMain) {
+      wt.aheadCount = 0;
+      wt.hasDiff = wt.isDirty;
+      return;
+    }
+    const targetRef = wt.branch || wt.head;
+    if (!targetRef) {
+      wt.aheadCount = 0;
+      wt.hasDiff = wt.isDirty;
+      return;
+    }
+    try {
+      const countStr = await runGit(repoPath, ['rev-list', '--count', `${mainRef}..${targetRef}`]);
+      wt.aheadCount = parseInt(countStr.trim(), 10) || 0;
+    } catch {
+      wt.aheadCount = 0;
+    }
+    wt.hasDiff = wt.isDirty || wt.aheadCount > 0;
+  }));
 
   return worktrees;
 }
@@ -243,13 +329,66 @@ function splitDiffByFiles(rawDiff) {
  * 优化点：使用三点语法 `base...target`，确保只显示 Target 领先于 Base 的自身新增改动，
  * 并支持按每个文件独立归类 diffChunk，支持前端独立展开/收起。
  */
-export async function getWorktreeDiff(repoPath, sourcePath, targetPath) {
+/**
+ * 获取两个 Worktree 之间或目标工作区的 Diff，支持三种模式：
+ * 1. 'uncommitted': 仅未提交以及 untracked
+ * 2. 'all': 提交和未提交以及 untracked (全量)
+ * 3. 'committed': 仅已提交 (忽略未提交及 untracked)
+ *
+ * 智能回退优先级：
+ * 默认优先 'uncommitted'（如果有脏代码或新增未跟踪）；
+ * 若无，fallback 到 'all'（如果有领先提交或文件差异）；
+ * 最低优先级为 'committed'。
+ */
+export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requestedMode = null) {
   const worktrees = await getWorktrees(repoPath);
   const sourceWt = worktrees.find(w => path.resolve(w.path) === path.resolve(sourcePath));
   const targetWt = worktrees.find(w => path.resolve(w.path) === path.resolve(targetPath));
 
   if (!sourceWt || !targetWt) {
     throw new Error('指定的 Worktree 路径不存在或未被 Git 登记');
+  }
+
+  const isSameWorktree = path.resolve(sourceWt.path) === path.resolve(targetWt.path);
+
+  // 特殊场景：分支自己和自己 diff（工作区自审查模式）
+  // 此时仅允许且锁定【仅未提交以及未跟踪】模式，其它模式不可用
+  if (isSameWorktree) {
+    const uncommittedData = await getUncommittedDiff(targetWt.path);
+    const uncommittedFiles = uncommittedData.files || [];
+    return {
+      isSameWorktree: true,
+      source: {
+        path: sourceWt.path,
+        branch: sourceWt.branch || 'HEAD',
+        head: sourceWt.head,
+        isMain: sourceWt.isMain,
+        isDirty: sourceWt.isDirty,
+        lastCommit: sourceWt.lastCommit
+      },
+      target: {
+        path: targetWt.path,
+        branch: targetWt.branch || 'HEAD',
+        head: targetWt.head,
+        isMain: targetWt.isMain,
+        isDirty: targetWt.isDirty,
+        lastCommit: targetWt.lastCommit
+      },
+      ahead: 0,
+      behind: 0,
+      effectiveMode: 'uncommitted',
+      modesAvailable: {
+        uncommitted: true,
+        all: false,
+        committed: false
+      },
+      counts: {
+        uncommitted: uncommittedFiles.length,
+        all: uncommittedFiles.length,
+        committed: 0
+      },
+      files: uncommittedFiles
+    };
   }
 
   const sourceRef = sourceWt.branch || sourceWt.head || 'HEAD';
@@ -270,42 +409,113 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath) {
     // ignore
   }
 
-  // 2. 使用三点语法获取 diff stat 摘要
-  let statSummary = '';
-  try {
-    statSummary = await runGit(repoPath, ['diff', '--stat', tripleDotRange]);
-  } catch {
-    statSummary = '';
-  }
+  // 2. 检查 Target 工作区自身的未提交/未跟踪改动
+  const uncommittedData = await getUncommittedDiff(targetWt.path);
+  const hasUncommitted = (uncommittedData.files && uncommittedData.files.length > 0);
 
-  // 3. 获取完整 unified diff 内容 (base...target)
-  let rawDiff = '';
+  // 3. 计算【仅已提交】(committed) 的 diff
+  let committedDiff = '';
   try {
-    rawDiff = await runGit(repoPath, ['diff', '-p', '-U3', tripleDotRange]);
+    committedDiff = await runGit(repoPath, ['diff', '-p', '-U3', tripleDotRange]);
   } catch (err) {
-    rawDiff = `获取 Diff 失败: ${err.message}`;
+    committedDiff = `获取 Diff 失败: ${err.message}`;
   }
-
-  // 按文件拆分 diff 内容
-  const fileDiffMap = splitDiffByFiles(rawDiff);
-
-  // 4. 获取变更文件列表与增删行 (numstat)
-  const files = [];
+  const committedFileMap = splitDiffByFiles(committedDiff);
+  const committedFiles = [];
   try {
     const numstatOut = await runGit(repoPath, ['diff', '--numstat', tripleDotRange]);
     for (const line of numstatOut.split('\n')) {
       if (!line.trim()) continue;
       const [added, deleted, filePath] = line.split('\t');
-      files.push({
+      const isImg = isImageFile(filePath);
+      const isBin = isImg || added === '-' || deleted === '-';
+      committedFiles.push({
         filePath,
-        added: added === '-' ? 0 : parseInt(added, 10),
-        deleted: deleted === '-' ? 0 : parseInt(deleted, 10),
-        isBinary: added === '-' || deleted === '-',
-        diffChunk: fileDiffMap[filePath] || ''
+        status: 'M',
+        added: isBin ? 0 : (added === '-' ? 0 : parseInt(added, 10)),
+        deleted: isBin ? 0 : (deleted === '-' ? 0 : parseInt(deleted, 10)),
+        isBinary: isBin,
+        isImage: isImg,
+        diffChunk: committedFileMap[filePath] || ''
       });
     }
-  } catch {
-    // ignore
+  } catch {}
+
+  const hasCommitted = (committedFiles.length > 0 || ahead > 0);
+
+  // 4. 计算【全量：已提交 + 未提交 + untracked】(all)
+  // 获取 merge-base
+  let baseMergeSha = '';
+  try {
+    const baseHead = await runGit(sourceWt.path, ['rev-parse', 'HEAD']);
+    const targetHead = await runGit(targetWt.path, ['rev-parse', 'HEAD']);
+    baseMergeSha = await runGit(targetWt.path, ['merge-base', baseHead, targetHead]);
+  } catch {}
+
+  let allFiles = [];
+  if (baseMergeSha) {
+    try {
+      const allNumstat = await runGit(targetWt.path, ['diff', baseMergeSha, '--numstat']);
+      const allDiffRaw = await runGit(targetWt.path, ['diff', baseMergeSha, '-p', '-U3']);
+      const allDiffMap = splitDiffByFiles(allDiffRaw);
+      const seenAll = new Set();
+
+      for (const line of allNumstat.split('\n')) {
+        if (!line.trim()) continue;
+        const [added, deleted, filePath] = line.split('\t');
+        seenAll.add(filePath);
+        const isImg = isImageFile(filePath);
+        const isBin = isImg || added === '-' || deleted === '-';
+        allFiles.push({
+          filePath,
+          status: 'M',
+          added: isBin ? 0 : (added === '-' ? 0 : parseInt(added, 10)),
+          deleted: isBin ? 0 : (deleted === '-' ? 0 : parseInt(deleted, 10)),
+          isBinary: isBin,
+          isImage: isImg,
+          diffChunk: allDiffMap[filePath] || ''
+        });
+      }
+
+      // 把 untracked 补入 allFiles
+      if (uncommittedData.files) {
+        for (const uf of uncommittedData.files) {
+          if (uf.status === '?' && !seenAll.has(uf.filePath)) {
+            allFiles.push(uf);
+          }
+        }
+      }
+    } catch {
+      allFiles = committedFiles;
+    }
+  } else {
+    allFiles = committedFiles;
+  }
+
+  // 5. 决定有效模式 (有效优先级策略)
+  // 用户指定了有效模式则优先遵从；若未指定或自动判断：
+  // 优先级 1: uncommitted (仅未提交以及 untracked，如果有的话)
+  // 优先级 2: all (提交和未提交以及 untracked)
+  // 优先级 3: committed (仅含已提交)
+  let effectiveMode = requestedMode;
+  if (!effectiveMode || !['uncommitted', 'all', 'committed'].includes(effectiveMode)) {
+    if (hasUncommitted) {
+      effectiveMode = 'uncommitted';
+    } else if (hasCommitted || allFiles.length > 0) {
+      effectiveMode = 'all';
+    } else {
+      effectiveMode = 'committed';
+    }
+  }
+
+  // 根据 effectiveMode 选定输出的 files 列表
+  let activeFiles = [];
+  if (effectiveMode === 'uncommitted') {
+    activeFiles = uncommittedData.files || [];
+  } else if (effectiveMode === 'all') {
+    activeFiles = allFiles;
+  } else {
+    activeFiles = committedFiles;
   }
 
   return {
@@ -327,15 +537,21 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath) {
     },
     ahead,
     behind,
-    statSummary,
-    files,
-    rawDiff
+    effectiveMode,
+    modesAvailable: {
+      uncommitted: hasUncommitted,
+      all: (allFiles.length > 0 || hasUncommitted || hasCommitted),
+      committed: hasCommitted
+    },
+    counts: {
+      uncommitted: (uncommittedData.files || []).length,
+      all: allFiles.length,
+      committed: committedFiles.length
+    },
+    files: activeFiles
   };
 }
 
-/**
- * 获取单个 Worktree 本地未提交代码的 Diff (包含已暂存与未暂存修改)
- */
 export async function getUncommittedDiff(worktreePath) {
   try {
     const stat = await fs.stat(worktreePath);
@@ -373,47 +589,67 @@ export async function getUncommittedDiff(worktreePath) {
       if (!line.trim()) continue;
       const [added, deleted, filePath] = line.split('\t');
       processedFiles.add(filePath);
+      const isImg = isImageFile(filePath);
+      const isBin = isImg || added === '-' || deleted === '-';
       files.push({
         filePath,
         status: 'M',
-        added: added === '-' ? 0 : parseInt(added, 10),
-        deleted: deleted === '-' ? 0 : parseInt(deleted, 10),
-        isBinary: added === '-' || deleted === '-',
+        added: isBin ? 0 : (added === '-' ? 0 : parseInt(added, 10)),
+        deleted: isBin ? 0 : (deleted === '-' ? 0 : parseInt(deleted, 10)),
+        isBinary: isBin,
+        isImage: isImg,
         diffChunk: fileDiffMap[filePath] || ''
       });
     }
   }
 
   // 4. 检查是否有新增加但尚未 git add 的未跟踪文件 (Untracked ??)
+  // 排除 verification/ 目录（测试验收/截图等过程文件）及常见的本地构建或工具链临时目录
+  const IGNORED_UNTRACKED_PREFIXES = ['verification/', '.verification/', '.playwright/', '.cypress/'];
+
   try {
     const untrackedRaw = await runGit(worktreePath, ['ls-files', '--others', '--exclude-standard']);
     for (const f of untrackedRaw.split('\n')) {
       const filePath = f.trim();
       if (!filePath || processedFiles.has(filePath)) continue;
+      if (IGNORED_UNTRACKED_PREFIXES.some(prefix => filePath.startsWith(prefix))) continue;
       processedFiles.add(filePath);
       
-      // 读取新文件内容估算新增行数
+      const isImg = isImageFile(filePath);
       let addedLines = 0;
       let newContent = '';
-      try {
-        const full = path.join(worktreePath, filePath);
-        const st = await fs.stat(full);
-        if (st.size < 512 * 1024) { // 小于 512KB 读取
-          const content = await fs.readFile(full, 'utf-8');
-          const lines = content.split('\n');
-          addedLines = lines.length;
-          newContent = lines.map(l => '+' + l).join('\n');
-        }
-      } catch {}
+      let isBin = isImg;
 
-      const customChunk = `diff --git a/${filePath} b/${filePath}\nnew file mode 100644\n--- /dev/null\n+++ b/${filePath}\n@@ -0,0 +1,${addedLines} @@\n${newContent}\n`;
+      if (!isImg) {
+        try {
+          const full = path.join(worktreePath, filePath);
+          const st = await fs.stat(full);
+          if (st.size < 512 * 1024) { // 小于 512KB 读取
+            const content = await fs.readFile(full, 'utf-8');
+            if (content.includes('\0')) {
+              isBin = true;
+            } else {
+              const lines = content.split('\n');
+              addedLines = lines.length;
+              newContent = lines.map(l => '+' + l).join('\n');
+            }
+          } else {
+            isBin = true;
+          }
+        } catch {}
+      }
+
+      const customChunk = (isImg || isBin)
+        ? `Binary file ${filePath} has been added\n`
+        : `diff --git a/${filePath} b/${filePath}\nnew file mode 100644\n--- /dev/null\n+++ b/${filePath}\n@@ -0,0 +1,${addedLines} @@\n${newContent}\n`;
 
       files.push({
         filePath,
         status: '?',
-        added: addedLines,
+        added: (isImg || isBin) ? 0 : addedLines,
         deleted: 0,
-        isBinary: false,
+        isBinary: isImg || isBin,
+        isImage: isImg,
         diffChunk: customChunk
       });
     }
@@ -422,8 +658,10 @@ export async function getUncommittedDiff(worktreePath) {
   let totalAdded = 0;
   let totalDeleted = 0;
   files.forEach(f => {
-    totalAdded += f.added || 0;
-    totalDeleted += f.deleted || 0;
+    if (!f.isBinary) {
+      totalAdded += f.added || 0;
+      totalDeleted += f.deleted || 0;
+    }
   });
 
   return {

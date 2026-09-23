@@ -13,7 +13,9 @@ import {
   checkBranchExists,
   checkWorktreeExists,
   getWorktreeDiff,
-  getUncommittedDiff
+  getUncommittedDiff,
+  getFileContentBuffer,
+  getMimeType
 } from './git-inspector.js';
 
 const PORT = process.env.PORT || 9527;
@@ -151,16 +153,17 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ ok: true, worktreePath, exists }));
     }
 
-    // 7. API: 获取两个 Worktree 之间的对比 Diff
+    // 7. API: 获取两个 Worktree 之间的对比 Diff (支持 mode 参数: uncommitted | all | committed)
     if (pathname === '/api/diff-worktrees' && req.method === 'GET') {
       const repoPath = parsed.query.path;
       const source = parsed.query.source;
       const target = parsed.query.target;
+      const mode = parsed.query.mode || null;
       if (!repoPath || !source || !target) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: false, error: 'Missing path, source, or target parameter' }));
       }
-      const diffData = await getWorktreeDiff(repoPath, source, target);
+      const diffData = await getWorktreeDiff(repoPath, source, target, mode);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify({ ok: true, diff: diffData }));
     }
@@ -177,6 +180,33 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ ok: true, uncommitted }));
     }
 
+    // 8.5 API: 获取指定版本或工作区的原始文件二进制流 (如图片显示)
+    if (pathname === '/api/raw-file' && req.method === 'GET') {
+      const repoPath = parsed.query.repoPath;
+      const revision = parsed.query.revision || 'HEAD';
+      const filePath = parsed.query.filePath;
+      const worktreePath = parsed.query.worktreePath || null;
+
+      if (!filePath) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: 'Missing filePath parameter' }));
+      }
+
+      const buffer = await getFileContentBuffer(repoPath, revision, filePath, worktreePath);
+      if (!buffer) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        return res.end('File not found in git revision or worktree');
+      }
+
+      const mime = getMimeType(filePath);
+      res.writeHead(200, {
+        'Content-Type': mime,
+        'Content-Length': buffer.length,
+        'Cache-Control': 'no-cache'
+      });
+      return res.end(buffer);
+    }
+
     // 9. API: Worktree Prune
     if (pathname === '/api/prune-worktrees' && req.method === 'POST') {
       const { repoPath } = await readJson();
@@ -189,7 +219,10 @@ const server = http.createServer(async (req, res) => {
     // 静态首页 HTML
     if (pathname === '/' || pathname === '/index.html') {
       const html = await fs.readFile(path.join(path.dirname(url.fileURLToPath(import.meta.url)), '../public/index.html'), 'utf-8');
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-cache, no-store, must-revalidate'
+      });
       return res.end(html);
     }
 

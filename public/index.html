@@ -514,17 +514,93 @@
     .add-count { color: var(--success); font-weight: 600; }
     .del-count { color: var(--danger); font-weight: 600; }
 
+    /* 精致分段切换器 (Segmented Control) 审查模式 */
+    .diff-mode-control-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .diff-mode-segmented {
+      display: inline-flex;
+      background: #0d1117;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 3px;
+      gap: 4px;
+    }
+    .diff-mode-btn {
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+      user-select: none;
+      outline: none;
+    }
+    .diff-mode-btn:disabled, .diff-mode-btn.disabled {
+      opacity: 0.35;
+      cursor: not-allowed !important;
+      pointer-events: none;
+    }
+    .diff-mode-btn:hover {
+      color: var(--text-bright);
+      background: rgba(255, 255, 255, 0.06);
+    }
+    .diff-mode-btn.active {
+      background: #21262d;
+      color: #58a6ff;
+      font-weight: 600;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+    }
+    .diff-mode-pill {
+      font-size: 11px;
+      padding: 1px 6px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-muted);
+    }
+    .diff-mode-btn.active .diff-mode-pill {
+      background: rgba(56, 139, 253, 0.2);
+      color: #58a6ff;
+    }
+    .diff-mode-tip {
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
     /* 文件列表与手风琴 Diff 组件 */
     .diff-tools-bar {
+      position: -webkit-sticky;
+      position: sticky;
+      top: 0;
+      z-index: 100;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 10px 16px;
-      background: var(--card-alt);
+      padding: 12px 16px;
+      background: rgba(22, 27, 34, 0.92);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
       border: 1px solid var(--border);
-      border-radius: 8px 8px 0 0;
+      border-radius: 8px;
       margin-top: 16px;
-      border-bottom: none;
+      margin-bottom: 12px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+      transition: all 0.2s ease;
     }
     .diff-tools-left {
       font-size: 14px;
@@ -613,6 +689,66 @@
       margin: 0;
       background: #090d13;
     }
+    .image-diff-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      padding: 16px;
+      background: #0d1117;
+      border-radius: 4px;
+    }
+    .image-diff-box {
+      flex: 1 1 300px;
+      background: #161b22;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+    .image-diff-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      align-self: flex-start;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .image-diff-preview-wrapper {
+      width: 100%;
+      min-height: 180px;
+      max-height: 480px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #090d13 repeating-conic-gradient(#161b22 0% 25%, #090d13 0% 50%) 50% / 20px 20px;
+      border-radius: 4px;
+      overflow: auto;
+      padding: 8px;
+    }
+    .image-diff-preview-img {
+      max-width: 100%;
+      max-height: 440px;
+      object-fit: contain;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      border-radius: 2px;
+    }
+    .image-diff-empty {
+      font-size: 13px;
+      color: var(--text-muted);
+      font-style: italic;
+    }
+    .binary-file-tag {
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(110, 118, 129, 0.2);
+      color: var(--text-muted);
+      border: 1px solid rgba(110, 118, 129, 0.3);
+    }
     .diff-line {
       padding: 1px 16px;
       white-space: pre;
@@ -647,6 +783,46 @@
       border: 1px solid var(--border);
       border-radius: 8px;
     }
+  
+    /* 回到顶部悬浮按钮 */
+    .back-to-top-btn {
+      position: fixed;
+      right: 28px;
+      bottom: 28px;
+      z-index: 999;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: var(--card-alt);
+      color: var(--accent);
+      border: 1px solid var(--border);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      opacity: 0;
+      visibility: hidden;
+      transform: translateY(12px) scale(0.9);
+      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .back-to-top-btn.show {
+      opacity: 1;
+      visibility: visible;
+      transform: translateY(0) scale(1);
+    }
+    .back-to-top-btn:hover {
+      background: var(--accent);
+      color: #ffffff;
+      border-color: var(--accent);
+      transform: translateY(-2px) scale(1.05);
+      box-shadow: 0 6px 20px rgba(88, 166, 255, 0.35);
+    }
+    .back-to-top-btn:active {
+      transform: translateY(0) scale(0.95);
+    }
+
   </style>
 </head>
 <body>
@@ -764,8 +940,13 @@
           <select id="diffTargetSelect" class="picker-select"></select>
         </div>
 
-        <button class="btn-primary" style="align-self: flex-end; margin-bottom: 2px;" onclick="fetchAndRenderDiff()">比对工作区 Diff</button>
+        <div style="display: flex; gap: 8px; align-self: flex-end; margin-bottom: 2px;">
+          <button class="btn-primary" onclick="fetchAndRenderDiff()">比对工作区 Diff</button>
+          <button id="diffRefreshBtn" class="btn-outline" onclick="refreshCurrentDiff()" title="重新分析并刷新当前 Diff 视图">🔄 刷新 Diff</button>
+        </div>
       </div>
+
+
 
       <div id="diffResultsContainer">
         <div class="empty-diff-box">
@@ -787,7 +968,108 @@
     let filterStarredOnly = false;
     let activeTab = 'overview';
 
+    // Diff 状态持久化跟踪与恢复
+    let currentDiffType = null; // 'worktree' | 'uncommitted' | null
+    let currentUncommittedPath = '';
+    let currentDiffBase = '';
+    let currentDiffTarget = '';
+    let currentDiffMode = null; // 'uncommitted' | 'all' | 'committed'
+    let pendingRestoreState = null;
+
+    function selectDiffMode(mode) {
+      currentDiffMode = mode;
+      fetchAndRenderDiff(mode);
+    }
+
     const STARRED_STORAGE_KEY = 'git_lens_starred_repos';
+    const TAB_STATE_STORAGE_KEY = 'git_lens_tab_state';
+
+    // 状态管理：从 URL 或 sessionStorage 提取状态（支持多标签页独立隔离，刷新不丢状态）
+    function getStoredState() {
+      const url = new URL(window.location.href);
+      const urlRepo = url.searchParams.get('repo');
+      const urlTab = url.searchParams.get('tab');
+      const urlQ = url.searchParams.get('q');
+      const urlDiffType = url.searchParams.get('diffType');
+      const urlUncommitted = url.searchParams.get('uncommitted');
+      const urlBase = url.searchParams.get('base');
+      const urlTarget = url.searchParams.get('target');
+
+      if (urlRepo || urlTab || urlQ || urlDiffType) {
+        return {
+          repo: urlRepo || '',
+          tab: urlTab || 'overview',
+          q: urlQ || '',
+          diffType: urlDiffType || null,
+          uncommitted: urlUncommitted || '',
+          base: urlBase || '',
+          target: urlTarget || ''
+        };
+      }
+
+      // 若 URL 无参数，尝试从本浏览器 Tab 独享的 sessionStorage 读取（隔离其他 Tab）
+      try {
+        const raw = sessionStorage.getItem(TAB_STATE_STORAGE_KEY);
+        if (raw) return JSON.parse(raw);
+      } catch (e) {}
+
+      return null;
+    }
+
+    function syncStateToUrl() {
+      try {
+        const url = new URL(window.location.href);
+        if (currentRepo) url.searchParams.set('repo', currentRepo);
+        else url.searchParams.delete('repo');
+
+        if (activeTab && activeTab !== 'overview') url.searchParams.set('tab', activeTab);
+        else url.searchParams.delete('tab');
+
+        if (searchKeyword) url.searchParams.set('q', searchKeyword);
+        else url.searchParams.delete('q');
+
+        if (activeTab === 'diff') {
+          if (currentDiffType === 'uncommitted' && currentUncommittedPath) {
+            url.searchParams.set('diffType', 'uncommitted');
+            url.searchParams.set('uncommitted', currentUncommittedPath);
+            url.searchParams.delete('base');
+            url.searchParams.delete('target');
+          } else if (currentDiffType === 'worktree') {
+            url.searchParams.set('diffType', 'worktree');
+            const b = document.getElementById('diffBaseSelect')?.value || currentDiffBase;
+            const t = document.getElementById('diffTargetSelect')?.value || currentDiffTarget;
+            if (b) url.searchParams.set('base', b);
+            if (t) url.searchParams.set('target', t);
+            url.searchParams.delete('uncommitted');
+          } else {
+            url.searchParams.delete('diffType');
+            url.searchParams.delete('uncommitted');
+            url.searchParams.delete('base');
+            url.searchParams.delete('target');
+          }
+        } else {
+          url.searchParams.delete('diffType');
+          url.searchParams.delete('uncommitted');
+          url.searchParams.delete('base');
+          url.searchParams.delete('target');
+        }
+
+        window.history.replaceState(null, '', url.toString());
+
+        // 同时写入当前 Tab 专属的 sessionStorage
+        sessionStorage.setItem(TAB_STATE_STORAGE_KEY, JSON.stringify({
+          repo: currentRepo,
+          tab: activeTab,
+          q: searchKeyword,
+          diffType: currentDiffType,
+          uncommitted: currentUncommittedPath,
+          base: document.getElementById('diffBaseSelect')?.value || currentDiffBase,
+          target: document.getElementById('diffTargetSelect')?.value || currentDiffTarget
+        }));
+      } catch (e) {
+        console.warn('syncStateToUrl error:', e);
+      }
+    }
 
     function getStarredRepos() {
       try {
@@ -945,9 +1227,15 @@
     function selectRepo(repoPath) {
       if (!repoPath || repoPath === currentRepo) return;
       currentRepo = repoPath;
+      // 切换仓库时重置 Diff 状态
+      currentDiffType = null;
+      currentUncommittedPath = '';
+      currentDiffBase = '';
+      currentDiffTarget = '';
       document.getElementById('repoSelect').value = repoPath;
       updateRepoTriggerText();
       renderRepoDropdownList();
+      syncStateToUrl();
       inspectRepo(repoPath);
     }
 
@@ -962,9 +1250,19 @@
       if (tab === 'diff') {
         populateDiffSelectors();
       }
+      syncStateToUrl();
     }
 
     async function loadProjects() {
+      // 提取保存的状态（URL 参数优先，其次 sessionStorage）
+      pendingRestoreState = getStoredState();
+
+      if (pendingRestoreState && pendingRestoreState.q) {
+        searchKeyword = pendingRestoreState.q;
+        const searchInputDom = document.getElementById('searchInput');
+        if (searchInputDom) searchInputDom.value = searchKeyword;
+      }
+
       const res = await fetch('/api/projects');
       const data = await res.json();
       allRepos = data.repos || [];
@@ -979,15 +1277,40 @@
           sel.appendChild(opt);
         });
 
-        // 优先默认选中第一个星标仓库，若无则选第一个仓库
-        const starred = getStarredRepos();
-        const firstStarred = allRepos.find(r => starred.includes(r.path));
-        currentRepo = firstStarred ? firstStarred.path : allRepos[0].path;
+        // 恢复选中的仓库：优先匹配持久化状态中的 repo
+        let targetRepo = null;
+        if (pendingRestoreState && pendingRestoreState.repo) {
+          targetRepo = allRepos.find(r => r.path === pendingRestoreState.repo);
+        }
+        if (!targetRepo) {
+          const starred = getStarredRepos();
+          targetRepo = allRepos.find(r => starred.includes(r.path)) || allRepos[0];
+        }
 
+        currentRepo = targetRepo.path;
         sel.value = currentRepo;
         updateRepoTriggerText();
         renderRepoDropdownList();
-        inspectRepo(currentRepo);
+        syncStateToUrl();
+
+        await inspectRepo(currentRepo);
+
+        // 恢复 Tab 状态与 Diff 比对
+        if (pendingRestoreState) {
+          if (pendingRestoreState.tab === 'diff') {
+            switchTab('diff');
+            if (pendingRestoreState.diffType === 'uncommitted' && pendingRestoreState.uncommitted) {
+              viewUncommittedDiff(pendingRestoreState.uncommitted);
+            } else if (pendingRestoreState.diffType === 'worktree' && pendingRestoreState.base && pendingRestoreState.target) {
+              const baseSel = document.getElementById('diffBaseSelect');
+              const targetSel = document.getElementById('diffTargetSelect');
+              if (baseSel) baseSel.value = pendingRestoreState.base;
+              if (targetSel) targetSel.value = pendingRestoreState.target;
+              fetchAndRenderDiff();
+            }
+          }
+          pendingRestoreState = null;
+        }
       } else {
         sel.innerHTML = '<option value="">未扫描到仓库</option>';
         document.getElementById('repoTriggerText').textContent = '未扫描到仓库';
@@ -1034,9 +1357,30 @@
 
     function renderFilteredLists() {
       const keyword = searchKeyword.trim().toLocaleLowerCase();
-      const worktrees = keyword
+      let worktrees = keyword
         ? currentWorktrees.filter(wt => includesKeyword([wt.path, wt.branch, wt.lastCommit?.relativeTime, wt.lastCommit?.author, wt.lastCommit?.subject], keyword))
-        : currentWorktrees;
+        : [...currentWorktrees];
+
+      // 智能排序：Main 工作区永远绝对置顶；其次是有 Diff (本地未提交修改或领先提交) 的 Worktree 排在前面
+      worktrees.sort((a, b) => {
+        if (a.isMain && !b.isMain) return -1;
+        if (!a.isMain && b.isMain) return 1;
+
+        const aHasDiff = (a.hasDiff || a.isDirty || (a.aheadCount > 0)) ? 1 : 0;
+        const bHasDiff = (b.hasDiff || b.isDirty || (b.aheadCount > 0)) ? 1 : 0;
+        if (aHasDiff !== bHasDiff) {
+          return bHasDiff - aHasDiff; // 有 diff 的优先排在前面
+        }
+
+        // 同为有 diff 时，优先排 dirty 数量多或 ahead 数量多的
+        const aDiffWeight = (a.dirtyCount || 0) * 10 + (a.aheadCount || 0);
+        const bDiffWeight = (b.dirtyCount || 0) * 10 + (b.aheadCount || 0);
+        if (aDiffWeight !== bDiffWeight) {
+          return bDiffWeight - aDiffWeight;
+        }
+
+        return 0;
+      });
       const branches = keyword
         ? currentBranches.filter(b => includesKeyword([b.name, b.relativeTime, b.author, b.subject, b.redundancyReason], keyword))
         : currentBranches;
@@ -1069,7 +1413,8 @@
         if (wt.isMain) tags.push('<span class="badge badge-success">Main 工作区</span>');
         if (wt.branch) tags.push(`<span class="badge" title="${escapeHtml(wt.branch)}">🌿 ${escapeHtml(wt.branch)}</span>`);
         if (!wt.existsOnDisk) tags.push('<span class="badge badge-danger">磁盘已失联</span>');
-        if (wt.isDirty) tags.push(`<span class="badge badge-warning">未提交修改 (${wt.dirtyCount})</span>`);
+        if (wt.isDirty) tags.push(`<span class="badge badge-warning">⚡ 未提交修改 (${wt.dirtyCount})</span>`);
+        if (wt.aheadCount > 0) tags.push(`<span class="badge badge-success" title="分支相对 Main 领先 ${wt.aheadCount} 个提交">🚀 领先 ${wt.aheadCount} 提交</span>`);
         if (wt.isLocked) tags.push('<span class="badge">已加锁</span>');
 
         const dirName = wt.path.split('/').filter(Boolean).pop() || wt.path;
@@ -1323,22 +1668,28 @@
 
     /* 查看指定 Worktree 未提交修改 (Dirty Diff) */
     async function viewUncommittedDiff(worktreePath) {
-      switchTab('diff');
-      const container = document.getElementById('diffResultsContainer');
-      container.innerHTML = '<div class="loading">正在加载工作区未提交代码修改...</div>';
+      // 将 target 切换为该 worktree，并将 base 设置为 main/主分支或另一个 worktree
+      const baseSel = document.getElementById('diffBaseSelect');
+      const targetSel = document.getElementById('diffTargetSelect');
 
-      try {
-        const res = await fetch(`/api/uncommitted-diff?worktree=${encodeURIComponent(worktreePath)}`);
-        const data = await res.json();
-        if (!data.ok) throw new Error(data.error);
-
-        renderUncommittedDiffView(data.uncommitted);
-      } catch (err) {
-        container.innerHTML = `<div class="empty-diff-box" style="color: var(--danger);">加载失败: ${err.message}</div>`;
+      if (targetSel) {
+        targetSel.value = worktreePath;
       }
+      if (baseSel && (!baseSel.value || baseSel.value === worktreePath)) {
+        const other = currentWorktrees.find(w => w.path !== worktreePath);
+        if (other) baseSel.value = other.path;
+      }
+
+      currentDiffType = 'worktree';
+      currentDiffTarget = worktreePath;
+      currentDiffBase = baseSel ? baseSel.value : '';
+      currentDiffMode = 'uncommitted';
+
+      switchTab('diff');
+      await fetchAndRenderDiff('uncommitted');
     }
 
-    async function fetchAndRenderDiff() {
+    async function fetchAndRenderDiff(requestedMode = null) {
       const base = document.getElementById('diffBaseSelect').value;
       const target = document.getElementById('diffTargetSelect').value;
       const container = document.getElementById('diffResultsContainer');
@@ -1348,27 +1699,84 @@
         return;
       }
 
-      if (base === target) {
-        container.innerHTML = `
-          <div class="empty-diff-box">
-            <div style="font-size: 16px; margin-bottom: 8px;">所选 Base 与 Target 为同一个工作区</div>
-            <div style="font-size: 13px;">请在下拉菜单中选择两个不同的 Worktree</div>
-          </div>
-        `;
-        return;
+      const isSameWorktree = (base === target);
+      if (isSameWorktree) {
+        // 同工作区自比：自动强制收敛到 uncommitted 模式
+        currentDiffMode = 'uncommitted';
       }
 
-      container.innerHTML = '<div class="loading">正在比对工作区 Diff 详情...</div>';
+      currentDiffType = 'worktree';
+      currentDiffBase = base;
+      currentDiffTarget = target;
+      if (requestedMode) {
+        currentDiffMode = requestedMode;
+      }
+      syncStateToUrl();
+
+      container.innerHTML = '<div class="loading">正在比对工作区代码差异...</div>';
 
       try {
-        const url = `/api/diff-worktrees?path=${encodeURIComponent(currentRepo)}&source=${encodeURIComponent(base)}&target=${encodeURIComponent(target)}`;
+        let url = `/api/diff-worktrees?path=${encodeURIComponent(currentRepo)}&source=${encodeURIComponent(base)}&target=${encodeURIComponent(target)}`;
+        if (currentDiffMode) {
+          url += `&mode=${encodeURIComponent(currentDiffMode)}`;
+        }
         const res = await fetch(url);
         const data = await res.json();
         if (!data.ok) throw new Error(data.error);
 
-        renderDiffView(data.diff);
+        const diff = data.diff;
+        if (diff.effectiveMode) {
+          currentDiffMode = diff.effectiveMode;
+        }
+        renderDiffView(diff);
       } catch (err) {
-        container.innerHTML = `<div class="empty-diff-box" style="color: var(--danger);">Diff 计算失败: ${err.message}</div>`;
+        container.innerHTML = `<div class="empty-diff-box" style="color: var(--danger);">Diff 计算失败: ${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    /* Diff Tab 内部专用：一键刷新当前 Diff 视图及仓库最新状态 */
+    async function refreshCurrentDiff() {
+      const btn = document.getElementById('diffRefreshBtn');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '🔄 刷新中...';
+      }
+
+      try {
+        // 先同步更新仓库分析数据（以防最新提交或分支发生变化）
+        if (currentRepo) {
+          const res = await fetch(`/api/inspect?path=${encodeURIComponent(currentRepo)}`);
+          const data = await res.json();
+          if (data.ok) {
+            currentWorktrees = data.worktrees || [];
+            currentBranches = data.branches || [];
+            currentMainBranch = data.mainBranch;
+            updateMetrics();
+            renderFilteredLists();
+            populateDiffSelectors();
+          }
+        }
+
+        // 根据当前 Diff 模式重新比对刷新
+        if (currentDiffType === 'uncommitted' && currentUncommittedPath) {
+          await viewUncommittedDiff(currentUncommittedPath);
+        } else if (currentDiffType === 'worktree') {
+          await fetchAndRenderDiff();
+        } else {
+          // 如果尚未进行比对，触发一次当前所选选择器的比对
+          const b = document.getElementById('diffBaseSelect')?.value;
+          const t = document.getElementById('diffTargetSelect')?.value;
+          if (b && t && b !== t) {
+            await fetchAndRenderDiff();
+          }
+        }
+      } catch (e) {
+        console.error('refreshCurrentDiff error:', e);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = '🔄 刷新 Diff';
+        }
       }
     }
 
@@ -1421,15 +1829,79 @@
       });
     }
 
+    /* 判断是否是媒体/二进制文件扩展名 (用于置底展示，避免刷屏) */
+    function isMediaFile(pathStr) {
+      if (!pathStr) return false;
+      const lower = pathStr.toLowerCase();
+      return /\.(png|jpg|jpeg|gif|webp|svg|bmp|ico|avif|mp4|mov|webm|mp3|wav|ogg|pdf|ttf|otf|woff|woff2)$/.test(lower);
+    }
+
+    function isImageFilePath(pathStr) {
+      if (!pathStr) return false;
+      const lower = pathStr.toLowerCase();
+      return /\.(png|jpg|jpeg|gif|webp|svg|bmp|ico|avif)$/.test(lower);
+    }
+
+    /* 渲染单个文件的差异卡片内容：若是图片则渲染左右对比，否则渲染代码 diff */
+    function renderFileBodyContent(file, sourceRef, targetRef, repoPath, worktreePath) {
+      const isImg = file.isImage || isImageFilePath(file.filePath);
+      if (isImg) {
+        // 构建左右比对 URL
+        let baseImgUrl = '';
+        let targetImgUrl = '';
+
+        if (sourceRef && targetRef) {
+          // 两个 Worktree 之间对比
+          baseImgUrl = `/api/raw-file?repoPath=${encodeURIComponent(repoPath)}&revision=${encodeURIComponent(sourceRef)}&filePath=${encodeURIComponent(file.filePath)}`;
+          targetImgUrl = `/api/raw-file?repoPath=${encodeURIComponent(repoPath)}&revision=${encodeURIComponent(targetRef)}&filePath=${encodeURIComponent(file.filePath)}`;
+        } else if (worktreePath) {
+          // 本地未提交代码修改对比 (HEAD vs 工作区当前文件)
+          baseImgUrl = `/api/raw-file?repoPath=${encodeURIComponent(repoPath || worktreePath)}&revision=HEAD&filePath=${encodeURIComponent(file.filePath)}&worktreePath=${encodeURIComponent(worktreePath)}`;
+          targetImgUrl = `/api/raw-file?repoPath=${encodeURIComponent(repoPath || worktreePath)}&revision=WORKTREE&filePath=${encodeURIComponent(file.filePath)}&worktreePath=${encodeURIComponent(worktreePath)}`;
+        }
+
+        return `
+          <div class="image-diff-container">
+            <div class="image-diff-box">
+              <div class="image-diff-title">
+                <span>◀ 基准旧图 (Base / HEAD)</span>
+              </div>
+              <div class="image-diff-preview-wrapper">
+                <img class="image-diff-preview-img" src="${baseImgUrl}" alt="原图 (若新增则无)" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                <span class="image-diff-empty" style="display: none;">（旧版本中无此图片 / 已新增）</span>
+              </div>
+            </div>
+
+            <div class="image-diff-box">
+              <div class="image-diff-title">
+                <span>▶ 对比新图 (Target / 当前)</span>
+              </div>
+              <div class="image-diff-preview-wrapper">
+                <img class="image-diff-preview-img" src="${targetImgUrl}" alt="新图 (若删除则无)" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                <span class="image-diff-empty" style="display: none;">（当前版本中无此图片 / 已删除）</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      const formattedCode = formatDiffLines(file.diffChunk);
+      return `<pre class="diff-pre"><code>${formattedCode}</code></pre>`;
+    }
+
     /* 渲染两个 Worktree 之间的 Diff 视图 */
     function renderDiffView(diff) {
       const container = document.getElementById('diffResultsContainer');
       const files = diff.files || [];
       const ahead = diff.ahead || 0;
       const behind = diff.behind || 0;
+      const counts = diff.counts || { uncommitted: 0, all: 0, committed: 0 };
+      const effectiveMode = diff.effectiveMode || 'all';
 
       let syncStatusBadge = '';
-      if (ahead === 0 && behind === 0) {
+      if (diff.isSameWorktree) {
+        syncStatusBadge = '<span class="badge badge-success">🌿 本地工作区自审</span>';
+      } else if (ahead === 0 && behind === 0) {
         syncStatusBadge = '<span class="badge badge-success">两分支提交完全同步</span>';
       } else {
         const parts = [];
@@ -1438,19 +1910,55 @@
         syncStatusBadge = parts.join(' ');
       }
 
+      let modeTipText = '';
+      const isSelfDiff = !!diff.isSameWorktree;
+
+      if (isSelfDiff) {
+        modeTipText = '💡 分支自审模式：Base 与 Target 为同一工作区，已自动锁定为【仅未提交 & 未跟踪】模式';
+      } else if (effectiveMode === 'uncommitted') {
+        modeTipText = '⚡ 仅展示 Target 本地未提交修改及 untracked 新增文件';
+      } else if (effectiveMode === 'all') {
+        modeTipText = '📦 全量对比：含分支领先提交 + 本地未提交修改 + untracked 新增';
+      } else {
+        modeTipText = '📌 纯分支提交对比 (base...target)，已忽略本地未提交修改';
+      }
+
+      const modeControlHtml = `
+        <div class="diff-mode-control-row">
+          <div class="diff-mode-segmented">
+            <button class="diff-mode-btn ${effectiveMode === 'uncommitted' ? 'active' : ''}" onclick="selectDiffMode('uncommitted')" title="仅查看当前工作区未提交和未跟踪的代码">
+              <span>⚡ 仅未提交 & 未跟踪</span>
+              <span class="diff-mode-pill">${counts.uncommitted}</span>
+            </button>
+            <button class="diff-mode-btn ${effectiveMode === 'all' ? 'active' : ''} ${isSelfDiff ? 'disabled' : ''}" ${isSelfDiff ? 'disabled' : ''} onclick="selectDiffMode('all')" title="${isSelfDiff ? '同分支对比不可用' : '全量对比：已提交分支修改 + 本地未提交改动'}">
+              <span>📦 全量变更</span>
+              <span class="diff-mode-pill">${counts.all}</span>
+            </button>
+            <button class="diff-mode-btn ${effectiveMode === 'committed' ? 'active' : ''} ${isSelfDiff ? 'disabled' : ''}" ${isSelfDiff ? 'disabled' : ''} onclick="selectDiffMode('committed')" title="${isSelfDiff ? '同分支对比不可用' : '仅查看已提交的代码修改，忽略未提交'}">
+              <span>📌 仅已提交</span>
+              <span class="diff-mode-pill">${counts.committed}</span>
+            </button>
+          </div>
+          <div class="diff-mode-tip">${modeTipText}</div>
+        </div>
+      `;
+
       if (files.length === 0) {
-        let emptyDesc = '🎉 两个 Worktree 提交点完全一致，无任何文件差异。';
-        if (behind > 0 && ahead === 0) {
+        let emptyDesc = '🎉 当前审查模式下无任何文件差异。';
+        if (effectiveMode === 'uncommitted') {
+          emptyDesc = '🎉 Target 工作区非常干净（Clean），没有本地未暂存或未提交的修改。<br><span style="color: var(--text-muted); font-size: 13px;">如需审查已提交的代码，请点击上方<b>【📦 全量变更】</b>或<b>【📌 仅已提交】</b>。</span>';
+        } else if (behind > 0 && ahead === 0) {
           emptyDesc = `ℹ️ <b>对比分支当前落后于基准分支（落后 ${behind} 个提交）</b>，且没有领先的独有代码修改。<br><span style="color: var(--text-muted); font-size: 13px;">已过滤反向差异，避免将基准分支的更新误显示为被删除。若需查看基准分支引入的新代码，可点击上方<b>【⇄ 对调】</b>。</span>`;
         }
 
         container.innerHTML = `
           <div class="diff-summary-card">
             <div class="stat-bar">
-              <div>基准 (Base): <span class="badge">${escapeHtml(diff.source.branch)}</span> <code>${diff.source.path}</code></div>
-              <div>对比 (Target): <span class="badge">${escapeHtml(diff.target.branch)}</span> <code>${diff.target.path}</code></div>
+              <div>基准 (Base): <span class="badge">${escapeHtml(diff.source.branch)}</span> <code>${escapeHtml(diff.source.head ? diff.source.head.slice(0, 8) : '-')}</code></div>
+              <div>对比 (Target): <span class="badge">${escapeHtml(diff.target.branch)}</span> <code>${escapeHtml(diff.target.head ? diff.target.head.slice(0, 8) : '-')}</code></div>
               <div style="margin-left: auto;">${syncStatusBadge}</div>
             </div>
+            ${modeControlHtml}
             <div class="empty-diff-box" style="padding: 28px; border: none; background: transparent; line-height: 1.8;">
               ${emptyDesc}
             </div>
@@ -1462,16 +1970,40 @@
       let totalAdd = 0;
       let totalDel = 0;
       files.forEach(f => {
-        totalAdd += f.added || 0;
-        totalDel += f.deleted || 0;
+        if (!f.isBinary) {
+          totalAdd += f.added || 0;
+          totalDel += f.deleted || 0;
+        }
       });
 
-      const fileCardsHtml = files.map((f, idx) => {
+      const sourceRef = diff.source.head || diff.source.branch || 'HEAD';
+      const targetRef = diff.target.head || diff.target.branch || 'HEAD';
+
+      // 优先展示文本代码变更，将图片及媒体文件置底展示
+      const sortedDiffFiles = [...files].sort((a, b) => {
+        const aIsMedia = (a.isImage || isMediaFile(a.filePath) || a.isBinary) ? 1 : 0;
+        const bIsMedia = (b.isImage || isMediaFile(b.filePath) || b.isBinary) ? 1 : 0;
+        return aIsMedia - bIsMedia;
+      });
+
+      const fileCardsHtml = sortedDiffFiles.map((f, idx) => {
         const cardId = `diff-card-${idx}`;
-        const formattedCode = formatDiffLines(f.diffChunk);
+        const bodyContent = renderFileBodyContent(f, sourceRef, targetRef, currentRepo, null);
+        const isImg = f.isImage || isImageFilePath(f.filePath);
+
         let statusTag = '<span class="file-status-badge status-modified">MODIFIED</span>';
-        if (f.deleted === 0 && f.added > 0) statusTag = '<span class="file-status-badge status-added">ADDED</span>';
-        if (f.added === 0 && f.deleted > 0) statusTag = '<span class="file-status-badge status-deleted">DELETED</span>';
+        if (f.status === '?') statusTag = '<span class="file-status-badge status-added">UNTRACKED</span>';
+        else if (f.deleted === 0 && f.added > 0) statusTag = '<span class="file-status-badge status-added">ADDED</span>';
+        else if (f.added === 0 && f.deleted > 0) statusTag = '<span class="file-status-badge status-deleted">DELETED</span>';
+
+        let statTag = '';
+        if (isImg) {
+          statTag = '<span class="binary-file-tag">🖼️ 图片文件</span>';
+        } else if (f.isBinary) {
+          statTag = '<span class="binary-file-tag">二进制文件</span>';
+        } else {
+          statTag = `<span><span class="add-count">+${f.added}</span> <span class="del-count">-${f.deleted}</span></span>`;
+        }
 
         return `
           <div id="${cardId}" class="file-diff-card">
@@ -1482,11 +2014,11 @@
                 <span>${escapeHtml(f.filePath)}</span>
               </div>
               <div style="display: flex; gap: 12px; align-items: center; font-size: 12px;">
-                <span><span class="add-count">+${f.added}</span> <span class="del-count">-${f.deleted}</span></span>
+                ${statTag}
               </div>
             </div>
             <div class="file-body">
-              <pre class="diff-pre"><code>${formattedCode}</code></pre>
+              ${bodyContent}
             </div>
           </div>
         `;
@@ -1500,15 +2032,13 @@
             <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
               ${syncStatusBadge}
               <span style="color: var(--text-muted);">|</span>
-              <span>变更文件: <b>${files.length}</b> 个</span>
-              <span>新增: <span class="add-count">+${totalAdd}</span></span>
-              <span>删除: <span class="del-count">-${totalDel}</span></span>
+              <span>当前文件: <b>${files.length}</b> 个</span>
+              <span>新增: <span class="add-count">+${totalAdd}</span> 行</span>
+              <span>删除: <span class="del-count">-${totalDel}</span> 行</span>
             </div>
           </div>
 
-          <div style="margin-top: 10px; font-size: 12px; color: var(--text-muted); background: rgba(88, 166, 255, 0.08); padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(88, 166, 255, 0.2);">
-            💡 <b>仅对比分支领先改动 (三点比较 <code>base...target</code>)</b>：只展示对比分支自身引入的代码修改。
-          </div>
+          ${modeControlHtml}
         </div>
 
         <div class="diff-tools-bar">
@@ -1548,13 +2078,31 @@
         return;
       }
 
-      const fileCardsHtml = files.map((f, idx) => {
+      // 优先展示文本代码变更，将图片及媒体文件置底展示
+      const sortedDiffFiles = [...files].sort((a, b) => {
+        const aIsMedia = (a.isImage || isMediaFile(a.filePath) || a.isBinary) ? 1 : 0;
+        const bIsMedia = (b.isImage || isMediaFile(b.filePath) || b.isBinary) ? 1 : 0;
+        return aIsMedia - bIsMedia;
+      });
+
+      const fileCardsHtml = sortedDiffFiles.map((f, idx) => {
         const cardId = `uncommitted-card-${idx}`;
-        const formattedCode = formatDiffLines(f.diffChunk);
+        const bodyContent = renderFileBodyContent(f, null, null, currentRepo, uncommitted.worktreePath);
+        const isImg = f.isImage || isImageFilePath(f.filePath);
+
         let statusTag = '<span class="file-status-badge status-modified">MODIFIED</span>';
         if (f.status === '?') statusTag = '<span class="file-status-badge status-added">UNTRACKED</span>';
         else if (f.deleted === 0 && f.added > 0) statusTag = '<span class="file-status-badge status-added">ADDED</span>';
         else if (f.added === 0 && f.deleted > 0) statusTag = '<span class="file-status-badge status-deleted">DELETED</span>';
+
+        let statTag = '';
+        if (isImg) {
+          statTag = '<span class="binary-file-tag">🖼️ 图片文件</span>';
+        } else if (f.isBinary) {
+          statTag = '<span class="binary-file-tag">二进制文件</span>';
+        } else {
+          statTag = `<span><span class="add-count">+${f.added}</span> <span class="del-count">-${f.deleted}</span></span>`;
+        }
 
         return `
           <div id="${cardId}" class="file-diff-card">
@@ -1565,11 +2113,11 @@
                 <span>${escapeHtml(f.filePath)}</span>
               </div>
               <div style="display: flex; gap: 12px; align-items: center; font-size: 12px;">
-                <span><span class="add-count">+${f.added}</span> <span class="del-count">-${f.deleted}</span></span>
+                ${statTag}
               </div>
             </div>
             <div class="file-body">
-              <pre class="diff-pre"><code>${formattedCode}</code></pre>
+              ${bodyContent}
             </div>
           </div>
         `;
@@ -1638,6 +2186,7 @@
     document.getElementById('searchInput').addEventListener('input', (e) => {
       searchKeyword = e.target.value;
       renderFilteredLists();
+      syncStateToUrl();
     });
     document.getElementById('pruneBtn').addEventListener('click', async () => {
       const res = await fetch('/api/prune-worktrees', {
@@ -1655,6 +2204,32 @@
     });
 
     loadProjects();
+  
+    // 回到顶部逻辑
+    function scrollToTop() {
+      window.scrollTo({
+        top: 0,
+        behavior: 'smooth'
+      });
+    }
+
+    window.addEventListener('scroll', () => {
+      const btn = document.getElementById('backToTopBtn');
+      if (!btn) return;
+      if (window.scrollY > 240) {
+        btn.classList.add('show');
+      } else {
+        btn.classList.remove('show');
+      }
+    }, { passive: true });
+
   </script>
+
+  <!-- 回到顶部浮动按钮 -->
+  <button id="backToTopBtn" class="back-to-top-btn" onclick="scrollToTop()" title="回到顶部" aria-label="回到顶部">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M18 15l-6-6-6 6"/>
+    </svg>
+  </button>
 </body>
 </html>
