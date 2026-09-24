@@ -148,6 +148,10 @@
       background: var(--card-alt);
       color: var(--accent);
     }
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
 
     /* 仓库自定义下拉菜单与模糊搜索 */
     .repo-picker-wrapper {
@@ -783,6 +787,150 @@
       border: 1px solid var(--border);
       border-radius: 8px;
     }
+
+    /* ---- 扫描目录配置弹窗 ---- */
+    .scan-directory-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 1100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(1, 4, 9, 0.72);
+    }
+    .scan-directory-card {
+      width: min(620px, 100%);
+      max-height: min(720px, 90vh);
+      overflow-y: auto;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+    }
+    .scan-directory-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .scan-directory-header h2 {
+      color: var(--text-bright);
+      font-size: 17px;
+    }
+    .scan-directory-body {
+      padding: 20px;
+    }
+    .scan-directory-description {
+      margin-bottom: 16px;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+    .scan-directory-first-run {
+      margin-bottom: 16px;
+      padding: 12px 14px;
+      border: 1px solid rgba(88, 166, 255, 0.35);
+      border-radius: 7px;
+      background: rgba(88, 166, 255, 0.1);
+      color: var(--text);
+      font-size: 13px;
+    }
+    .scan-directory-section-title {
+      margin-bottom: 8px;
+      color: var(--text-bright);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .scan-directory-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .scan-directory-empty {
+      padding: 14px;
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+      color: var(--text-muted);
+      font-size: 13px;
+      text-align: center;
+    }
+    .scan-directory-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      padding: 9px 10px;
+      border: 1px solid var(--border-muted);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .scan-directory-item-path {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      color: var(--text);
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .scan-directory-item-tag {
+      flex: 0 0 auto;
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+    .scan-directory-remove {
+      flex: 0 0 auto;
+      padding: 3px 7px;
+      color: var(--danger);
+      font-size: 12px;
+    }
+    .scan-directory-add-row {
+      display: flex;
+      gap: 8px;
+    }
+    .scan-directory-add-row input {
+      flex: 1;
+      min-width: 0;
+    }
+    .scan-directory-choose-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .scan-directory-choose-row span {
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+    .scan-directory-manual summary {
+      margin-bottom: 10px;
+      color: var(--accent);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .scan-directory-error {
+      min-height: 20px;
+      margin-top: 10px;
+      color: var(--danger);
+      font-size: 12px;
+    }
+    .scan-directory-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 14px 20px;
+      border-top: 1px solid var(--border);
+    }
+    @media (max-width: 600px) {
+      .scan-directory-modal { padding: 12px; }
+      .scan-directory-add-row { flex-direction: column; }
+      .scan-directory-add-row button { width: 100%; }
+    }
   
     /* 回到顶部悬浮按钮 */
     .back-to-top-btn {
@@ -1021,6 +1169,7 @@
     <select id="repoSelect" style="display: none;"></select>
 
     <input id="searchInput" type="search" placeholder="搜索分支或 Worktree..." autocomplete="off" aria-label="搜索分支或 Worktree">
+    <button id="scanDirectoryBtn" class="btn-outline" type="button" onclick="openScanDirectoryModal()">📁 扫描目录</button>
     <button id="refreshBtn" class="btn-outline">全量刷新</button>
     <button id="pruneBtn" class="btn-primary" style="margin-left: auto;">一键 Prune 无效引用</button>
   </div>
@@ -1108,6 +1257,42 @@
     </div>
   </div>
 
+  <!-- 扫描目录配置弹窗，首次使用时由脚本自动打开 -->
+  <div id="scanDirectoryModal" class="scan-directory-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="scanDirectoryModalTitle">
+    <div class="scan-directory-card">
+      <div class="scan-directory-header">
+        <h2 id="scanDirectoryModalTitle">配置扫描目录</h2>
+        <button class="drawer-close" type="button" onclick="closeScanDirectoryModal()" aria-label="关闭">×</button>
+      </div>
+      <div class="scan-directory-body">
+        <div id="scanDirectoryFirstRun" class="scan-directory-first-run" style="display: none;">
+          首次使用请先选择一个或多个 Workspace 目录。Git Lens 会检查目录本身以及其中的直接子目录，找到可用的 Git 仓库。
+        </div>
+        <p class="scan-directory-description">
+          选择你希望扫描的本地目录；可以重复选择，保存后会一起扫描。
+        </p>
+        <div class="scan-directory-section-title">已添加的 Workspace 目录</div>
+        <div id="scanDirectoryList" class="scan-directory-list"></div>
+        <div class="scan-directory-choose-row">
+          <button id="chooseScanDirectoryBtn" class="btn-primary" type="button" onclick="chooseScanDirectory()">选择文件夹…</button>
+          <span>可重复选择多个目录</span>
+        </div>
+        <details class="scan-directory-manual">
+          <summary>或手动输入目录路径</summary>
+          <div class="scan-directory-add-row">
+            <input id="scanDirectoryInput" type="text" placeholder="~/Projects" autocomplete="off" aria-label="自定义扫描目录">
+            <button class="btn-outline" type="button" onclick="addScanDirectory()">添加路径</button>
+          </div>
+        </details>
+        <div id="scanDirectoryError" class="scan-directory-error" role="alert"></div>
+      </div>
+      <div class="scan-directory-footer">
+        <button class="btn-outline" type="button" onclick="closeScanDirectoryModal()">稍后设置</button>
+        <button id="saveScanDirectoryBtn" class="btn-primary" type="button" onclick="saveScanDirectories()">保存并扫描</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     let allRepos = [];
     let currentRepo = '';
@@ -1126,6 +1311,8 @@
     let currentDiffTarget = '';
     let currentDiffMode = null; // 'uncommitted' | 'all' | 'committed'
     let pendingRestoreState = null;
+    let scanDirectoryConfig = { customDirectories: [] };
+    let scanDirectoryDraft = [];
 
     function selectDiffMode(mode) {
       currentDiffMode = mode;
@@ -1134,6 +1321,141 @@
 
     const STARRED_STORAGE_KEY = 'git_lens_starred_repos';
     const TAB_STATE_STORAGE_KEY = 'git_lens_tab_state';
+    const SCAN_SETUP_PROMPTED_KEY = 'git_lens_scan_setup_prompted';
+
+    async function loadScanDirectoryConfig() {
+      try {
+        const res = await fetch('/api/scan-directories');
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '读取扫描目录失败');
+        scanDirectoryConfig = {
+          customDirectories: Array.isArray(data.customDirectories) ? data.customDirectories : []
+        };
+      } catch (err) {
+        scanDirectoryConfig = { customDirectories: [] };
+        console.warn('读取扫描目录配置失败:', err.message);
+      }
+    }
+
+    function renderScanDirectoryList() {
+      const container = document.getElementById('scanDirectoryList');
+      if (!container) return;
+      if (scanDirectoryDraft.length === 0) {
+        container.innerHTML = '<div class="scan-directory-empty">尚未添加目录，保存后不会扫描任何仓库。</div>';
+        return;
+      }
+
+      container.innerHTML = scanDirectoryDraft.map((directory, index) => `
+        <div class="scan-directory-item">
+          <span class="scan-directory-item-path" title="${escapeHtml(directory)}">${escapeHtml(directory)}</span>
+          <span class="scan-directory-item-tag">自定义</span>
+          <button class="btn-outline scan-directory-remove" type="button" onclick="removeScanDirectory(${index})">移除</button>
+        </div>
+      `).join('');
+    }
+
+    function openScanDirectoryModal(firstRun = false) {
+      scanDirectoryDraft = [...scanDirectoryConfig.customDirectories];
+      document.getElementById('scanDirectoryModalTitle').textContent = firstRun ? '首次使用：添加扫描目录' : '配置扫描目录';
+      document.getElementById('scanDirectoryFirstRun').style.display = firstRun ? 'block' : 'none';
+      document.getElementById('scanDirectoryError').textContent = '';
+      document.getElementById('scanDirectoryModal').style.display = 'flex';
+      renderScanDirectoryList();
+      const input = document.getElementById('scanDirectoryInput');
+      input.value = '';
+      setTimeout(() => input.focus(), 0);
+    }
+
+    function closeScanDirectoryModal() {
+      document.getElementById('scanDirectoryModal').style.display = 'none';
+    }
+
+    async function chooseScanDirectory() {
+      const button = document.getElementById('chooseScanDirectoryBtn');
+      const error = document.getElementById('scanDirectoryError');
+      button.disabled = true;
+      button.textContent = '正在打开…';
+      error.textContent = '';
+      try {
+        const res = await fetch('/api/choose-scan-directory', { method: 'POST' });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '打开目录选择器失败');
+        if (data.directory) {
+          if (scanDirectoryDraft.includes(data.directory)) {
+            error.textContent = '这个目录已经添加。';
+          } else {
+            scanDirectoryDraft.push(data.directory);
+            renderScanDirectoryList();
+          }
+        }
+      } catch (err) {
+        error.textContent = err.message;
+      } finally {
+        button.disabled = false;
+        button.textContent = '选择文件夹…';
+      }
+    }
+
+    function addScanDirectory() {
+      const input = document.getElementById('scanDirectoryInput');
+      const directory = input.value.trim();
+      const error = document.getElementById('scanDirectoryError');
+      if (!directory) {
+        error.textContent = '请输入要扫描的目录路径。';
+        input.focus();
+        return;
+      }
+      if (scanDirectoryDraft.includes(directory)) {
+        error.textContent = '这个目录已经添加。';
+        input.focus();
+        return;
+      }
+      scanDirectoryDraft.push(directory);
+      input.value = '';
+      error.textContent = '';
+      renderScanDirectoryList();
+      input.focus();
+    }
+
+    function removeScanDirectory(index) {
+      scanDirectoryDraft.splice(index, 1);
+      document.getElementById('scanDirectoryError').textContent = '';
+      renderScanDirectoryList();
+    }
+
+    async function saveScanDirectories() {
+      const saveButton = document.getElementById('saveScanDirectoryBtn');
+      const error = document.getElementById('scanDirectoryError');
+      const pendingInput = document.getElementById('scanDirectoryInput').value.trim();
+      if (pendingInput && !scanDirectoryDraft.includes(pendingInput)) {
+        scanDirectoryDraft.push(pendingInput);
+      }
+      saveButton.disabled = true;
+      saveButton.textContent = '保存中...';
+      error.textContent = '';
+      try {
+        const res = await fetch('/api/scan-directories', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ directories: scanDirectoryDraft })
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          const invalid = Array.isArray(data.invalidDirectories) ? `：${data.invalidDirectories.join('、')}` : '';
+          throw new Error((data.error || '保存扫描目录失败') + invalid);
+        }
+        scanDirectoryConfig = {
+          customDirectories: Array.isArray(data.customDirectories) ? data.customDirectories : []
+        };
+        closeScanDirectoryModal();
+        await loadProjects();
+      } catch (err) {
+        error.textContent = err.message;
+      } finally {
+        saveButton.disabled = false;
+        saveButton.textContent = '保存并扫描';
+      }
+    }
 
     // 状态管理：从 URL 或 sessionStorage 提取状态（支持多标签页独立隔离，刷新不丢状态）
     function getStoredState() {
@@ -1408,6 +1730,8 @@
       // 提取保存的状态（URL 参数优先，其次 sessionStorage）
       pendingRestoreState = getStoredState();
 
+      await loadScanDirectoryConfig();
+
       if (pendingRestoreState && pendingRestoreState.q) {
         searchKeyword = pendingRestoreState.q;
         const searchInputDom = document.getElementById('searchInput');
@@ -1463,8 +1787,35 @@
           pendingRestoreState = null;
         }
       } else {
+        currentRepo = '';
+        currentWorktrees = [];
+        currentBranches = [];
+        currentMainBranch = '';
+        currentDiffType = null;
+        currentUncommittedPath = '';
+        currentDiffBase = '';
+        currentDiffTarget = '';
+        document.getElementById('headerPath').textContent = '';
         sel.innerHTML = '<option value="">未扫描到仓库</option>';
-        document.getElementById('repoTriggerText').textContent = '未扫描到仓库';
+        document.getElementById('repoTriggerText').textContent = scanDirectoryConfig.customDirectories.length > 0
+          ? '未扫描到仓库'
+          : '请先添加扫描目录';
+        renderRepoDropdownList();
+        updateMetrics();
+        renderFilteredLists();
+        populateDiffSelectors();
+        document.getElementById('diffResultsContainer').innerHTML = `
+          <div class="empty-diff-box">
+            <div style="font-size: 16px; margin-bottom: 8px;">请先添加扫描目录</div>
+            <div style="font-size: 13px;">添加目录后，Git Lens 会在这里展示可用仓库的 Worktree 差异。</div>
+          </div>`;
+        syncStateToUrl();
+      }
+
+      // 只在当前浏览器首次打开且尚未配置目录时引导，用户跳过后仍可从顶部按钮进入。
+      if (scanDirectoryConfig.customDirectories.length === 0 && !localStorage.getItem(SCAN_SETUP_PROMPTED_KEY)) {
+        localStorage.setItem(SCAN_SETUP_PROMPTED_KEY, '1');
+        openScanDirectoryModal(true);
       }
     }
 
@@ -2503,8 +2854,17 @@
       repoFilterKeyword = e.target.value;
       renderRepoDropdownList();
     });
+    document.getElementById('scanDirectoryInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        addScanDirectory();
+      }
+    });
+    document.getElementById('scanDirectoryModal').addEventListener('click', (e) => {
+      if (e.target.id === 'scanDirectoryModal') closeScanDirectoryModal();
+    });
     document.getElementById('refreshBtn').addEventListener('click', () => {
-      inspectRepo(currentRepo);
+      loadProjects();
     });
     document.getElementById('searchInput').addEventListener('input', (e) => {
       searchKeyword = e.target.value;
@@ -2549,6 +2909,9 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && commitsDrawerState.isOpen) {
         closeCommitsDrawer();
+      }
+      if (e.key === 'Escape' && document.getElementById('scanDirectoryModal').style.display !== 'none') {
+        closeScanDirectoryModal();
       }
     });
 
