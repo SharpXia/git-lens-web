@@ -436,6 +436,10 @@
       border-radius: 4px;
       width: fit-content;
     }
+    .stale-delete-hint {
+      color: var(--danger);
+      font-weight: 600;
+    }
     .item-actions {
       display: flex;
       flex-direction: column;
@@ -2101,8 +2105,11 @@
       }
 
       const sortedBranches = [...branches].sort((a, b) => {
-        if (a.redundancyReason && !b.redundancyReason) return -1;
-        if (!a.redundancyReason && b.redundancyReason) return 1;
+        // 安全可删优先；陈旧但仍有未解释差异的分支放到末尾，避免误导用户先删它们。
+        const priority = (branch) => branch.isSafeToDelete ? 0 : (branch.isStaleOnly ? 2 : 1);
+        const aPriority = priority(a);
+        const bPriority = priority(b);
+        if (aPriority !== bPriority) return aPriority - bPriority;
         return b.daysOld - a.daysOld;
       });
 
@@ -2115,7 +2122,9 @@
         let tags = [];
         if (b.isMain) tags.push('<span class="badge badge-success">主分支</span>');
         if (b.inUseByWorktree) tags.push('<span class="badge">🌳 Worktree 绑定中</span>');
-        if (b.isMerged) tags.push('<span class="badge">已合入主干</span>');
+        if (b.isMerged) {
+          tags.push(`<span class="badge" title="${b.isDirectlyMerged ? '分支提交已直接进入主分支历史' : '分支改动已通过内容或协调分支进入主分支'}">${b.isDirectlyMerged ? '已合入主干' : '内容已合入主干'}</span>`);
+        }
 
         div.innerHTML = `
           <div class="item-main">
@@ -2127,7 +2136,13 @@
               <div class="item-tags">${tags.join(' ')}</div>
             </div>
             <div class="item-desc">${b.relativeTime} 由 ${escapeHtml(b.author)} 提交: "${escapeHtml(b.subject || '-')}"</div>
-            ${b.redundancyReason ? `<div class="item-alert">⚠️ ${escapeHtml(b.redundancyReason)}</div>` : ''}
+            ${b.redundancyReason ? `<div class="item-alert">⚠️ ${escapeHtml(b.redundancyReason)}${b.isStaleOnly ? ' <span class="stale-delete-hint">（谨慎删除）</span>' : ''}</div>` : ''}
+            ${b.historicalIntegration && b.historicalIntegration.currentDifferencePaths.length
+              ? `<div class="item-desc" title="${escapeHtml(b.historicalIntegration.currentDifferencePaths.join('\n'))}">历史整合提交后仍有 ${b.historicalIntegration.currentDifferencePaths.length} 个差异文件，均可由后续主分支提交解释（悬停查看路径）。</div>`
+              : ''}
+            ${!b.isMain && !b.isMerged && b.contentComparison && b.contentComparison.changedCount > 0
+              ? `<div class="item-desc" title="${escapeHtml(b.contentComparison.differentPaths.join('\n'))}">与 ${escapeHtml(mainBranch)} 比较：分支改动的 ${b.contentComparison.changedCount} 个文件中，${b.contentComparison.equalCount} 个当前内容一致，${b.contentComparison.differentPaths.length} 个仍有差异${b.contentComparison.differentPaths.length ? '（悬停查看路径）' : ''}。需核对后删除。</div>`
+              : ''}
           </div>
           <div class="item-actions">
             ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${escapeHtml(b.name)}', ${!b.isMerged})">删除</button>` : ''}
