@@ -385,7 +385,8 @@ const server = http.createServer(async (req, res) => {
         const result = await getWorktreeCommits(worktreePath, {
           limit: parsed.query.limit,
           offset: parsed.query.offset,
-          base: parsed.query.base
+          base: parsed.query.base,
+          fullHistory: parsed.query.fullHistory
         });
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         return res.end(JSON.stringify(result));
