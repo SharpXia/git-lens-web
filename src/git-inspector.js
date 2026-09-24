@@ -488,10 +488,12 @@ export async function getBranches(repoPath) {
 
     const daysOld = Math.floor((Date.now() - new Date(isoDate).getTime()) / (1000 * 60 * 60 * 24));
     const isStale = !isMain && daysOld > 30;
+    const isSafeToDelete = !isMain && effectiveIsMerged && !inUseByWorktree;
+    const isStaleOnly = isStale && !isSafeToDelete && !inUseByWorktree;
 
     let redundancyReason = null;
     if (!isMain) {
-      if (effectiveIsMerged && !inUseByWorktree) {
+      if (isSafeToDelete) {
         if (effectiveIsDirectlyMerged) {
           redundancyReason = '已合并至主分支且无 Worktree 引用 (安全可删)';
         } else if (mergeStatus.isTreeEqual || mergeStatus.isMergeTreeEqual) {
@@ -501,7 +503,7 @@ export async function getBranches(repoPath) {
         } else {
           redundancyReason = '分支提交补丁已等价合入主分支，且无 Worktree 引用 (安全可删)';
         }
-      } else if (isStale && !inUseByWorktree) {
+      } else if (isStaleOnly) {
         redundancyReason = `超过 ${daysOld} 天未活动陈旧分支`;
       }
     }
@@ -524,6 +526,8 @@ export async function getBranches(repoPath) {
       historicalIntegration,
       inUseByWorktree,
       isStale,
+      isSafeToDelete,
+      isStaleOnly,
       redundancyReason
     };
   }));
