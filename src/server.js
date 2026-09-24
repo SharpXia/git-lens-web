@@ -116,6 +116,17 @@ async function getScanConfig() {
 }
 
 /**
+ * 解析用于比较的真实路径，兼容 macOS 上 /var 与 /private/var 这类符号链接别名。
+ */
+async function getComparablePath(targetPath) {
+  try {
+    return await fs.realpath(targetPath);
+  } catch {
+    return path.resolve(targetPath);
+  }
+}
+
+/**
  * 发现扫描目录中的 Git 仓库。目录本身是仓库时直接收录，否则只检查直接子目录。
  */
 async function discoverRepos(scanDirectories = null) {
@@ -284,11 +295,48 @@ const server = http.createServer(async (req, res) => {
 
     // 4. API: 移除 Worktree (精细化判定，返回单项移除状态)
     if (pathname === '/api/remove-worktree' && req.method === 'POST') {
-      const { repoPath, worktreePath, force } = await readJson();
+      const { repoPath, worktreePath, force, branchName, deleteBranch: shouldDeleteBranch } = await readJson();
       if (!repoPath || !worktreePath) throw new Error('Missing repoPath or worktreePath');
+
+      let boundWorktree = null;
+      if (shouldDeleteBranch) {
+        if (!branchName) throw new Error('Missing branchName for branch deletion');
+        const worktrees = await getWorktrees(repoPath);
+        const comparableWorktreePath = await getComparablePath(worktreePath);
+        for (const worktree of worktrees) {
+          if (await getComparablePath(worktree.path) === comparableWorktreePath) {
+            boundWorktree = worktree;
+            break;
+          }
+        }
+        if (!boundWorktree || boundWorktree.isMain || boundWorktree.branch !== branchName) {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          return res.end(JSON.stringify({ ok: false, error: '只能删除与该 Worktree 强绑定的非主分支' }));
+        }
+      }
+
       const result = await removeWorktree(repoPath, worktreePath, force);
+      let branchDeleted = false;
+      let branchDeleteError = null;
+      if (shouldDeleteBranch && result.removed) {
+        try {
+          const branchResult = await deleteBranch(repoPath, branchName, true);
+          branchDeleted = branchResult.deleted;
+          if (!branchDeleted) branchDeleteError = '分支删除后仍然存在';
+        } catch (err) {
+          // Worktree 已经移除，无法回滚；把分支删除失败明确返回给前端提示用户。
+          branchDeleteError = err.message;
+        }
+      }
+
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, ...result }));
+      return res.end(JSON.stringify({
+        ok: true,
+        ...result,
+        branchName: shouldDeleteBranch ? branchName : null,
+        branchDeleted,
+        branchDeleteError
+      }));
     }
 
     // 5. API: 单项检查分支状态
