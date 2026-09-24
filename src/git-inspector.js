@@ -197,29 +197,47 @@ export async function getWorktrees(repoPath) {
     }
   }
 
-  // 并发检查每个分支相比 Main 分支是否有领先提交 (ahead)
+  // 并发检查每个分支与 Main 的提交历史及最终文件内容。
   const mainWt = worktrees.find(w => w.isMain);
   const mainRef = (mainWt && (mainWt.branch || mainWt.head)) || 'main';
+  let mainTree = null;
+  try {
+    mainTree = await runGit(repoPath, ['rev-parse', `${mainRef}^{tree}`]);
+  } catch {
+    // 主分支引用不可解析时，保留历史计数作为降级结果。
+  }
 
   await Promise.all(worktrees.map(async (wt) => {
     if (wt.isMain) {
       wt.aheadCount = 0;
+      wt.historyAheadCount = 0;
+      wt.isContentEqualToMain = true;
       wt.hasDiff = wt.isDirty;
       return;
     }
     const targetRef = wt.branch || wt.head;
     if (!targetRef) {
       wt.aheadCount = 0;
+      wt.historyAheadCount = 0;
       wt.hasDiff = wt.isDirty;
       return;
     }
     try {
       const countStr = await runGit(repoPath, ['rev-list', '--count', `${mainRef}..${targetRef}`]);
-      wt.aheadCount = parseInt(countStr.trim(), 10) || 0;
+      wt.historyAheadCount = parseInt(countStr.trim(), 10) || 0;
     } catch {
-      wt.aheadCount = 0;
+      wt.historyAheadCount = 0;
     }
-    wt.hasDiff = wt.isDirty || wt.aheadCount > 0;
+    try {
+      const targetTree = await runGit(repoPath, ['rev-parse', `${targetRef}^{tree}`]);
+      wt.isContentEqualToMain = Boolean(mainTree) && mainTree === targetTree;
+      wt.hasCommittedDiff = Boolean(mainTree) && mainTree !== targetTree;
+    } catch {
+      wt.isContentEqualToMain = false;
+    }
+    // squash 后提交 SHA 会不同；只有 Tree 不同时才显示领先改动与文件 Diff。
+    wt.aheadCount = wt.isContentEqualToMain ? 0 : wt.historyAheadCount;
+    wt.hasDiff = wt.isDirty || wt.hasCommittedDiff || wt.aheadCount > 0;
   }));
 
   return worktrees;
@@ -599,11 +617,6 @@ function splitDiffByFiles(rawDiff) {
 }
 
 /**
- * 解析并对比两个 Worktree 之间的 Diff
- * 优化点：使用三点语法 `base...target`，确保只显示 Target 领先于 Base 的自身新增改动，
- * 并支持按每个文件独立归类 diffChunk，支持前端独立展开/收起。
- */
-/**
  * 获取两个 Worktree 之间或目标工作区的 Diff，支持三种模式：
  * 1. 'uncommitted': 仅未提交以及 untracked
  * 2. 'all': 提交和未提交以及 untracked (全量)
@@ -611,7 +624,7 @@ function splitDiffByFiles(rawDiff) {
  *
  * 智能回退优先级：
  * 默认优先 'uncommitted'（如果有脏代码或新增未跟踪）；
- * 若无，fallback 到 'all'（如果有领先提交或文件差异）；
+ * 若无，fallback 到 'all'（如果有实际文件差异）；
  * 最低优先级为 'committed'。
  */
 export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requestedMode = null) {
@@ -667,21 +680,25 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requeste
 
   const sourceRef = sourceWt.branch || sourceWt.head || 'HEAD';
   const targetRef = targetWt.branch || targetWt.head || 'HEAD';
-  const tripleDotRange = `${sourceRef}...${targetRef}`;
 
-  // 1. 获取两者的提交相对位置：behind（落后 Base 提交数）与 ahead（领先 Base 提交数）
-  let ahead = 0;
-  let behind = 0;
+  // 1. 提交计数只描述历史关系；squash 后 SHA 会不同，但最终文件内容可能完全一致。
+  let historyAhead = 0;
+  let historyBehind = 0;
   try {
-    const revCounts = await runGit(repoPath, ['rev-list', '--left-right', '--count', tripleDotRange]);
+    const revCounts = await runGit(repoPath, ['rev-list', '--left-right', '--count', `${sourceRef}...${targetRef}`]);
     const parts = revCounts.trim().split(/\s+/).map(Number);
     if (parts.length >= 2) {
-      behind = parts[0];
-      ahead = parts[1];
+      historyBehind = parts[0];
+      historyAhead = parts[1];
     }
   } catch {
     // ignore
   }
+  const sourceTree = await runGit(repoPath, ['rev-parse', `${sourceRef}^{tree}`]);
+  const targetTree = await runGit(repoPath, ['rev-parse', `${targetRef}^{tree}`]);
+  const isCommittedContentEqual = sourceTree === targetTree;
+  const ahead = isCommittedContentEqual ? 0 : historyAhead;
+  const behind = isCommittedContentEqual ? 0 : historyBehind;
 
   // 2. 检查 Target 工作区自身的未提交/未跟踪改动
   const uncommittedData = await getUncommittedDiff(targetWt.path);
@@ -690,14 +707,14 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requeste
   // 3. 计算【仅已提交】(committed) 的 diff
   let committedDiff = '';
   try {
-    committedDiff = await runGit(repoPath, ['diff', '-p', '-U3', tripleDotRange]);
+    committedDiff = await runGit(repoPath, ['diff', '-p', '-U3', sourceRef, targetRef]);
   } catch (err) {
     committedDiff = `获取 Diff 失败: ${err.message}`;
   }
   const committedFileMap = splitDiffByFiles(committedDiff);
   const committedFiles = [];
   try {
-    const numstatOut = await runGit(repoPath, ['diff', '--numstat', tripleDotRange]);
+    const numstatOut = await runGit(repoPath, ['diff', '--numstat', sourceRef, targetRef]);
     for (const line of numstatOut.split('\n')) {
       if (!line.trim()) continue;
       const [added, deleted, filePath] = line.split('\t');
@@ -715,22 +732,14 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requeste
     }
   } catch {}
 
-  const hasCommitted = (committedFiles.length > 0 || ahead > 0);
+  const hasCommitted = committedFiles.length > 0;
 
-  // 4. 计算【全量：已提交 + 未提交 + untracked】(all)
-  // 获取 merge-base
-  let baseMergeSha = '';
-  try {
-    const baseHead = await runGit(sourceWt.path, ['rev-parse', 'HEAD']);
-    const targetHead = await runGit(targetWt.path, ['rev-parse', 'HEAD']);
-    baseMergeSha = await runGit(targetWt.path, ['merge-base', baseHead, targetHead]);
-  } catch {}
-
+  // 4. 计算【全量：已提交 + 未提交 + untracked】(all)。
+  // 直接以 Source 的最终 Tree 为基准，避免 merge-base 把 squash 后的历史差异重新显示为文件差异。
   let allFiles = [];
-  if (baseMergeSha) {
-    try {
-      const allNumstat = await runGit(targetWt.path, ['diff', baseMergeSha, '--numstat']);
-      const allDiffRaw = await runGit(targetWt.path, ['diff', baseMergeSha, '-p', '-U3']);
+  try {
+      const allNumstat = await runGit(targetWt.path, ['diff', sourceRef, '--numstat']);
+      const allDiffRaw = await runGit(targetWt.path, ['diff', sourceRef, '-p', '-U3']);
       const allDiffMap = splitDiffByFiles(allDiffRaw);
       const seenAll = new Set();
 
@@ -759,10 +768,7 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requeste
           }
         }
       }
-    } catch {
-      allFiles = committedFiles;
-    }
-  } else {
+  } catch {
     allFiles = committedFiles;
   }
 
@@ -811,10 +817,13 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requeste
     },
     ahead,
     behind,
+    historyAhead,
+    historyBehind,
+    isCommittedContentEqual,
     effectiveMode,
     modesAvailable: {
       uncommitted: hasUncommitted,
-      all: (allFiles.length > 0 || hasUncommitted || hasCommitted),
+      all: allFiles.length > 0,
       committed: hasCommitted
     },
     counts: {

@@ -2009,7 +2009,7 @@
         ? currentWorktrees.filter(wt => includesKeyword([wt.path, wt.branch, wt.lastCommit?.relativeTime, wt.lastCommit?.author, wt.lastCommit?.subject], keyword))
         : [...currentWorktrees];
 
-      // 智能排序：Main 工作区永远绝对置顶；其次是有 Diff (本地未提交修改或领先提交) 的 Worktree 排在前面
+      // 智能排序：Main 工作区永远置顶；有实际文件差异或本地未提交修改的 Worktree 优先。
       worktrees.sort((a, b) => {
         if (a.isMain && !b.isMain) return -1;
         if (!a.isMain && b.isMain) return 1;
@@ -2062,7 +2062,11 @@
         if (wt.branch) tags.push(`<span class="badge" title="${escapeHtml(wt.branch)}">🌿 ${escapeHtml(wt.branch)}</span>`);
         if (!wt.existsOnDisk) tags.push('<span class="badge badge-danger">磁盘已失联</span>');
         if (wt.isDirty) tags.push(`<span class="badge badge-warning">⚡ 未提交修改 (${wt.dirtyCount})</span>`);
-        if (wt.aheadCount > 0) tags.push(`<span class="badge badge-success" title="分支相对 Main 领先 ${wt.aheadCount} 个提交">🚀 领先 ${wt.aheadCount} 提交</span>`);
+        if (wt.aheadCount > 0) {
+          tags.push(`<span class="badge badge-success" title="分支文件内容相对 Main 仍有实际差异，提交历史领先 ${wt.historyAheadCount || wt.aheadCount} 个提交">🚀 领先 ${wt.aheadCount} 提交</span>`);
+        } else if (wt.isContentEqualToMain && (wt.historyAheadCount || 0) > 0) {
+          tags.push(`<span class="badge badge-success" title="提交历史领先 ${wt.historyAheadCount} 个提交，但最终文件内容与 Main 一致，通常是 squash 合入造成的历史差异">内容已与主干同步</span>`);
+        }
         if (wt.isLocked) tags.push('<span class="badge">已加锁</span>');
 
         const dirName = wt.path.split('/').filter(Boolean).pop() || wt.path;
@@ -2567,6 +2571,10 @@
       let syncStatusBadge = '';
       if (diff.isSameWorktree) {
         syncStatusBadge = '<span class="badge badge-success">🌿 本地工作区自审</span>';
+      } else if (diff.isCommittedContentEqual && (diff.historyAhead > 0 || diff.historyBehind > 0)) {
+        syncStatusBadge = '<span class="badge badge-success">文件内容一致（提交历史已 squash 整合）</span>';
+      } else if (diff.isCommittedContentEqual) {
+        syncStatusBadge = '<span class="badge badge-success">提交内容完全同步</span>';
       } else if (ahead === 0 && behind === 0) {
         syncStatusBadge = '<span class="badge badge-success">两分支提交完全同步</span>';
       } else {
@@ -2584,9 +2592,9 @@
       } else if (effectiveMode === 'uncommitted') {
         modeTipText = '⚡ 仅展示 Target 本地未提交修改及 untracked 新增文件';
       } else if (effectiveMode === 'all') {
-        modeTipText = '📦 全量对比：含分支领先提交 + 本地未提交修改 + untracked 新增';
+        modeTipText = '📦 全量对比：含 Target 已提交文件差异 + 本地未提交修改 + untracked 新增';
       } else {
-        modeTipText = '📌 纯分支提交对比 (base...target)，已忽略本地未提交修改';
+        modeTipText = '📌 纯分支文件内容对比（已忽略本地未提交修改）';
       }
 
       const modeControlHtml = `
@@ -2613,6 +2621,8 @@
         let emptyDesc = '🎉 当前审查模式下无任何文件差异。';
         if (effectiveMode === 'uncommitted') {
           emptyDesc = '🎉 Target 工作区非常干净（Clean），没有本地未暂存或未提交的修改。<br><span style="color: var(--text-muted); font-size: 13px;">如需审查已提交的代码，请点击上方<b>【📦 全量变更】</b>或<b>【📌 仅已提交】</b>。</span>';
+        } else if (diff.isCommittedContentEqual && (diff.historyAhead > 0 || diff.historyBehind > 0)) {
+          emptyDesc = '🎉 两个工作区的最终文件内容一致。<br><span style="color: var(--text-muted); font-size: 13px;">提交历史存在差异，但这通常是 squash 合入造成的历史差异，已从文件 Diff 中过滤。</span>';
         } else if (behind > 0 && ahead === 0) {
           emptyDesc = `ℹ️ <b>对比分支当前落后于基准分支（落后 ${behind} 个提交）</b>，且没有领先的独有代码修改。<br><span style="color: var(--text-muted); font-size: 13px;">已过滤反向差异，避免将基准分支的更新误显示为被删除。若需查看基准分支引入的新代码，可点击上方<b>【⇄ 对调】</b>。</span>`;
         }
