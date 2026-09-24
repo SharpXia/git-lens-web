@@ -673,3 +673,146 @@ export async function getUncommittedDiff(worktreePath) {
     files
   };
 }
+
+/**
+ * 获取指定 worktree 的提交记录
+ * @param {string} worktreePath - worktree 绝对路径
+ * @param {object} options
+ * @param {number} [options.limit=30] - 返回条数 (1-100)
+ * @param {number} [options.offset=0] - 偏移量
+ * @param {string} [options.base] - 基准分支 (不传则自动检测 main/master)
+ */
+export async function getWorktreeCommits(worktreePath, options = {}) {
+  const limit = Math.min(Math.max(parseInt(options.limit, 10) || 30, 1), 100);
+  const offset = Math.max(parseInt(options.offset, 10) || 0, 0);
+
+  // 1. 验证 worktreePath 是否存在于 git worktree list 中
+  const wtOutput = await runGit(worktreePath, ['worktree', 'list', '--porcelain']);
+  if (!wtOutput) {
+    throw new Error('无法读取 Worktree 列表');
+  }
+
+  const lines = wtOutput.split('\n');
+  let currentPath = '';
+  let branch = '';
+  let head = '';
+
+  for (const line of lines) {
+    if (line.startsWith('worktree ')) {
+      currentPath = line.slice(9).trim();
+    } else if (line.startsWith('HEAD ')) {
+      if (path.resolve(currentPath) === path.resolve(worktreePath)) {
+        head = line.slice(5).trim();
+      }
+    } else if (line.startsWith('branch ')) {
+      if (path.resolve(currentPath) === path.resolve(worktreePath)) {
+        branch = line.slice(7).replace('refs/heads/', '').trim();
+      }
+    }
+  }
+
+  if (!head) {
+    head = (await runGit(worktreePath, ['rev-parse', 'HEAD'])) || '';
+  }
+
+  // 2. 基准分支检测
+  let base = options.base;
+  if (!base) {
+    try {
+      const symref = await runGit(worktreePath, ['symbolic-ref', 'refs/remotes/origin/HEAD']);
+      base = symref.split('/').pop() || 'main';
+    } catch {
+      try {
+        const branches = await runGit(worktreePath, ['branch', '--list']);
+        if (branches.includes('main')) base = 'main';
+        else if (branches.includes('master')) base = 'master';
+        else base = 'main';
+      } catch {
+        base = 'main';
+      }
+    }
+  }
+
+  // 3. 计算相对 base 的提交范围
+  let revRange = `${base}..HEAD`;
+  try {
+    await runGit(worktreePath, ['rev-parse', '--verify', base]);
+  } catch {
+    revRange = 'HEAD';
+    base = 'HEAD';
+  }
+
+  // 4. 获取提交总数
+  let totalCommits = 0;
+  try {
+    const countOutput = await runGit(worktreePath, ['rev-list', '--count', revRange]);
+    totalCommits = parseInt(countOutput, 10) || 0;
+  } catch {
+    try {
+      const fallbackCount = await runGit(worktreePath, ['rev-list', '--count', 'HEAD']);
+      totalCommits = parseInt(fallbackCount, 10) || 0;
+      revRange = 'HEAD';
+    } catch {
+      totalCommits = 0;
+    }
+  }
+
+  // 5. 获取提交列表
+  const delimiter = '---COMMIT_END_X---';
+  const format = `%H%n%h%n%an%n%ae%n%aI%n%cr%n%s%n%b%n${delimiter}`;
+  let rawLogs = '';
+  try {
+    rawLogs = await runGit(worktreePath, [
+      'log',
+      revRange,
+      `--format=${format}`,
+      `--skip=${offset}`,
+      `--max-count=${limit}`
+    ]);
+  } catch {
+    try {
+      rawLogs = await runGit(worktreePath, [
+        'log',
+        'HEAD',
+        `--format=${format}`,
+        `--skip=${offset}`,
+        `--max-count=${limit}`
+      ]);
+    } catch {
+      rawLogs = '';
+    }
+  }
+
+  const commits = [];
+  if (rawLogs.trim()) {
+    const rawChunks = rawLogs.split(delimiter);
+    for (const chunk of rawChunks) {
+      const trimmed = chunk.trim();
+      if (!trimmed) continue;
+      const [cHash, shortHash, author, authorEmail, date, relativeTime, subject, ...bodyLines] = trimmed.split('\n');
+      commits.push({
+        hash: cHash || '',
+        shortHash: shortHash || (cHash ? cHash.slice(0, 7) : ''),
+        author: author || '',
+        authorEmail: authorEmail || '',
+        date: date || '',
+        relativeTime: relativeTime || '',
+        subject: subject || '',
+        body: bodyLines.join('\n').trim()
+      });
+    }
+  }
+
+  return {
+    ok: true,
+    worktreePath,
+    branch: branch || 'HEAD',
+    head,
+    base,
+    totalCommits,
+    returnedCount: commits.length,
+    hasMore: offset + commits.length < totalCommits,
+    commits
+  };
+}
+
