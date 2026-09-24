@@ -931,6 +931,85 @@
       .scan-directory-add-row { flex-direction: column; }
       .scan-directory-add-row button { width: 100%; }
     }
+
+    /* ---- Worktree 移除确认弹窗 ---- */
+    .worktree-remove-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 1150;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(1, 4, 9, 0.72);
+    }
+    .worktree-remove-card {
+      width: min(520px, 100%);
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+    }
+    .worktree-remove-body {
+      padding: 20px;
+    }
+    .worktree-remove-body h2 {
+      margin-bottom: 10px;
+      color: var(--text-bright);
+      font-size: 17px;
+    }
+    .worktree-remove-path {
+      margin-bottom: 14px;
+      color: var(--text-muted);
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .worktree-remove-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.02);
+      cursor: pointer;
+    }
+    .worktree-remove-option input {
+      flex: 0 0 auto;
+      width: 16px;
+      height: 16px;
+      margin-top: 2px;
+      padding: 0;
+      accent-color: var(--danger);
+    }
+    .worktree-remove-option input:disabled {
+      cursor: not-allowed;
+    }
+    .worktree-remove-option-text {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+      color: var(--text);
+      font-size: 13px;
+    }
+    .worktree-remove-option-text strong {
+      color: var(--text-bright);
+      font-weight: 600;
+    }
+    .worktree-remove-option-text span {
+      color: var(--text-muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .worktree-remove-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 14px 20px;
+      border-top: 1px solid var(--border);
+    }
   
     /* 回到顶部悬浮按钮 */
     .back-to-top-btn {
@@ -1293,6 +1372,26 @@
     </div>
   </div>
 
+  <div id="worktreeRemoveModal" class="worktree-remove-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="worktreeRemoveModalTitle">
+    <div class="worktree-remove-card">
+      <div class="worktree-remove-body">
+        <h2 id="worktreeRemoveModalTitle">移除 Worktree</h2>
+        <div id="worktreeRemovePath" class="worktree-remove-path"></div>
+        <label class="worktree-remove-option" for="deleteBoundBranchCheckbox">
+          <input id="deleteBoundBranchCheckbox" type="checkbox">
+          <span class="worktree-remove-option-text">
+            <strong id="deleteBoundBranchLabel">同步删除强绑定分支</strong>
+            <span id="deleteBoundBranchHint">默认只移除 Worktree，保留分支。</span>
+          </span>
+        </label>
+      </div>
+      <div class="worktree-remove-footer">
+        <button class="btn-outline" type="button" onclick="closeWorktreeRemoveModal(false)">取消</button>
+        <button class="btn-danger" type="button" onclick="closeWorktreeRemoveModal(true)">确认移除</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     let allRepos = [];
     let currentRepo = '';
@@ -1313,6 +1412,7 @@
     let pendingRestoreState = null;
     let scanDirectoryConfig = { customDirectories: [] };
     let scanDirectoryDraft = [];
+    let worktreeRemoveRequest = null;
 
     function selectDiffMode(mode) {
       currentDiffMode = mode;
@@ -1455,6 +1555,36 @@
         saveButton.disabled = false;
         saveButton.textContent = '保存并扫描';
       }
+    }
+
+    function requestWorktreeRemoval(worktreePath, branchName) {
+      return new Promise((resolve) => {
+        worktreeRemoveRequest = resolve;
+        const checkbox = document.getElementById('deleteBoundBranchCheckbox');
+        const label = document.getElementById('deleteBoundBranchLabel');
+        const hint = document.getElementById('deleteBoundBranchHint');
+        document.getElementById('worktreeRemovePath').textContent = worktreePath;
+        checkbox.checked = false;
+        checkbox.disabled = !branchName;
+        if (branchName) {
+          label.textContent = `同步删除强绑定分支「${branchName}」`;
+          hint.textContent = '默认不勾选；勾选后会在移除 Worktree 后强制删除该分支。';
+        } else {
+          label.textContent = '该 Worktree 没有可同步删除的分支';
+          hint.textContent = '当前操作只会移除 Worktree。';
+        }
+        document.getElementById('worktreeRemoveModal').style.display = 'flex';
+        setTimeout(() => (branchName ? checkbox : document.querySelector('#worktreeRemoveModal button')).focus(), 0);
+      });
+    }
+
+    function closeWorktreeRemoveModal(confirmed) {
+      const resolve = worktreeRemoveRequest;
+      if (!resolve) return;
+      const checkbox = document.getElementById('deleteBoundBranchCheckbox');
+      worktreeRemoveRequest = null;
+      document.getElementById('worktreeRemoveModal').style.display = 'none';
+      resolve(confirmed ? { deleteBranch: checkbox.checked } : null);
     }
 
     // 状态管理：从 URL 或 sessionStorage 提取状态（支持多标签页独立隔离，刷新不丢状态）
@@ -1605,12 +1735,16 @@
       const container = document.getElementById('repoDropdownList');
       const kw = repoFilterKeyword.trim().toLowerCase();
       const starred = getStarredRepos();
+      const pinnedRepo = allRepos.find(r => r.path === currentRepo) || null;
 
       let filtered = allRepos.filter(r => {
         const matchesKw = !kw || r.name.toLowerCase().includes(kw) || r.path.toLowerCase().includes(kw) || (r.group && r.group.toLowerCase().includes(kw));
         const matchesStar = !filterStarredOnly || starred.includes(r.path);
         return matchesKw && matchesStar;
       });
+
+      // 当前项目单独置顶，避免只看星标时当前项目被过滤掉，也避免在列表中重复出现。
+      if (pinnedRepo) filtered = filtered.filter(r => r.path !== pinnedRepo.path);
 
       // 排序：已星标的置顶排前面，其余按拼音/字母排序
       filtered.sort((a, b) => {
@@ -1620,18 +1754,26 @@
         return a.name.localeCompare(b.name);
       });
 
-      if (filtered.length === 0) {
+      if (filtered.length === 0 && !pinnedRepo) {
         container.innerHTML = `<div class="loading" style="padding: 20px;">没有匹配的仓库</div>`;
         return;
       }
 
       container.innerHTML = '';
 
+      if (pinnedRepo) {
+        const gTitle = document.createElement('div');
+        gTitle.className = 'repo-list-group-title';
+        gTitle.textContent = '📌 当前项目';
+        container.appendChild(gTitle);
+        container.appendChild(createRepoItemDom(pinnedRepo, starred.includes(pinnedRepo.path)));
+      }
+
       // 分组渲染：星标仓库区 & 普通分组
       const starredItems = filtered.filter(r => starred.includes(r.path));
       const normalItems = filtered.filter(r => !starred.includes(r.path));
 
-      if (starredItems.length > 0 && !filterStarredOnly) {
+      if (starredItems.length > 0) {
         const gTitle = document.createElement('div');
         gTitle.className = 'repo-list-group-title';
         gTitle.textContent = `⭐ 星标收藏 (${starredItems.length})`;
@@ -1997,7 +2139,10 @@
 
     /* 优化 1：精细化单个 Worktree 移除判断与单项 DOM 剔除 */
     async function removeWt(worktreePath) {
-      if (!confirm(`确认从 Git 登记中移除 Worktree 目录:\n${worktreePath}`)) return;
+      const worktree = currentWorktrees.find(w => w.path === worktreePath);
+      const branchName = worktree?.branch || '';
+      const removalOptions = await requestWorktreeRemoval(worktreePath, branchName);
+      if (!removalOptions) return;
 
       const domKey = encodeURIComponent(worktreePath).replace(/%/g, '_');
       const btn = document.getElementById(`btn-rm-wt-${domKey}`);
@@ -2010,7 +2155,13 @@
         const res = await fetch('/api/remove-worktree', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ repoPath: currentRepo, worktreePath, force: true })
+          body: JSON.stringify({
+            repoPath: currentRepo,
+            worktreePath,
+            branchName,
+            force: true,
+            deleteBranch: removalOptions.deleteBranch
+          })
         });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error);
@@ -2019,19 +2170,16 @@
         const checkData = await checkRes.json();
 
         if (!checkData.exists) {
-          currentWorktrees = currentWorktrees.filter(w => w.path !== worktreePath);
-
           const itemDom = document.getElementById(`wt-item-${domKey}`);
           if (itemDom) {
             itemDom.style.opacity = '0';
             itemDom.style.transform = 'translateX(20px)';
-            setTimeout(() => {
-              itemDom.remove();
-              updateMetrics();
-              populateDiffSelectors();
-            }, 250);
-          } else {
-            renderFilteredLists();
+            await new Promise(resolve => setTimeout(resolve, 250));
+          }
+          // 重新读取 Git 状态，确保保留分支时的 Worktree 绑定标记和删除按钮同步更新。
+          await inspectRepo(currentRepo);
+          if (data.branchDeleteError) {
+            alert(`Worktree 已移除，但分支「${data.branchName || branchName}」删除失败：${data.branchDeleteError}`);
           }
         } else {
           alert('Worktree 尚未被完全移除，请重试或强制清理。');
@@ -2863,6 +3011,9 @@
     document.getElementById('scanDirectoryModal').addEventListener('click', (e) => {
       if (e.target.id === 'scanDirectoryModal') closeScanDirectoryModal();
     });
+    document.getElementById('worktreeRemoveModal').addEventListener('click', (e) => {
+      if (e.target.id === 'worktreeRemoveModal') closeWorktreeRemoveModal(false);
+    });
     document.getElementById('refreshBtn').addEventListener('click', () => {
       loadProjects();
     });
@@ -2912,6 +3063,9 @@
       }
       if (e.key === 'Escape' && document.getElementById('scanDirectoryModal').style.display !== 'none') {
         closeScanDirectoryModal();
+      }
+      if (e.key === 'Escape' && document.getElementById('worktreeRemoveModal').style.display !== 'none') {
+        closeWorktreeRemoveModal(false);
       }
     });
 
