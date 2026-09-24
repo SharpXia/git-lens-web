@@ -2367,15 +2367,15 @@
 
         if (!checkData.exists) {
           currentBranches = currentBranches.filter(b => b.name !== branchName);
+          // 分支已删除，立即刷新指标与列表计数徽标，避免分支数显示滞后。
+          updateMetrics();
+          updateListCountBadges();
 
           const itemDom = document.getElementById(`br-item-${domKey}`);
           if (itemDom) {
             itemDom.style.opacity = '0';
             itemDom.style.transform = 'translateX(20px)';
-            setTimeout(() => {
-              itemDom.remove();
-              updateMetrics();
-            }, 250);
+            setTimeout(() => itemDom.remove(), 250);
           } else {
             renderFilteredLists();
           }
