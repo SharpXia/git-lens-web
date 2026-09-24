@@ -3,6 +3,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import url from 'node:url';
 import os from 'node:os';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import {
   isGitRepo,
   getWorktrees,
@@ -21,31 +23,127 @@ import {
 
 const PORT = process.env.PORT || 9527;
 const HOME = os.homedir();
+const CONFIG_DIR = path.join(HOME, '.config', 'git-lens-web');
+const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+const execFileAsync = promisify(execFile);
 
 /**
- * 递归发现候选 Git 仓库 (默认只搜 workspace 下 2 层深度)
+ * 调用服务所在电脑的系统目录选择器，取消选择时返回 null。
+ * 浏览器的目录上传控件不会提供服务端可用的绝对路径，因此需要本机对话框。
  */
-async function discoverRepos() {
-  const baseDirs = [
-    path.join(HOME, 'workspace/individualProjects'),
-    path.join(HOME, 'workspace/studioProjects'),
-    path.join(HOME, 'workspace/individualProjects/XxdDevTeam-worktrees')
-  ];
+async function chooseScanDirectory() {
+  let command;
+  let args;
+  if (process.platform === 'darwin') {
+    command = 'osascript';
+    args = ['-e', 'POSIX path of (choose folder with prompt "选择要扫描的 Workspace 目录")'];
+  } else if (process.platform === 'win32') {
+    command = 'powershell.exe';
+    args = [
+      '-NoProfile', '-STA', '-Command',
+      '[Console]::OutputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms; $dialog = New-Object System.Windows.Forms.FolderBrowserDialog; $dialog.Description = "选择要扫描的 Workspace 目录"; if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($dialog.SelectedPath) }'
+    ];
+  } else {
+    command = 'zenity';
+    args = ['--file-selection', '--directory', '--title=选择要扫描的 Workspace 目录'];
+  }
 
+  try {
+    const { stdout } = await execFileAsync(command, args, { maxBuffer: 16 * 1024 });
+    return stdout.trim() || null;
+  } catch (err) {
+    if (err.code === 1) return null;
+    if (err.code === 'ENOENT' && process.platform === 'linux') {
+      try {
+        const { stdout } = await execFileAsync('kdialog', ['--getexistingdirectory', HOME, '--title', '选择要扫描的 Workspace 目录'], { maxBuffer: 16 * 1024 });
+        return stdout.trim() || null;
+      } catch (fallbackError) {
+        if (fallbackError.code === 1) return null;
+        if (fallbackError.code === 'ENOENT') {
+          throw new Error('当前系统缺少目录选择器，请安装 zenity 或 kdialog，或使用手动输入路径。');
+        }
+        throw new Error(`打开目录选择器失败：${fallbackError.message}`);
+      }
+    }
+    throw new Error(`打开目录选择器失败：${err.message}`);
+  }
+}
+
+/**
+ * 将用户输入的目录转换为绝对路径，支持使用 ~ 表示用户主目录。
+ */
+function normalizeScanDirectory(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const isHomeRelative = trimmed === '~' || trimmed.startsWith('~/') || trimmed.startsWith('~\\');
+  const expanded = isHomeRelative
+    ? path.join(HOME, trimmed.slice(1).replace(/^[/\\]+/, ''))
+    : trimmed;
+  return path.resolve(expanded);
+}
+
+/**
+ * 读取扫描目录配置。配置文件不存在时按首次使用处理。
+ */
+async function readScanConfig() {
+  try {
+    const raw = await fs.readFile(CONFIG_FILE, 'utf-8');
+    const parsed = JSON.parse(raw);
+    const customDirectories = Array.isArray(parsed.customDirectories)
+      ? parsed.customDirectories.map(normalizeScanDirectory).filter(Boolean)
+      : [];
+    return { customDirectories: [...new Set(customDirectories)] };
+  } catch {
+    return { customDirectories: [] };
+  }
+}
+
+/**
+ * 保存扫描目录配置，并保证配置目录存在。
+ */
+async function writeScanConfig(customDirectories) {
+  await fs.mkdir(CONFIG_DIR, { recursive: true });
+  await fs.writeFile(CONFIG_FILE, JSON.stringify({ customDirectories }, null, 2) + '\n', 'utf-8');
+}
+
+/**
+ * 返回当前用户的自定义目录，供接口和仓库发现逻辑共同使用。
+ */
+async function getScanConfig() {
+  const { customDirectories } = await readScanConfig();
+  return { customDirectories, scanDirectories: [...customDirectories] };
+}
+
+/**
+ * 发现扫描目录中的 Git 仓库。目录本身是仓库时直接收录，否则只检查直接子目录。
+ */
+async function discoverRepos(scanDirectories = null) {
+  if (!scanDirectories) scanDirectories = (await getScanConfig()).scanDirectories;
   const repos = [];
-  for (const base of baseDirs) {
+  const seenPaths = new Set();
+  for (const base of scanDirectories) {
     try {
+      if (await isGitRepo(base)) {
+        const repoPath = path.resolve(base);
+        if (!seenPaths.has(repoPath)) {
+          seenPaths.add(repoPath);
+          repos.push({ name: path.basename(repoPath), path: repoPath, group: path.basename(path.dirname(repoPath)) });
+        }
+        continue;
+      }
       const entries = await fs.readdir(base, { withFileTypes: true });
       for (const ent of entries) {
         if (ent.isDirectory() && !ent.name.startsWith('.')) {
           const fullPath = path.join(base, ent.name);
-          if (await isGitRepo(fullPath)) {
+          if (await isGitRepo(fullPath) && !seenPaths.has(path.resolve(fullPath))) {
+            seenPaths.add(path.resolve(fullPath));
             repos.push({ name: ent.name, path: fullPath, group: path.basename(base) });
           }
         }
       }
     } catch {
-      // ignore missing dir
+      // 忽略不存在或暂时无法读取的目录
     }
   }
   return repos;
@@ -66,11 +164,30 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
+    // 系统对话框只接受本机页面的调用，避免其他网页触发目录选择器。
+    if (pathname === '/api/choose-scan-directory' && req.method === 'POST') {
+      const origin = req.headers.origin;
+      if (origin && origin !== `http://127.0.0.1:${PORT}` && origin !== `http://localhost:${PORT}`) {
+        res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: '只能从本机页面打开目录选择器' }));
+      }
+      const directory = await chooseScanDirectory();
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: true, directory }));
+    }
+
     // 1. API: 发现项目列表
     if (pathname === '/api/projects' && req.method === 'GET') {
       const repos = await discoverRepos();
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify({ ok: true, repos }));
+    }
+
+    // 1.5 API: 获取当前扫描目录配置
+    if (pathname === '/api/scan-directories' && req.method === 'GET') {
+      const config = await getScanConfig();
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: true, ...config }));
     }
 
     // 2. API: 分析指定仓库状态
@@ -115,6 +232,46 @@ const server = http.createServer(async (req, res) => {
       });
       req.on('error', reject);
     });
+
+    // 1.6 API: 保存自定义扫描目录
+    if (pathname === '/api/scan-directories' && req.method === 'POST') {
+      const body = await readJson();
+      if (!Array.isArray(body.directories)) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: 'directories 必须是目录路径数组' }));
+      }
+
+      const normalizedDirectories = body.directories.map(normalizeScanDirectory);
+      if (normalizedDirectories.some(dir => !dir)) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: '目录路径不能为空' }));
+      }
+
+      const customDirectories = [...new Set(normalizedDirectories)];
+      const invalidDirectories = [];
+      for (const directory of customDirectories) {
+        try {
+          const stat = await fs.stat(directory);
+          if (!stat.isDirectory()) invalidDirectories.push(directory);
+        } catch {
+          invalidDirectories.push(directory);
+        }
+      }
+
+      if (invalidDirectories.length > 0) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({
+          ok: false,
+          error: '以下路径不存在或不是目录',
+          invalidDirectories
+        }));
+      }
+
+      await writeScanConfig(customDirectories);
+      const config = await getScanConfig();
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: true, ...config }));
+    }
 
     // 3. API: 清理分支 (精细化判定，返回单项删除状态)
     if (pathname === '/api/delete-branch' && req.method === 'POST') {
