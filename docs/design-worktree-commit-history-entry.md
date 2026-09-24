@@ -1,6 +1,11 @@
 # Worktree 提交记录入口 — 方案设计文档
 
-> 版本: v1.0 | 日期: 2026-09-23 | 状态: 草案
+> 版本: v1.0 | 日期: 2026-09-23 | 状态: **已废弃（备选方案）**
+>
+> 本文档为「Worktree 提交记录入口」早期的 Tab 式备选设计，**已停止推进**。
+> 权威方案见 [`proposals/worktree-commits-entry.md`](proposals/worktree-commits-entry.md)（抽屉式，后端已实现）。
+> 本文中有价值的设计点（§4.2 ahead/behind、§4.3 单提交 Diff、§8 边界情况）
+> 已并入权威方案 §7 后续迭代规划，仅供追溯。
 
 ---
 
