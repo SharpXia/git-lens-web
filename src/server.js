@@ -15,7 +15,8 @@ import {
   getWorktreeDiff,
   getUncommittedDiff,
   getFileContentBuffer,
-  getMimeType
+  getMimeType,
+  getWorktreeCommits
 } from './git-inspector.js';
 
 const PORT = process.env.PORT || 9527;
@@ -168,7 +169,28 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ ok: true, diff: diffData }));
     }
 
-    // 8. API: 获取指定 Worktree 的本地未提交改动 (Dirty/Uncommitted Diff)
+    // 8. API: 获取指定 Worktree 的提交记录
+    if (pathname === '/api/worktree-commits' && req.method === 'GET') {
+      const worktreePath = parsed.query.worktree;
+      if (!worktreePath) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: 'Missing worktree parameter' }));
+      }
+      try {
+        const result = await getWorktreeCommits(worktreePath, {
+          limit: parsed.query.limit,
+          offset: parsed.query.offset,
+          base: parsed.query.base
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify(result));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+    }
+
+    // 9. API: 获取指定 Worktree 的本地未提交改动 (Dirty/Uncommitted Diff)
     if (pathname === '/api/uncommitted-diff' && req.method === 'GET') {
       const worktreePath = parsed.query.worktree;
       if (!worktreePath) {
