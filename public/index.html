@@ -68,6 +68,13 @@
       color: var(--success);
       border-color: rgba(63, 185, 80, 0.3);
     }
+    .diff-sync-action {
+      cursor: pointer;
+      font: inherit;
+    }
+    .diff-sync-action:hover {
+      filter: brightness(1.15);
+    }
 
     /* 顶部导航与标签页切换 */
     .tab-bar {
@@ -1080,6 +1087,7 @@
       transform: translateX(100%);
       transition: transform 250ms cubic-bezier(0.16, 1, 0.3, 1);
       box-shadow: -4px 0 16px rgba(0, 0, 0, 0.3);
+      overscroll-behavior: contain;
     }
     .commits-drawer.open {
       transform: translateX(0);
@@ -1124,7 +1132,9 @@
     }
     .commits-drawer-body {
       flex: 1;
+      min-height: 0;
       overflow-y: auto;
+      overscroll-behavior-y: contain;
       padding: 12px 20px;
     }
     .commit-item {
@@ -1324,7 +1334,7 @@
         </div>
 
         <div style="display: flex; gap: 8px; align-self: flex-end; margin-bottom: 2px;">
-          <button class="btn-primary" onclick="fetchAndRenderDiff()">比对工作区 Diff</button>
+          <button class="btn-primary" onclick="fetchAndRenderDiff(null, true)">比对工作区 Diff</button>
           <button id="diffRefreshBtn" class="btn-outline" onclick="refreshCurrentDiff()" title="重新分析并刷新当前 Diff 视图">🔄 刷新 Diff</button>
         </div>
       </div>
@@ -1414,13 +1424,15 @@
     let currentDiffTarget = '';
     let currentDiffMode = null; // 'uncommitted' | 'all' | 'committed'
     let pendingRestoreState = null;
+    let isRestoringHistory = false;
+    let historyRestoreQueue = Promise.resolve();
     let scanDirectoryConfig = { customDirectories: [] };
     let scanDirectoryDraft = [];
     let worktreeRemoveRequest = null;
 
     function selectDiffMode(mode) {
       currentDiffMode = mode;
-      fetchAndRenderDiff(mode);
+      fetchAndRenderDiff(mode, true);
     }
 
     const STARRED_STORAGE_KEY = 'git_lens_starred_repos';
@@ -1592,7 +1604,7 @@
     }
 
     // 状态管理：从 URL 或 sessionStorage 提取状态（支持多标签页独立隔离，刷新不丢状态）
-    function getStoredState() {
+    function getUrlState() {
       const url = new URL(window.location.href);
       const urlRepo = url.searchParams.get('repo');
       const urlTab = url.searchParams.get('tab');
@@ -1601,18 +1613,28 @@
       const urlUncommitted = url.searchParams.get('uncommitted');
       const urlBase = url.searchParams.get('base');
       const urlTarget = url.searchParams.get('target');
+      const urlMode = url.searchParams.get('mode');
+      const urlCommits = url.searchParams.get('commits');
+      const urlCommitsFull = url.searchParams.get('commitsFull');
 
-      if (urlRepo || urlTab || urlQ || urlDiffType) {
-        return {
+      if (!urlRepo && !urlTab && !urlQ && !urlDiffType && !urlCommits) return null;
+      return {
           repo: urlRepo || '',
           tab: urlTab || 'overview',
           q: urlQ || '',
           diffType: urlDiffType || null,
           uncommitted: urlUncommitted || '',
           base: urlBase || '',
-          target: urlTarget || ''
-        };
-      }
+          target: urlTarget || '',
+          mode: urlMode || null,
+          commits: urlCommits || '',
+          commitsFull: urlCommitsFull === '1'
+      };
+    }
+
+    function getStoredState() {
+      const urlState = getUrlState();
+      if (urlState) return urlState;
 
       // 若 URL 无参数，尝试从本浏览器 Tab 独享的 sessionStorage 读取（隔离其他 Tab）
       try {
@@ -1623,7 +1645,7 @@
       return null;
     }
 
-    function syncStateToUrl() {
+    function syncStateToUrl(pushHistory = false) {
       try {
         const url = new URL(window.location.href);
         if (currentRepo) url.searchParams.set('repo', currentRepo);
@@ -1654,14 +1676,33 @@
             url.searchParams.delete('base');
             url.searchParams.delete('target');
           }
+          if (currentDiffMode) url.searchParams.set('mode', currentDiffMode);
+          else url.searchParams.delete('mode');
         } else {
           url.searchParams.delete('diffType');
           url.searchParams.delete('uncommitted');
           url.searchParams.delete('base');
           url.searchParams.delete('target');
+          url.searchParams.delete('mode');
         }
 
-        window.history.replaceState(null, '', url.toString());
+        if (commitsDrawerState.isOpen && commitsDrawerState.worktreePath) {
+          url.searchParams.set('commits', commitsDrawerState.worktreePath);
+          if (commitsDrawerState.fullHistory) url.searchParams.set('commitsFull', '1');
+          else url.searchParams.delete('commitsFull');
+        } else {
+          url.searchParams.delete('commits');
+          url.searchParams.delete('commitsFull');
+        }
+
+        // 用户主动切换页面状态才新增历史项；恢复历史时保留浏览器正在访问的 URL。
+        if (!isRestoringHistory) {
+          if (pushHistory && url.toString() !== window.location.href) {
+            window.history.pushState(null, '', url.toString());
+          } else {
+            window.history.replaceState(null, '', url.toString());
+          }
+        }
 
         // 同时写入当前 Tab 专属的 sessionStorage
         sessionStorage.setItem(TAB_STATE_STORAGE_KEY, JSON.stringify({
@@ -1671,7 +1712,10 @@
           diffType: currentDiffType,
           uncommitted: currentUncommittedPath,
           base: document.getElementById('diffBaseSelect')?.value || currentDiffBase,
-          target: document.getElementById('diffTargetSelect')?.value || currentDiffTarget
+          target: document.getElementById('diffTargetSelect')?.value || currentDiffTarget,
+          mode: currentDiffMode,
+          commits: commitsDrawerState.isOpen ? commitsDrawerState.worktreePath : '',
+          commitsFull: commitsDrawerState.isOpen && commitsDrawerState.fullHistory
         }));
       } catch (e) {
         console.warn('syncStateToUrl error:', e);
@@ -1854,11 +1898,11 @@
       document.getElementById('repoSelect').value = repoPath;
       updateRepoTriggerText();
       renderRepoDropdownList();
-      syncStateToUrl();
+      syncStateToUrl(true);
       inspectRepo(repoPath);
     }
 
-    function switchTab(tab) {
+    function switchTab(tab, pushHistory = true) {
       activeTab = tab;
       document.getElementById('tabOverview').className = tab === 'overview' ? 'tab-btn active' : 'tab-btn';
       document.getElementById('tabDiff').className = tab === 'diff' ? 'tab-btn active' : 'tab-btn';
@@ -1869,12 +1913,13 @@
       if (tab === 'diff') {
         populateDiffSelectors();
       }
-      syncStateToUrl();
+      syncStateToUrl(pushHistory);
     }
 
-    async function loadProjects() {
+    async function loadProjects(useStoredState = true) {
       // 提取保存的状态（URL 参数优先，其次 sessionStorage）
-      pendingRestoreState = getStoredState();
+      pendingRestoreState = useStoredState ? getStoredState() : getUrlState();
+      isRestoringHistory = Boolean(pendingRestoreState);
 
       await loadScanDirectoryConfig();
 
@@ -1912,26 +1957,46 @@
         sel.value = currentRepo;
         updateRepoTriggerText();
         renderRepoDropdownList();
-        syncStateToUrl();
+        syncStateToUrl(false);
 
         await inspectRepo(currentRepo);
 
+        if (!pendingRestoreState?.commits && commitsDrawerState.isOpen) {
+          closeCommitsDrawer(false);
+        }
+
         // 恢复 Tab 状态与 Diff 比对
         if (pendingRestoreState) {
+          switchTab(pendingRestoreState.tab === 'diff' ? 'diff' : 'overview', false);
           if (pendingRestoreState.tab === 'diff') {
-            switchTab('diff');
             if (pendingRestoreState.diffType === 'uncommitted' && pendingRestoreState.uncommitted) {
-              viewUncommittedDiff(pendingRestoreState.uncommitted);
+              const baseSel = document.getElementById('diffBaseSelect');
+              const targetSel = document.getElementById('diffTargetSelect');
+              if (targetSel) targetSel.value = pendingRestoreState.uncommitted;
+              if (baseSel && (!baseSel.value || baseSel.value === pendingRestoreState.uncommitted)) {
+                const other = currentWorktrees.find(w => w.path !== pendingRestoreState.uncommitted);
+                if (other) baseSel.value = other.path;
+              }
+              currentDiffType = 'worktree';
+              currentUncommittedPath = pendingRestoreState.uncommitted;
+              currentDiffMode = 'uncommitted';
+              fetchAndRenderDiff('uncommitted', false);
             } else if (pendingRestoreState.diffType === 'worktree' && pendingRestoreState.base && pendingRestoreState.target) {
               const baseSel = document.getElementById('diffBaseSelect');
               const targetSel = document.getElementById('diffTargetSelect');
               if (baseSel) baseSel.value = pendingRestoreState.base;
               if (targetSel) targetSel.value = pendingRestoreState.target;
-              fetchAndRenderDiff();
+              currentDiffMode = pendingRestoreState.mode || null;
+              fetchAndRenderDiff(pendingRestoreState.mode, false);
             }
+          }
+          if (pendingRestoreState.commits) {
+            await openCommitsDrawer(pendingRestoreState.commits, pendingRestoreState.commitsFull, false);
           }
           pendingRestoreState = null;
         }
+        isRestoringHistory = false;
+        syncStateToUrl(false);
       } else {
         currentRepo = '';
         currentWorktrees = [];
@@ -1955,6 +2020,7 @@
             <div style="font-size: 16px; margin-bottom: 8px;">请先添加扫描目录</div>
             <div style="font-size: 13px;">添加目录后，Git Lens 会在这里展示可用仓库的 Worktree 差异。</div>
           </div>`;
+        isRestoringHistory = false;
         syncStateToUrl();
       }
 
@@ -2033,15 +2099,26 @@
         ? currentBranches.filter(b => includesKeyword([b.name, b.relativeTime, b.author, b.subject, b.redundancyReason], keyword))
         : currentBranches;
 
-      document.getElementById('wtCountBadge').textContent = keyword
-        ? `${worktrees.length} / ${currentWorktrees.length} 个`
-        : `${currentWorktrees.length} 个`;
-      document.getElementById('brCountBadge').textContent = keyword
-        ? `${branches.length} / ${currentBranches.length} 个`
-        : `${currentBranches.length} 个`;
+      updateListCountBadges(worktrees.length, branches.length, keyword);
 
       renderWorktrees(worktrees, keyword);
       renderBranches(branches, currentMainBranch, keyword);
+    }
+
+    function updateListCountBadges(worktreeCount = null, branchCount = null, keyword = searchKeyword.trim().toLocaleLowerCase()) {
+      const visibleWorktrees = worktreeCount === null
+        ? (keyword ? currentWorktrees.filter(wt => includesKeyword([wt.path, wt.branch, wt.lastCommit?.relativeTime, wt.lastCommit?.author, wt.lastCommit?.subject], keyword)) : currentWorktrees)
+        : null;
+      const visibleBranches = branchCount === null
+        ? (keyword ? currentBranches.filter(b => includesKeyword([b.name, b.relativeTime, b.author, b.subject, b.redundancyReason], keyword)) : currentBranches)
+        : null;
+
+      document.getElementById('wtCountBadge').textContent = keyword
+        ? `${worktreeCount ?? visibleWorktrees.length} / ${currentWorktrees.length} 个`
+        : `${currentWorktrees.length} 个`;
+      document.getElementById('brCountBadge').textContent = keyword
+        ? `${branchCount ?? visibleBranches.length} / ${currentBranches.length} 个`
+        : `${currentBranches.length} 个`;
     }
 
     function renderWorktrees(worktrees, keyword) {
@@ -2091,7 +2168,7 @@
           <div class="item-actions">
             <div class="item-actions-diff-group">
               ${wt.isDirty ? `<button class="btn-outline" onclick="viewUncommittedDiff('${escapeHtml(wt.path)}')" style="color: var(--warning); border-color: rgba(210, 153, 34, 0.4);">未提交 Diff (${wt.dirtyCount})</button>` : ''}
-              ${wt.existsOnDisk ? `<button class="btn-outline" onclick="openCommitsDrawer('${escapeHtml(wt.path)}')" title="查看该分支相对主干的提交记录">提交记录</button>` : ''}
+              ${wt.existsOnDisk ? `<button class="btn-outline" onclick="openCommitsDrawer('${escapeHtml(wt.path)}')" title="${wt.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>` : ''}
               <button class="btn-outline" onclick="viewDiffAgainstMain('${escapeHtml(wt.path)}')">与主干对比</button>
             </div>
             ${!isSafeMain ? `<button class="btn-danger btn-remove-wt" id="btn-rm-wt-${encodeURIComponent(wt.path).replace(/%/g, '_')}" onclick="removeWt('${escapeHtml(wt.path)}')">移除</button>` : ''}
@@ -2099,6 +2176,43 @@
         `;
         container.appendChild(div);
       });
+    }
+
+    function createBranchItemDom(b, mainBranch) {
+      const div = document.createElement('div');
+      div.className = 'list-item';
+      div.id = 'br-item-' + encodeURIComponent(b.name).replace(/%/g, '_');
+
+      let tags = [];
+      if (b.isMain) tags.push('<span class="badge badge-success">主分支</span>');
+      if (b.inUseByWorktree) tags.push('<span class="badge">🌳 Worktree 绑定中</span>');
+      if (b.isMerged) {
+        tags.push(`<span class="badge" title="${b.isDirectlyMerged ? '分支提交已直接进入主分支历史' : '分支改动已通过内容或协调分支进入主分支'}">${b.isDirectlyMerged ? '已合入主干' : '内容已合入主干'}</span>`);
+      }
+
+      div.innerHTML = `
+        <div class="item-main">
+          <div class="item-header-row">
+            <div class="item-name">
+              <span>🌿</span>
+              <span>${escapeHtml(b.name)}</span>
+            </div>
+            <div class="item-tags">${tags.join(' ')}</div>
+          </div>
+          <div class="item-desc">${b.relativeTime} 由 ${escapeHtml(b.author)} 提交: "${escapeHtml(b.subject || '-')}"</div>
+          ${b.redundancyReason ? `<div class="item-alert">⚠️ ${escapeHtml(b.redundancyReason)}${b.isStaleOnly ? ' <span class="stale-delete-hint">（谨慎删除）</span>' : ''}</div>` : ''}
+          ${b.historicalIntegration && b.historicalIntegration.currentDifferencePaths.length
+            ? `<div class="item-desc" title="${escapeHtml(b.historicalIntegration.currentDifferencePaths.join('\n'))}">历史整合提交后仍有 ${b.historicalIntegration.currentDifferencePaths.length} 个差异文件，均可由后续主分支提交解释（悬停查看路径）。</div>`
+            : ''}
+          ${!b.isMain && !b.isMerged && b.contentComparison && b.contentComparison.changedCount > 0
+            ? `<div class="item-desc" title="${escapeHtml(b.contentComparison.differentPaths.join('\n'))}">与 ${escapeHtml(mainBranch)} 比较：分支改动的 ${b.contentComparison.changedCount} 个文件中，${b.contentComparison.equalCount} 个当前内容一致，${b.contentComparison.differentPaths.length} 个仍有差异${b.contentComparison.differentPaths.length ? '（悬停查看路径）' : ''}。需核对后删除。</div>`
+            : ''}
+        </div>
+        <div class="item-actions">
+          ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${escapeHtml(b.name)}', ${!b.isMerged})">删除</button>` : ''}
+        </div>
+      `;
+      return div;
     }
 
     function renderBranches(branches, mainBranch, keyword) {
@@ -2119,41 +2233,32 @@
 
       container.innerHTML = '';
       sortedBranches.forEach(b => {
-        const div = document.createElement('div');
-        div.className = 'list-item';
-        div.id = 'br-item-' + encodeURIComponent(b.name).replace(/%/g, '_');
-
-        let tags = [];
-        if (b.isMain) tags.push('<span class="badge badge-success">主分支</span>');
-        if (b.inUseByWorktree) tags.push('<span class="badge">🌳 Worktree 绑定中</span>');
-        if (b.isMerged) {
-          tags.push(`<span class="badge" title="${b.isDirectlyMerged ? '分支提交已直接进入主分支历史' : '分支改动已通过内容或协调分支进入主分支'}">${b.isDirectlyMerged ? '已合入主干' : '内容已合入主干'}</span>`);
-        }
-
-        div.innerHTML = `
-          <div class="item-main">
-            <div class="item-header-row">
-              <div class="item-name">
-                <span>🌿</span>
-                <span>${escapeHtml(b.name)}</span>
-              </div>
-              <div class="item-tags">${tags.join(' ')}</div>
-            </div>
-            <div class="item-desc">${b.relativeTime} 由 ${escapeHtml(b.author)} 提交: "${escapeHtml(b.subject || '-')}"</div>
-            ${b.redundancyReason ? `<div class="item-alert">⚠️ ${escapeHtml(b.redundancyReason)}${b.isStaleOnly ? ' <span class="stale-delete-hint">（谨慎删除）</span>' : ''}</div>` : ''}
-            ${b.historicalIntegration && b.historicalIntegration.currentDifferencePaths.length
-              ? `<div class="item-desc" title="${escapeHtml(b.historicalIntegration.currentDifferencePaths.join('\n'))}">历史整合提交后仍有 ${b.historicalIntegration.currentDifferencePaths.length} 个差异文件，均可由后续主分支提交解释（悬停查看路径）。</div>`
-              : ''}
-            ${!b.isMain && !b.isMerged && b.contentComparison && b.contentComparison.changedCount > 0
-              ? `<div class="item-desc" title="${escapeHtml(b.contentComparison.differentPaths.join('\n'))}">与 ${escapeHtml(mainBranch)} 比较：分支改动的 ${b.contentComparison.changedCount} 个文件中，${b.contentComparison.equalCount} 个当前内容一致，${b.contentComparison.differentPaths.length} 个仍有差异${b.contentComparison.differentPaths.length ? '（悬停查看路径）' : ''}。需核对后删除。</div>`
-              : ''}
-          </div>
-          <div class="item-actions">
-            ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${escapeHtml(b.name)}', ${!b.isMerged})">删除</button>` : ''}
-          </div>
-        `;
-        container.appendChild(div);
+        container.appendChild(createBranchItemDom(b, mainBranch));
       });
+    }
+
+    function updateBranchAfterWorktreeRemoval(branchName) {
+      const branch = currentBranches.find(b => b.name === branchName);
+      if (!branch) return;
+
+      branch.inUseByWorktree = false;
+      branch.isSafeToDelete = !branch.isMain && branch.isMerged;
+      branch.isStaleOnly = !branch.isMain && branch.isStale && !branch.isSafeToDelete;
+      if (branch.isSafeToDelete) {
+        branch.redundancyReason = branch.isDirectlyMerged
+          ? '已合并至主分支且无 Worktree 引用 (安全可删)'
+          : '分支改动已合入主分支且无 Worktree 引用 (安全可删)';
+      } else if (branch.isStaleOnly) {
+        branch.redundancyReason = `超过 ${branch.daysOld} 天未活动陈旧分支`;
+      } else {
+        branch.redundancyReason = null;
+      }
+
+      const itemDom = document.getElementById(`br-item-${encodeURIComponent(branchName).replace(/%/g, '_')}`);
+      if (itemDom) {
+        // 仅替换解除绑定的分支条目，保留其他列表项和滚动位置。
+        itemDom.replaceWith(createBranchItemDom(branch, currentMainBranch));
+      }
     }
 
     /* 优化 1：精细化单个 Worktree 移除判断与单项 DOM 剔除 */
@@ -2194,9 +2299,29 @@
             itemDom.style.opacity = '0';
             itemDom.style.transform = 'translateX(20px)';
             await new Promise(resolve => setTimeout(resolve, 250));
+            itemDom.remove();
           }
-          // 重新读取 Git 状态，确保保留分支时的 Worktree 绑定标记和删除按钮同步更新。
-          await inspectRepo(currentRepo);
+
+          currentWorktrees = currentWorktrees.filter(w => w.path !== worktreePath);
+          if (branchName) {
+            if (data.branchDeleted) {
+              currentBranches = currentBranches.filter(b => b.name !== branchName);
+              const branchDom = document.getElementById(`br-item-${encodeURIComponent(branchName).replace(/%/g, '_')}`);
+              if (branchDom) {
+                branchDom.style.opacity = '0';
+                branchDom.style.transform = 'translateX(20px)';
+                await new Promise(resolve => setTimeout(resolve, 250));
+                branchDom.remove();
+              }
+            } else {
+              // 分支保留或删除失败时，解除 Worktree 绑定并恢复分支操作按钮。
+              updateBranchAfterWorktreeRemoval(branchName);
+            }
+          }
+
+          updateMetrics();
+          updateListCountBadges();
+          populateDiffSelectors();
           if (data.branchDeleteError) {
             alert(`Worktree 已移除，但分支「${data.branchName || branchName}」删除失败：${data.branchDeleteError}`);
           }
@@ -2242,15 +2367,15 @@
 
         if (!checkData.exists) {
           currentBranches = currentBranches.filter(b => b.name !== branchName);
+          // 分支已删除，立即刷新指标与列表计数徽标，避免分支数显示滞后。
+          updateMetrics();
+          updateListCountBadges();
 
           const itemDom = document.getElementById(`br-item-${domKey}`);
           if (itemDom) {
             itemDom.style.opacity = '0';
             itemDom.style.transform = 'translateX(20px)';
-            setTimeout(() => {
-              itemDom.remove();
-              updateMetrics();
-            }, 250);
+            setTimeout(() => itemDom.remove(), 250);
           } else {
             renderFilteredLists();
           }
@@ -2322,17 +2447,33 @@
       const temp = baseSel.value;
       baseSel.value = targetSel.value;
       targetSel.value = temp;
-      fetchAndRenderDiff();
+      fetchAndRenderDiff(null, true);
+    }
+
+    // 落后状态默认隐藏主干独有文件；用户明确查看时，反向对比即可看到这些更新。
+    function showBehindChanges() {
+      const baseSel = document.getElementById('diffBaseSelect');
+      const targetSel = document.getElementById('diffTargetSelect');
+      if (!baseSel || !targetSel || baseSel.value === targetSel.value) return;
+
+      const temp = baseSel.value;
+      baseSel.value = targetSel.value;
+      targetSel.value = temp;
+      currentDiffType = 'worktree';
+      currentDiffBase = baseSel.value;
+      currentDiffTarget = targetSel.value;
+      currentDiffMode = 'committed';
+      fetchAndRenderDiff('committed', true);
     }
 
     function viewDiffAgainstMain(targetWorktreePath) {
-      switchTab('diff');
       const baseSel = document.getElementById('diffBaseSelect');
       const targetSel = document.getElementById('diffTargetSelect');
       if (currentWorktrees.length > 0) {
         baseSel.value = currentWorktrees[0].path;
         targetSel.value = targetWorktreePath;
-        fetchAndRenderDiff();
+        switchTab('diff');
+        fetchAndRenderDiff(null, false);
       }
     }
 
@@ -2356,10 +2497,10 @@
       currentDiffMode = 'uncommitted';
 
       switchTab('diff');
-      await fetchAndRenderDiff('uncommitted');
+      await fetchAndRenderDiff('uncommitted', false);
     }
 
-    async function fetchAndRenderDiff(requestedMode = null) {
+    async function fetchAndRenderDiff(requestedMode = null, pushHistory = false) {
       const base = document.getElementById('diffBaseSelect').value;
       const target = document.getElementById('diffTargetSelect').value;
       const container = document.getElementById('diffResultsContainer');
@@ -2381,7 +2522,7 @@
       if (requestedMode) {
         currentDiffMode = requestedMode;
       }
-      syncStateToUrl();
+      syncStateToUrl(pushHistory);
 
       container.innerHTML = '<div class="loading">正在比对工作区代码差异...</div>';
 
@@ -2567,6 +2708,7 @@
       const behind = diff.behind || 0;
       const counts = diff.counts || { uncommitted: 0, all: 0, committed: 0 };
       const effectiveMode = diff.effectiveMode || 'all';
+      const isBehindOnly = !diff.isSameWorktree && ahead === 0 && behind > 0;
 
       let syncStatusBadge = '';
       if (diff.isSameWorktree) {
@@ -2577,6 +2719,8 @@
         syncStatusBadge = '<span class="badge badge-success">提交内容完全同步</span>';
       } else if (ahead === 0 && behind === 0) {
         syncStatusBadge = '<span class="badge badge-success">两分支提交完全同步</span>';
+      } else if (isBehindOnly) {
+        syncStatusBadge = `<button type="button" class="badge badge-warning diff-sync-action" onclick="showBehindChanges()" title="点击反向查看基准分支引入的文件变更">落后 ${behind} 个提交 · 点击查看主干变更</button>`;
       } else {
         const parts = [];
         if (ahead > 0) parts.push(`<span class="badge badge-success">领先 ${ahead} 个提交</span>`);
@@ -2624,7 +2768,7 @@
         } else if (diff.isCommittedContentEqual && (diff.historyAhead > 0 || diff.historyBehind > 0)) {
           emptyDesc = '🎉 两个工作区的最终文件内容一致。<br><span style="color: var(--text-muted); font-size: 13px;">提交历史存在差异，但这通常是 squash 合入造成的历史差异，已从文件 Diff 中过滤。</span>';
         } else if (behind > 0 && ahead === 0) {
-          emptyDesc = `ℹ️ <b>对比分支当前落后于基准分支（落后 ${behind} 个提交）</b>，且没有领先的独有代码修改。<br><span style="color: var(--text-muted); font-size: 13px;">已过滤反向差异，避免将基准分支的更新误显示为被删除。若需查看基准分支引入的新代码，可点击上方<b>【⇄ 对调】</b>。</span>`;
+          emptyDesc = `ℹ️ <b>对比分支当前落后于基准分支（落后 ${behind} 个提交）</b>，且没有领先的独有代码修改。<br><span style="color: var(--text-muted); font-size: 13px;">已默认隐藏基准分支的更新；若需查看这些文件变更，可点击右上角<b>【落后 ${behind} 个提交】</b>状态。</span>`;
         }
 
         container.innerHTML = `
@@ -2856,6 +3000,10 @@
       worktreePath: null,
       branch: null,
       base: null,
+      baseAvailable: true,
+      fullHistory: false,
+      isFullHistory: false,
+      isMainHistory: false,
       head: null,
       totalCommits: 0,
       loadedCount: 0,
@@ -2863,15 +3011,34 @@
       isOpen: false
     };
     let commitsDrawerReqSeq = 0;
+    let commitsDrawerPageScrollY = null;
 
-    async function openCommitsDrawer(worktreePath) {
+    // 抽屉打开期间固定主页面，触控板、滚轮和触摸滑动都只能作用于抽屉。
+    function setCommitsDrawerPageScrollLocked(locked) {
+      if (locked && commitsDrawerPageScrollY === null) {
+        commitsDrawerPageScrollY = window.scrollY;
+        document.body.style.position = 'fixed';
+        document.body.style.top = `-${commitsDrawerPageScrollY}px`;
+        document.body.style.width = '100%';
+      } else if (!locked && commitsDrawerPageScrollY !== null) {
+        const scrollY = commitsDrawerPageScrollY;
+        commitsDrawerPageScrollY = null;
+        document.body.style.position = '';
+        document.body.style.top = '';
+        document.body.style.width = '';
+        window.scrollTo(0, scrollY);
+      }
+    }
+
+    async function openCommitsDrawer(worktreePath, fullHistory = false, pushHistory = true) {
       commitsDrawerState = {
-        worktreePath, branch: null, base: null, head: null,
+        worktreePath, branch: null, base: null, baseAvailable: true, fullHistory, isFullHistory: false, isMainHistory: false, head: null,
         totalCommits: 0, loadedCount: 0, limit: 30, isOpen: true
       };
 
       const overlay = document.getElementById('commitsDrawerOverlay');
       const drawer = document.getElementById('commitsDrawer');
+      setCommitsDrawerPageScrollLocked(true);
       document.getElementById('commitsDrawerMeta').innerHTML = '';
       document.getElementById('commitsDrawerFooter').style.display = 'none';
       overlay.style.display = 'block';
@@ -2880,16 +3047,19 @@
         overlay.classList.add('open');
         drawer.classList.add('open');
       });
+      syncStateToUrl(pushHistory);
       document.getElementById('commitsDrawerBody').innerHTML =
-        '<div class="loading">正在加载提交记录...</div>';
+        `<div class="loading">正在加载${fullHistory ? '完整历史' : '提交记录'}...</div>`;
 
       await fetchAndRenderCommits();
     }
 
-    function closeCommitsDrawer() {
+    function closeCommitsDrawer(pushHistory = true) {
       if (!commitsDrawerState.isOpen) return;
       commitsDrawerState.isOpen = false;
       commitsDrawerReqSeq++; // 使在途请求失效
+      syncStateToUrl(pushHistory);
+      setCommitsDrawerPageScrollLocked(false);
       const overlay = document.getElementById('commitsDrawerOverlay');
       const drawer = document.getElementById('commitsDrawer');
       overlay.classList.remove('open');
@@ -2910,6 +3080,9 @@
         limit: String(limit),
         offset: String(loadedCount)
       });
+      if (commitsDrawerState.fullHistory) {
+        params.set('fullHistory', '1');
+      }
 
       try {
         const resp = await fetch(`/api/worktree-commits?${params}`);
@@ -2920,6 +3093,10 @@
         if (loadedCount === 0) {
           commitsDrawerState.branch = data.branch;
           commitsDrawerState.base = data.base;
+          commitsDrawerState.baseAvailable = data.baseAvailable !== false;
+          commitsDrawerState.fullHistory = Boolean(data.isFullHistory);
+          commitsDrawerState.isFullHistory = Boolean(data.isFullHistory);
+          commitsDrawerState.isMainHistory = Boolean(data.isMainHistory);
           commitsDrawerState.head = data.head;
           commitsDrawerState.totalCommits = data.totalCommits;
           renderCommitsMeta(data);
@@ -2942,22 +3119,55 @@
     }
 
     function renderCommitsMeta(data) {
+      const scopeText = data.isFullHistory
+        ? `${data.isMainHistory ? '主干' : '当前分支'}完整历史 · 共 ${data.totalCommits} 个提交`
+        : data.baseAvailable === false
+          ? `无法解析基准 ${escapeHtml(data.base)}，未加载提交`
+        : `领先 ${escapeHtml(data.base)} ${data.totalCommits} 个提交`;
+      const fullHistoryButton = data.isMainHistory
+        ? ''
+        : data.isFullHistory
+          ? '<button type="button" class="btn-outline" style="padding: 3px 8px; font-size: 12px;" onclick="switchCommitsHistory(false)">返回领先提交</button>'
+          : '<button type="button" class="btn-outline" style="padding: 3px 8px; font-size: 12px;" onclick="switchCommitsHistory(true)">查看全量历史</button>';
       document.getElementById('commitsDrawerMeta').innerHTML = `
         <span class="badge" title="基准: ${escapeHtml(data.base)}">🌿 ${escapeHtml(data.branch)}</span>
         <code style="color: var(--accent);">${escapeHtml((data.head || '').slice(0, 7))}</code>
-        <span>领先 ${escapeHtml(data.base)} ${data.totalCommits} 个提交</span>
+        <span>${scopeText}</span>
+        ${fullHistoryButton}
       `;
+    }
+
+    // 功能分支默认只看相对主干的领先提交，完整历史由用户手动切换。
+    function switchCommitsHistory(fullHistory) {
+      if (!commitsDrawerState.isOpen || commitsDrawerState.fullHistory === fullHistory) return;
+      commitsDrawerState.fullHistory = fullHistory;
+      commitsDrawerState.loadedCount = 0;
+      document.getElementById('commitsDrawerFooter').style.display = 'none';
+      syncStateToUrl(true);
+      document.getElementById('commitsDrawerBody').innerHTML =
+        `<div class="loading">正在加载${fullHistory ? '完整历史' : '领先提交'}...</div>`;
+      fetchAndRenderCommits();
     }
 
     function renderCommitsList(commits, isFirstLoad) {
       const body = document.getElementById('commitsDrawerBody');
 
       if (isFirstLoad && commits.length === 0) {
+        const emptyText = commitsDrawerState.isFullHistory
+          ? (commitsDrawerState.isMainHistory ? '该主干暂无提交记录' : '该分支暂无提交记录')
+          : commitsDrawerState.base && commitsDrawerState.baseAvailable === false
+            ? '无法解析主干基准，暂未加载提交记录'
+          : '该分支暂无额外提交';
+        const emptyHint = commitsDrawerState.isFullHistory
+          ? ''
+          : commitsDrawerState.base && commitsDrawerState.baseAvailable === false
+            ? '<div style="font-size:12px">请确认主干分支仍存在，或刷新仓库状态后重试</div>'
+          : `<div style="font-size:12px">相对 ${escapeHtml(commitsDrawerState.base)} 没有领先提交</div>`;
         body.innerHTML = `
           <div class="empty-state">
             <div class="empty-state-icon">📋</div>
-            <div>该分支暂无额外提交</div>
-            <div style="font-size:12px">HEAD 与 ${escapeHtml(commitsDrawerState.base)} 分支指向同一提交</div>
+            <div>${emptyText}</div>
+            ${emptyHint}
           </div>`;
         return;
       }
@@ -3022,6 +3232,94 @@
       fetchAndRenderCommits();
     }
 
+    async function restoreCurrentRepoHistoryState(state) {
+      isRestoringHistory = true;
+      try {
+        searchKeyword = state.q || '';
+        document.getElementById('searchInput').value = searchKeyword;
+        renderFilteredLists();
+
+        switchTab(state.tab === 'diff' ? 'diff' : 'overview', false);
+        if (state.tab === 'diff' && state.diffType === 'worktree' && state.base && state.target) {
+          document.getElementById('diffBaseSelect').value = state.base;
+          document.getElementById('diffTargetSelect').value = state.target;
+          currentDiffMode = state.mode || null;
+          await fetchAndRenderDiff(currentDiffMode, false);
+        } else if (state.tab === 'diff' && state.diffType === 'uncommitted' && state.uncommitted) {
+          currentUncommittedPath = state.uncommitted;
+          currentDiffMode = 'uncommitted';
+          document.getElementById('diffTargetSelect').value = state.uncommitted;
+          await fetchAndRenderDiff('uncommitted', false);
+        } else if (state.tab === 'diff') {
+          currentDiffType = null;
+          currentDiffMode = null;
+          document.getElementById('diffResultsContainer').innerHTML = '';
+        }
+
+        if (state.commits) {
+          if (!commitsDrawerState.isOpen
+            || commitsDrawerState.worktreePath !== state.commits
+            || commitsDrawerState.fullHistory !== state.commitsFull) {
+            await openCommitsDrawer(state.commits, state.commitsFull, false);
+          }
+        } else if (commitsDrawerState.isOpen) {
+          closeCommitsDrawer(false);
+        }
+      } finally {
+        isRestoringHistory = false;
+        syncStateToUrl(false);
+      }
+    }
+
+    // 抽屉滚动到边界时拦截继续滚动，避免滚动链传递到后面的主页面。
+    function setupCommitsDrawerScrollGuard() {
+      const body = document.getElementById('commitsDrawerBody');
+      if (!body) return;
+
+      body.addEventListener('wheel', (event) => {
+        const atTop = body.scrollTop <= 0;
+        const atBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 1;
+        const tryingPastTop = event.deltaY < 0 && atTop;
+        const tryingPastBottom = event.deltaY > 0 && atBottom;
+        event.stopPropagation();
+        if (tryingPastTop || tryingPastBottom) event.preventDefault();
+      }, { passive: false });
+
+      let lastTouchY = null;
+      body.addEventListener('touchstart', (event) => {
+        lastTouchY = event.touches[0]?.clientY ?? null;
+      }, { passive: true });
+      body.addEventListener('touchmove', (event) => {
+        const currentTouchY = event.touches[0]?.clientY;
+        if (lastTouchY === null || currentTouchY === undefined) return;
+
+        const scrollDirection = lastTouchY - currentTouchY;
+        const atTop = body.scrollTop <= 0;
+        const atBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 1;
+        const tryingPastTop = scrollDirection < 0 && atTop;
+        const tryingPastBottom = scrollDirection > 0 && atBottom;
+        event.stopPropagation();
+        if (tryingPastTop || tryingPastBottom) event.preventDefault();
+        lastTouchY = currentTouchY;
+      }, { passive: false });
+      body.addEventListener('touchend', () => {
+        lastTouchY = null;
+      }, { passive: true });
+    }
+
+    // 浏览器前进/后退只恢复应用状态，不把抽屉当成独立页面导航。
+    window.addEventListener('popstate', () => {
+      historyRestoreQueue = historyRestoreQueue
+        .then(() => {
+          const state = getUrlState();
+          if (state?.repo && state.repo === currentRepo) {
+            return restoreCurrentRepoHistoryState(state);
+          }
+          return loadProjects(false);
+        })
+        .catch((err) => console.warn('恢复页面历史状态失败:', err.message));
+    });
+
     /* 页面事件监听 */
     document.getElementById('repoFilterInput').addEventListener('input', (e) => {
       repoFilterKeyword = e.target.value;
@@ -3039,6 +3337,7 @@
     document.getElementById('worktreeRemoveModal').addEventListener('click', (e) => {
       if (e.target.id === 'worktreeRemoveModal') closeWorktreeRemoveModal(false);
     });
+    document.addEventListener('DOMContentLoaded', setupCommitsDrawerScrollGuard);
     document.getElementById('refreshBtn').addEventListener('click', () => {
       loadProjects();
     });

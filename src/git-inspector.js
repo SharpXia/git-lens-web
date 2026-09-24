@@ -231,7 +231,9 @@ export async function getWorktrees(repoPath) {
     try {
       const targetTree = await runGit(repoPath, ['rev-parse', `${targetRef}^{tree}`]);
       wt.isContentEqualToMain = Boolean(mainTree) && mainTree === targetTree;
-      wt.hasCommittedDiff = Boolean(mainTree) && mainTree !== targetTree;
+      // 只有 Target 自己有领先提交时，文件树差异才属于它的已提交改动。
+      // Target 仅落后于主干时，树差异来自 Main 的更新，不能标记为 Target Diff。
+      wt.hasCommittedDiff = Boolean(mainTree) && mainTree !== targetTree && wt.historyAheadCount > 0;
     } catch {
       wt.isContentEqualToMain = false;
     }
@@ -700,21 +702,39 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requeste
   const ahead = isCommittedContentEqual ? 0 : historyAhead;
   const behind = isCommittedContentEqual ? 0 : historyBehind;
 
+  // 文件 Diff 只展示 Target 一侧的提交。Target 没有领先提交时，主干相对它的
+  // 更新不应反向显示；内容相同的 squash/rebase 历史也不产生文件 Diff。
+  const hasTargetCommittedChanges = historyAhead > 0 && !isCommittedContentEqual;
+  let targetDiffBase = targetRef;
+  if (hasTargetCommittedChanges) {
+    try {
+      // 分叉场景以共同祖先为基准，避免把 Main 独有提交混入 Target Diff。
+      targetDiffBase = await runGit(repoPath, ['merge-base', sourceRef, targetRef]);
+    } catch {
+      // 无共同祖先时没有三点语义可用，退回 Source 作为比较基准。
+      targetDiffBase = sourceRef;
+    }
+  }
+
   // 2. 检查 Target 工作区自身的未提交/未跟踪改动
   const uncommittedData = await getUncommittedDiff(targetWt.path);
   const hasUncommitted = (uncommittedData.files && uncommittedData.files.length > 0);
 
   // 3. 计算【仅已提交】(committed) 的 diff
   let committedDiff = '';
-  try {
-    committedDiff = await runGit(repoPath, ['diff', '-p', '-U3', sourceRef, targetRef]);
-  } catch (err) {
-    committedDiff = `获取 Diff 失败: ${err.message}`;
+  if (hasTargetCommittedChanges) {
+    try {
+      committedDiff = await runGit(repoPath, ['diff', '-p', '-U3', targetDiffBase, targetRef]);
+    } catch (err) {
+      committedDiff = `获取 Diff 失败: ${err.message}`;
+    }
   }
   const committedFileMap = splitDiffByFiles(committedDiff);
   const committedFiles = [];
   try {
-    const numstatOut = await runGit(repoPath, ['diff', '--numstat', sourceRef, targetRef]);
+    const numstatOut = hasTargetCommittedChanges
+      ? await runGit(repoPath, ['diff', '--numstat', targetDiffBase, targetRef])
+      : '';
     for (const line of numstatOut.split('\n')) {
       if (!line.trim()) continue;
       const [added, deleted, filePath] = line.split('\t');
@@ -735,11 +755,11 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requeste
   const hasCommitted = committedFiles.length > 0;
 
   // 4. 计算【全量：已提交 + 未提交 + untracked】(all)。
-  // 直接以 Source 的最终 Tree 为基准，避免 merge-base 把 squash 后的历史差异重新显示为文件差异。
+  // 领先分支以共同祖先为基准；落后分支以自身 HEAD 为基准，只保留本地未提交修改。
   let allFiles = [];
   try {
-      const allNumstat = await runGit(targetWt.path, ['diff', sourceRef, '--numstat']);
-      const allDiffRaw = await runGit(targetWt.path, ['diff', sourceRef, '-p', '-U3']);
+      const allNumstat = await runGit(targetWt.path, ['diff', targetDiffBase, '--numstat']);
+      const allDiffRaw = await runGit(targetWt.path, ['diff', targetDiffBase, '-p', '-U3']);
       const allDiffMap = splitDiffByFiles(allDiffRaw);
       const seenAll = new Set();
 
@@ -968,6 +988,9 @@ export async function getUncommittedDiff(worktreePath) {
 export async function getWorktreeCommits(worktreePath, options = {}) {
   const limit = Math.min(Math.max(parseInt(options.limit, 10) || 30, 1), 100);
   const offset = Math.max(parseInt(options.offset, 10) || 0, 0);
+  const requestedFullHistory = options.fullHistory === true
+    || options.fullHistory === 'true'
+    || options.fullHistory === '1';
 
   // 0. 路径安全校验: 必须为存在的绝对路径目录 (防止 ENOENT 透传为 500)
   if (!worktreePath || !path.isAbsolute(worktreePath)) {
@@ -993,17 +1016,24 @@ export async function getWorktreeCommits(worktreePath, options = {}) {
   let currentPath = '';
   let branch = '';
   let head = '';
+  let worktreeIndex = -1;
+  let mainBranch = '';
 
   for (const line of lines) {
     if (line.startsWith('worktree ')) {
+      worktreeIndex += 1;
       currentPath = line.slice(9).trim();
     } else if (line.startsWith('HEAD ')) {
       if (path.resolve(currentPath) === path.resolve(worktreePath)) {
         head = line.slice(5).trim();
       }
     } else if (line.startsWith('branch ')) {
+      const parsedBranch = line.slice(7).replace('refs/heads/', '').trim();
+      if (worktreeIndex === 0) {
+        mainBranch = parsedBranch;
+      }
       if (path.resolve(currentPath) === path.resolve(worktreePath)) {
-        branch = line.slice(7).replace('refs/heads/', '').trim();
+        branch = parsedBranch;
       }
     }
   }
@@ -1015,40 +1045,57 @@ export async function getWorktreeCommits(worktreePath, options = {}) {
   // 2. 基准分支检测
   let base = options.base;
   if (!base) {
-    try {
-      const symref = await runGit(worktreePath, ['symbolic-ref', 'refs/remotes/origin/HEAD']);
-      base = symref.split('/').pop() || 'main';
-    } catch {
+    // 优先使用当前仓库主工作区的分支，避免远程默认分支与本地主干不一致。
+    if (mainBranch) {
+      base = mainBranch;
+    } else {
       try {
-        const branches = await runGit(worktreePath, ['branch', '--list']);
-        if (branches.includes('main')) base = 'main';
-        else if (branches.includes('master')) base = 'master';
-        else base = 'main';
+        const symref = await runGit(worktreePath, ['symbolic-ref', 'refs/remotes/origin/HEAD']);
+        base = symref.split('/').pop() || 'main';
       } catch {
-        base = 'main';
+        try {
+          const branches = await runGit(worktreePath, ['branch', '--list']);
+          if (branches.includes('main')) base = 'main';
+          else if (branches.includes('master')) base = 'master';
+          else base = 'main';
+        } catch {
+          base = 'main';
+        }
       }
     }
   }
 
-  // 3. 计算相对 base 的提交范围
-  let revRange = `${base}..HEAD`;
-  try {
-    await runGit(worktreePath, ['rev-parse', '--verify', base]);
-  } catch {
-    revRange = 'HEAD';
-    base = 'HEAD';
+  // 主干默认展示完整历史；其他分支只有用户主动请求时才展示完整历史。
+  const isBaseWorktree = Boolean(branch && branch === base);
+  const isFullHistory = isBaseWorktree || requestedFullHistory;
+
+  // 3. 计算提交范围。功能分支只取相对主干新增的提交，主干取 HEAD 全历史。
+  // 非主干找不到基准时保持空结果，不能退回 HEAD，否则会误显示整条历史。
+  let baseRef = base;
+  let baseAvailable = true;
+  let revRange = isFullHistory ? 'HEAD' : null;
+  if (!isFullHistory) {
+    const baseCandidates = [base, base.startsWith('origin/') ? null : `origin/${base}`].filter(Boolean);
+    baseAvailable = false;
+    for (const candidate of baseCandidates) {
+      try {
+        await runGit(worktreePath, ['rev-parse', '--verify', candidate]);
+        baseRef = candidate;
+        baseAvailable = true;
+        break;
+      } catch {
+        // 继续尝试本地或远程的另一个同名基准引用。
+      }
+    }
+    if (baseAvailable) revRange = `${baseRef}..HEAD`;
   }
 
   // 4. 获取提交总数
   let totalCommits = 0;
-  try {
-    const countOutput = await runGit(worktreePath, ['rev-list', '--count', revRange]);
-    totalCommits = parseInt(countOutput, 10) || 0;
-  } catch {
+  if (revRange) {
     try {
-      const fallbackCount = await runGit(worktreePath, ['rev-list', '--count', 'HEAD']);
-      totalCommits = parseInt(fallbackCount, 10) || 0;
-      revRange = 'HEAD';
+      const countOutput = await runGit(worktreePath, ['rev-list', '--count', revRange]);
+      totalCommits = parseInt(countOutput, 10) || 0;
     } catch {
       totalCommits = 0;
     }
@@ -1058,19 +1105,11 @@ export async function getWorktreeCommits(worktreePath, options = {}) {
   const delimiter = '---COMMIT_END_X---';
   const format = `%H%n%h%n%an%n%ae%n%aI%n%cr%n%s%n%b%n${delimiter}`;
   let rawLogs = '';
-  try {
-    rawLogs = await runGit(worktreePath, [
-      'log',
-      revRange,
-      `--format=${format}`,
-      `--skip=${offset}`,
-      `--max-count=${limit}`
-    ]);
-  } catch {
+  if (revRange) {
     try {
       rawLogs = await runGit(worktreePath, [
         'log',
-        'HEAD',
+        revRange,
         `--format=${format}`,
         `--skip=${offset}`,
         `--max-count=${limit}`
@@ -1106,6 +1145,9 @@ export async function getWorktreeCommits(worktreePath, options = {}) {
     branch: branch || 'HEAD',
     head,
     base,
+    baseAvailable,
+    isFullHistory,
+    isMainHistory: isBaseWorktree,
     totalCommits,
     returnedCount: commits.length,
     hasMore: offset + commits.length < totalCommits,
