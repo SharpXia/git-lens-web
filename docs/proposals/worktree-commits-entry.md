@@ -1,6 +1,26 @@
 # Worktree 提交记录入口方案设计
 
-> 版本: v1.0 | 日期: 2026-09-23 | 状态: 草案
+> 版本: v2.0 | 日期: 2026-09-24 | 状态: 开发中（后端已实现并验证，前端待实现）
+
+> 本文档为「Worktree 提交记录入口」的唯一权威方案。早期的 Tab 式备选方案
+> (`../design-worktree-commit-history-entry.md`) 已废弃，其有价值的设计点
+> （ahead/behind 统计、提交详情展开、单提交 Diff）已并入本文 §7 后续迭代。
+
+## 0. 实施状态
+
+| 模块 | 状态 | 说明 |
+|------|------|------|
+| `src/git-inspector.js` — `getWorktreeCommits()` | ✅ 已实现 | limit/offset 分页、base 自动检测、orphan 降级、NUL 安全分隔解析 |
+| `src/server.js` — `GET /api/worktree-commits` | ✅ 已实现 | 400（缺参/路径/base 非法）、404（路径不存在）、500（git 失败）|
+| 路径安全（§3.3.1/§3.3.2） | ✅ 已实现 | 绝对路径校验、目录存在性 stat 校验、base 字符白名单（拒绝 `..`）|
+| `public/index.html` — 抽屉 UI（§4） | ⏳ 进行中 | 本分支接续开发 |
+
+**已验证行为**（2026-09-24 冒烟测试）:
+- 正常分支: `branch`/`head`/`base=main`/`totalCommits`/`commits[]` 全字段正确
+- 领先 base 的 worktree: `totalCommits=1`, `hasMore=false`
+- 主工作区（HEAD == main）: `totalCommits=0` → 前端需渲染空状态（§2.3.4）
+- `worktree=/tmp/xxx` → 404 `指定的 worktree 路径不存在`
+- `worktree=relative/path` → 400；`base=../etc` → 400
 
 ---
 
@@ -885,20 +905,53 @@ function loadMoreCommits() {
 
 实施本方案需要修改的文件：
 
-| 文件 | 变更类型 | 说明 |
+| 文件 | 变更类型 | 状态 |
 |------|----------|------|
-| `src/git-inspector.js` | 新增函数 | 新增 `getWorktreeCommits(worktreePath, options)` |
-| `src/server.js` | 新增路由 | 新增 `GET /api/worktree-commits` 路由处理 |
-| `public/index.html` | UI 变更 | 新增抽屉 DOM、CSS 样式、JS 交互逻辑 |
+| `src/git-inspector.js` | 新增函数 `getWorktreeCommits(worktreePath, options)`（含 §3.3 路径/参数安全校验） | ✅ 已完成 |
+| `src/server.js` | 新增 `GET /api/worktree-commits` 路由处理（`statusCode` 透传） | ✅ 已完成 |
+| `public/index.html` | 新增抽屉 DOM、CSS 样式、JS 交互逻辑 | ⏳ 进行中 |
 
 ---
 
-## 7. 后续扩展点
+## 7. 后续迭代规划
+
+> 以下条目按优先级排序，吸收自已废弃的 Tab 式备选方案
+> (`../design-worktree-commit-history-entry.md` §4/§5/§8)，接口契约均已对齐本文现有 API 风格。
+
+### 7.1 P1 — Ahead/Behind 统计（抽屉头部增强）
+
+抽屉头部增加相对 base 的 ahead/behind 计数，用户可一眼判断分支与主干的分叉程度。
+
+```
+GET /api/worktree-ahead-behind?worktree=<path>&base=<mainBranch>
+→ { ok, ahead: 12, behind: 3, baseBranch, worktreeBranch }
+底层: git rev-list --left-right --count <base>...HEAD  (输出 "behind\tahead")
+```
+
+### 7.2 P1 — 提交详情展开
+
+点击提交条目展开详情：完整 body、parent SHA、`--numstat` 统计（filesChanged/insertions/deletions）。
+列表接口已返回 `body` 字段；文件级统计需扩展 list 接口或新增详情接口（建议后者，按需加载）。
+
+```
+GET /api/commit-detail?worktree=<path>&sha=<sha>
+底层: git diff-tree -p --numstat --stat <sha>  (merge commit 默认 first-parent)
+```
+
+### 7.3 P2 — 单提交 Diff 查看
+
+在提交详情中提供「查看 Diff」，复用现有 Diff 视图的渲染管线（parseDiffOutput）。
+
+### 7.4 P2 — 提交搜索/过滤
+
+按作者、日期范围、关键词过滤：新增 `author`、`since`、`until`、`grep` 查询参数，直通 `git log` 对应 flag。
+
+### 7.5 P3 — 远期扩展
 
 | 扩展 | 说明 | 预留接口 |
 |------|------|----------|
-| 提交详情展开 | 点击提交条目展开显示完整 body 和 file changes | `commits[].body` 字段已预留 |
 | 跨 worktree 提交对比 | 在 Diff 面板展示两个 worktree 的 commit 差异 | API 的 `base` 参数可扩展为任意 ref |
-| 提交搜索/过滤 | 按作者、日期范围、关键词过滤 | 可新增 `author`、`since`、`until`、`grep` 查询参数 |
-| Cherry-pick 操作 | 从提交记录中选择 commit cherry-pick 到其他分支 | 需要新增 POST 端点 |
-| 提交图形化历史 | 使用 ASCII graph 或 SVG 展示分支图 | `git log --graph` 输出可解析 |
+| Cherry-pick / Revert | 从提交记录中挑选 commit 应用到其他分支 | 需要新增 POST 端点 |
+| 图形化历史 | ASCII graph 或 SVG 分支图 | `git log --graph` 输出可解析 |
+| 时间线视图 | 按日期分组展示（类似 GitHub） | 纯前端分组渲染 |
+| WebSocket 实时推送 | 新提交自动刷新 | 现架构为无状态轮询，需评估 |

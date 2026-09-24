@@ -686,6 +686,20 @@ export async function getWorktreeCommits(worktreePath, options = {}) {
   const limit = Math.min(Math.max(parseInt(options.limit, 10) || 30, 1), 100);
   const offset = Math.max(parseInt(options.offset, 10) || 0, 0);
 
+  // 0. 路径安全校验: 必须为存在的绝对路径目录 (防止 ENOENT 透传为 500)
+  if (!worktreePath || !path.isAbsolute(worktreePath)) {
+    throw Object.assign(new Error('worktree 路径必须为绝对路径'), { statusCode: 400 });
+  }
+  if (options.base && (!/^[a-zA-Z0-9_/.-]+$/.test(options.base) || options.base.includes('..'))) {
+    throw Object.assign(new Error('base 参数包含非法字符'), { statusCode: 400 });
+  }
+  try {
+    const stat = await fs.stat(worktreePath);
+    if (!stat.isDirectory()) throw new Error('not a directory');
+  } catch {
+    throw Object.assign(new Error('指定的 worktree 路径不存在'), { statusCode: 404 });
+  }
+
   // 1. 验证 worktreePath 是否存在于 git worktree list 中
   const wtOutput = await runGit(worktreePath, ['worktree', 'list', '--porcelain']);
   if (!wtOutput) {
