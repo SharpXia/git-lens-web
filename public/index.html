@@ -1448,6 +1448,93 @@
       background: transparent;
     }
 
+    /* ---- 本地 Merge Request：面板 / 详情抽屉 / 新建弹层 ---- */
+    .badge-muted {
+      background: rgba(139, 148, 158, 0.15);
+      color: var(--text-muted);
+      border-color: rgba(139, 148, 158, 0.35);
+    }
+    .mr-panel-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .mr-branch-flow {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .mr-detail-section {
+      margin-bottom: 16px;
+    }
+    .mr-detail-section-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    .mr-detail-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+    .mr-detail-error {
+      min-height: 18px;
+      margin: 8px 0 0;
+      color: var(--danger);
+      font-size: 12px;
+    }
+    .mr-detail-hint {
+      margin-top: 8px;
+      padding: 6px 10px;
+      border: 1px solid rgba(210, 153, 34, 0.25);
+      border-radius: 6px;
+      background: rgba(210, 153, 34, 0.08);
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+    .mr-form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 14px;
+    }
+    .mr-form-group > label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    .mr-form-input,
+    .mr-form-textarea {
+      background: #0d1117;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-bright);
+      padding: 8px 10px;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    .mr-form-input:focus,
+    .mr-form-textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .mr-form-textarea {
+      min-height: 88px;
+      resize: vertical;
+    }
+    .mr-picker-wrapper {
+      position: relative;
+      width: 100%;
+    }
+
   </style>
 </head>
 <body>
@@ -1497,7 +1584,8 @@
     <input id="searchInput" type="search" placeholder="搜索分支或 Worktree..." autocomplete="off" aria-label="搜索分支或 Worktree">
     <button id="scanDirectoryBtn" class="btn-outline" type="button" onclick="openScanDirectoryModal()">📁 扫描目录</button>
     <button id="refreshBtn" class="btn-outline">全量刷新</button>
-    <button id="pruneBtn" class="btn-primary" style="margin-left: auto;">一键 Prune 无效引用</button>
+    <button id="newMrBtn" class="btn-primary" style="margin-left: auto;" onclick="openCreateMrModal()" title="基于当前仓库的两个本地分支发起 Merge Request">🔀 新建 MR</button>
+    <button id="pruneBtn" class="btn-primary">一键 Prune 无效引用</button>
   </div>
 
   <!-- TAB 1: 仓库透视与管理面板 -->
@@ -1522,6 +1610,26 @@
     </div>
 
     <div class="panels">
+      <!-- 本地 Merge Requests 面板 -->
+      <div class="panel">
+        <div class="panel-header">
+          <h2>🔀 Merge Requests</h2>
+          <div class="mr-panel-controls">
+            <div class="diff-mode-segmented" id="mrStatusFilterGroup">
+              <button type="button" class="diff-mode-btn active" data-status="all" onclick="setMrStatusFilter('all')">全部</button>
+              <button type="button" class="diff-mode-btn" data-status="open" onclick="setMrStatusFilter('open')">开启</button>
+              <button type="button" class="diff-mode-btn" data-status="merged" onclick="setMrStatusFilter('merged')">已合并</button>
+              <button type="button" class="diff-mode-btn" data-status="rejected" onclick="setMrStatusFilter('rejected')">已拒绝</button>
+              <button type="button" class="diff-mode-btn" data-status="canceled" onclick="setMrStatusFilter('canceled')">已取消</button>
+            </div>
+            <span id="mrCountBadge" class="badge">0 个</span>
+          </div>
+        </div>
+        <div id="mrList">
+          <div class="loading">加载中...</div>
+        </div>
+      </div>
+
       <!-- Worktrees 面板 -->
       <div class="panel">
         <div class="panel-header">
@@ -1664,6 +1772,74 @@
     </div>
   </div>
 
+  <!-- 新建 Merge Request 弹层（结构与样式沿用扫描目录弹窗模式） -->
+  <div id="createMrModal" class="scan-directory-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="createMrModalTitle">
+    <div class="scan-directory-card">
+      <div class="scan-directory-header">
+        <h2 id="createMrModalTitle">新建 Merge Request</h2>
+        <button class="drawer-close" type="button" onclick="closeCreateMrModal()" aria-label="关闭">×</button>
+      </div>
+      <div class="scan-directory-body">
+        <div class="mr-form-group">
+          <label>源分支 (Source)</label>
+          <div class="mr-picker-wrapper" id="mrSourcePickerWrapper">
+            <div class="repo-trigger" id="mrSourcePickerTrigger">
+              <div class="repo-trigger-text" id="mrSourcePickerText"></div>
+              <span class="ref-picker-trigger-caret">▼</span>
+            </div>
+            <div class="repo-dropdown" id="mrSourcePickerDropdown">
+              <div class="repo-search-box">
+                <input type="text" id="mrSourcePickerSearch" class="repo-search-input" placeholder="搜索分支..." autocomplete="off">
+              </div>
+              <div class="repo-list-container" id="mrSourcePickerList"></div>
+            </div>
+          </div>
+          <!-- 隐藏 select：分支身份串状态载体 -->
+          <select id="mrSourceSelect" style="display: none;"></select>
+        </div>
+        <div class="mr-form-group">
+          <label>目标分支 (Target)</label>
+          <div class="mr-picker-wrapper" id="mrTargetPickerWrapper">
+            <div class="repo-trigger" id="mrTargetPickerTrigger">
+              <div class="repo-trigger-text" id="mrTargetPickerText"></div>
+              <span class="ref-picker-trigger-caret">▼</span>
+            </div>
+            <div class="repo-dropdown" id="mrTargetPickerDropdown">
+              <div class="repo-search-box">
+                <input type="text" id="mrTargetPickerSearch" class="repo-search-input" placeholder="搜索分支..." autocomplete="off">
+              </div>
+              <div class="repo-list-container" id="mrTargetPickerList"></div>
+            </div>
+          </div>
+          <select id="mrTargetSelect" style="display: none;"></select>
+        </div>
+        <div class="mr-form-group">
+          <label for="mrCreateTitle">标题（必填）</label>
+          <input id="mrCreateTitle" class="mr-form-input" type="text" placeholder="例如：支持 Worktree 分支级 Diff 比对" maxlength="120">
+        </div>
+        <div class="mr-form-group">
+          <label for="mrCreateDesc">描述（可空）</label>
+          <textarea id="mrCreateDesc" class="mr-form-textarea" placeholder="补充说明改动背景、自测情况等"></textarea>
+        </div>
+        <div id="mrCreateError" class="mr-detail-error" role="alert"></div>
+      </div>
+      <div class="scan-directory-footer">
+        <button class="btn-outline" type="button" onclick="closeCreateMrModal()">取消</button>
+        <button id="mrCreateSubmitBtn" class="btn-primary" type="button" onclick="submitCreateMr()">创建 Merge Request</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MR 详情抽屉：复用提交抽屉的抽屉 DOM/CSS 模式 -->
+  <div id="mrDrawerOverlay" class="drawer-overlay" style="display:none" onclick="closeMrDrawer()"></div>
+  <div id="mrDrawer" class="commits-drawer" style="display:none" role="dialog" aria-label="Merge Request 详情">
+    <div class="commits-drawer-header">
+      <h3 id="mrDrawerTitle">🔀 Merge Request 详情</h3>
+      <button class="drawer-close" onclick="closeMrDrawer()" aria-label="关闭">×</button>
+    </div>
+    <div class="commits-drawer-body" id="mrDrawerBody"></div>
+  </div>
+
   <script>
     let allRepos = [];
     let currentRepo = '';
@@ -1693,6 +1869,17 @@
     let diffTargetPicker = null;
     const searchablePickers = []; // 所有可搜索选择器实例，用于统一「点击外部关闭」
     let diffRequestSeq = 0; // Diff 请求序列：仅最后一次请求的响应可上屏，丢弃过期响应
+
+    // 本地 Merge Request 状态
+    let mrStatusFilter = 'all';  // MR 面板状态筛选：all | open | merged | rejected | canceled
+    let mergeRequestsCache = []; // 最近一次成功拉取的 MR 列表
+    let mrListReqSeq = 0;        // MR 列表请求序列防竞态
+    let mrDetailReqSeq = 0;      // MR 详情请求序列防竞态
+    let mrCommitsReqSeq = 0;     // MR 提交列表请求序列防竞态
+    let mrDrawerState = { isOpen: false, id: null }; // MR 详情抽屉状态（id 统一为字符串）
+    let currentMrDetail = null;  // 抽屉当前展示的 MR 记录
+    let createMrSourcePicker = null;
+    let createMrTargetPicker = null;
 
     function selectDiffMode(mode) {
       currentDiffMode = mode;
@@ -2502,6 +2689,9 @@
         currentUncommittedPath = '';
         currentDiffBase = '';
         currentDiffTarget = '';
+        mergeRequestsCache = [];
+        renderMrList();
+        if (mrDrawerState.isOpen) closeMrDrawer(false);
         document.getElementById('headerPath').textContent = '';
         sel.innerHTML = '<option value="">未扫描到仓库</option>';
         document.getElementById('repoTriggerText').textContent = scanDirectoryConfig.customDirectories.length > 0
@@ -2546,6 +2736,7 @@
         updateMetrics();
         renderFilteredLists();
         populateDiffSelectors();
+        refreshMergeRequests();
       } catch (err) {
         alert('分析失败: ' + err.message);
       }
@@ -3753,7 +3944,9 @@
     let commitsDrawerReqSeq = 0;
     // 领先/落后统计缓存：每次打开抽屉时重置；切换全量/领先视图时复用，避免重复请求
     let commitsDrawerAheadBehind = null;
-    let commitsDrawerPageScrollY = null;
+    // 抽屉滚动锁引用计数：提交抽屉与 MR 详情抽屉可能同时打开（如 URL 恢复），需叠加计数
+    let drawerPageScrollLockCount = 0;
+    let drawerPageScrollLockY = 0;
 
     // 提交详情缓存：同一提交内容不可变，收起再展开不重复请求。
     // 键为 `${worktreePath}::${sha}`，避免不同仓库对同一短 SHA 解析出不同提交的歧义。
@@ -3771,19 +3964,25 @@
     }
 
     // 抽屉打开期间固定主页面，触控板、滚轮和触摸滑动都只能作用于抽屉。
+    // 提交抽屉与 MR 详情抽屉共用该锁，引用计数支持叠加：全部关闭后才恢复页面滚动。
     function setCommitsDrawerPageScrollLocked(locked) {
-      if (locked && commitsDrawerPageScrollY === null) {
-        commitsDrawerPageScrollY = window.scrollY;
-        document.body.style.position = 'fixed';
-        document.body.style.top = `-${commitsDrawerPageScrollY}px`;
-        document.body.style.width = '100%';
-      } else if (!locked && commitsDrawerPageScrollY !== null) {
-        const scrollY = commitsDrawerPageScrollY;
-        commitsDrawerPageScrollY = null;
-        document.body.style.position = '';
-        document.body.style.top = '';
-        document.body.style.width = '';
-        window.scrollTo(0, scrollY);
+      if (locked) {
+        drawerPageScrollLockCount++;
+        if (drawerPageScrollLockCount === 1) {
+          drawerPageScrollLockY = window.scrollY;
+          document.body.style.position = 'fixed';
+          document.body.style.top = `-${drawerPageScrollLockY}px`;
+          document.body.style.width = '100%';
+        }
+      } else if (drawerPageScrollLockCount > 0) {
+        drawerPageScrollLockCount--;
+        if (drawerPageScrollLockCount === 0) {
+          const scrollY = drawerPageScrollLockY;
+          document.body.style.position = '';
+          document.body.style.top = '';
+          document.body.style.width = '';
+          window.scrollTo(0, scrollY);
+        }
       }
     }
 
@@ -4506,6 +4705,513 @@
       fetchAndRenderCommits();
     }
 
+    /* ---- 本地 Merge Request：列表 / 详情抽屉 / 新建弹层 ---- */
+
+    const MR_STATUS_META = {
+      open: { label: '开启', cls: '' }, // 默认蓝色 badge
+      merged: { label: '已合并', cls: 'badge-success' },
+      rejected: { label: '已拒绝', cls: 'badge-muted' },
+      canceled: { label: '已取消', cls: 'badge-muted' }
+    };
+    const MR_ACTION_LABELS = {
+      approve: '审阅通过',
+      changes_requested: '要求修改',
+      rejected: '拒绝',
+      canceled: '取消',
+      merge: '合并'
+    };
+
+    /* 把 ISO 时间转成中文相对时间（MR 面板/抽屉展示用），解析失败回退 '-' */
+    function formatRelativeTimeCn(iso) {
+      if (!iso) return '-';
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return '-';
+      const diffMs = Date.now() - d.getTime();
+      if (diffMs < 0) return '刚刚';
+      const minutes = Math.floor(diffMs / 60000);
+      if (minutes < 1) return '刚刚';
+      if (minutes < 60) return `${minutes} 分钟前`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return `${hours} 小时前`;
+      const days = Math.floor(hours / 24);
+      if (days < 30) return `${days} 天前`;
+      const months = Math.floor(days / 30);
+      if (months < 12) return `${months} 个月前`;
+      return `${Math.floor(months / 12)} 年前`;
+    }
+
+    /* SHA 短码展示：空值兜底为 '-' */
+    function shortSha(sha) {
+      return sha ? String(sha).slice(0, 8) : '-';
+    }
+
+    function mrStatusBadgeHtml(mr) {
+      const meta = MR_STATUS_META[mr.status] || { label: mr.status || '未知', cls: 'badge-muted' };
+      return `<span class="badge ${meta.cls}">${escapeHtml(meta.label)}</span>`;
+    }
+
+    /* 审阅状态小徽章：仅在 MR 仍开启时有意义 */
+    function mrReviewBadgeHtml(mr) {
+      if (mr.status !== 'open') return '';
+      const map = {
+        approved: '<span class="badge badge-success">审阅已通过</span>',
+        changes_requested: '<span class="badge badge-warning">要求修改</span>'
+      };
+      return map[mr.reviewStatus] || '';
+    }
+
+    function setMrStatusFilter(status) {
+      mrStatusFilter = status;
+      document.querySelectorAll('#mrStatusFilterGroup .diff-mode-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.status === status);
+      });
+      refreshMergeRequests();
+    }
+
+    /* 拉取 MR 列表（按当前筛选）并重渲染列表与计数徽章；带请求序列防竞态 */
+    async function refreshMergeRequests() {
+      if (!currentRepo) {
+        mergeRequestsCache = [];
+        renderMrList();
+        return;
+      }
+      const seq = ++mrListReqSeq;
+      try {
+        const params = new URLSearchParams({ repoPath: currentRepo });
+        if (mrStatusFilter !== 'all') params.set('status', mrStatusFilter);
+        const res = await fetch(`/api/merge-requests?${params}`);
+        const data = await res.json();
+        if (seq !== mrListReqSeq) return; // 已有更新的列表请求，丢弃旧响应
+        if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        mergeRequestsCache = data.mergeRequests || [];
+        renderMrList();
+      } catch (err) {
+        if (seq !== mrListReqSeq) return;
+        document.getElementById('mrList').innerHTML =
+          `<div class="loading" style="color: var(--danger);">MR 列表加载失败：${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function renderMrList() {
+      const container = document.getElementById('mrList');
+      const badge = document.getElementById('mrCountBadge');
+      if (!container) return;
+      if (badge) badge.textContent = `${mergeRequestsCache.length} 个`;
+      if (!currentRepo) {
+        container.innerHTML = '<div class="loading">未选择仓库</div>';
+        return;
+      }
+      if (mergeRequestsCache.length === 0) {
+        container.innerHTML = `<div class="loading">${mrStatusFilter === 'all' ? '当前仓库暂无 Merge Request' : '该筛选条件下暂无 Merge Request'}</div>`;
+        return;
+      }
+      container.innerHTML = mergeRequestsCache.map(mr => `
+        <div class="list-item" style="cursor: pointer;" onclick="openMrDetail('${escapeHtml(String(mr.id))}')">
+          <div class="item-main">
+            <div class="item-header-row">
+              <div class="item-name"><span>🔀</span><span>${escapeHtml(mr.title)}</span></div>
+              <div class="item-tags">${mrStatusBadgeHtml(mr)}${mrReviewBadgeHtml(mr)}</div>
+            </div>
+            <div class="item-desc">
+              <span class="mr-branch-flow"><span>🌿 ${escapeHtml(mr.sourceBranch)}</span><span>→</span><span>🌿 ${escapeHtml(mr.targetBranch)}</span></span>
+              · 创建于 ${escapeHtml(formatRelativeTimeCn(mr.createdAt))}
+            </div>
+          </div>
+          <div class="item-actions">
+            <button class="btn-outline" onclick="event.stopPropagation(); openMrDetail('${escapeHtml(String(mr.id))}')">查看详情</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    /* MR 弹层的分支选择器选项：仅本地分支 */
+    function branchPickerItems() {
+      return currentBranches.map(b => ({
+        kind: 'branch',
+        value: b.name,
+        identity: `branch:${b.name}`,
+        label: `🌿 ${b.name}`,
+        searchText: b.name,
+        disabled: false
+      }));
+    }
+
+    /* 用最新分支数据重建弹层内隐藏 select 的选项（触发器列表据此渲染） */
+    function populateMrBranchSelect(sel) {
+      sel.innerHTML = '';
+      branchPickerItems().forEach(o => {
+        const opt = document.createElement('option');
+        opt.value = o.identity;
+        opt.textContent = o.label;
+        sel.appendChild(opt);
+      });
+    }
+
+    /* 打开新建 MR 弹层；prefillSourceBranch 来自分支列表「发起 MR」入口 */
+    function openCreateMrModal(prefillSourceBranch = '') {
+      if (!currentRepo) {
+        alert('请先选择仓库');
+        return;
+      }
+      const sourceSel = document.getElementById('mrSourceSelect');
+      const targetSel = document.getElementById('mrTargetSelect');
+      populateMrBranchSelect(sourceSel);
+      populateMrBranchSelect(targetSel);
+
+      // source 预填优先级：入口传参 > 当前 Diff 对比对象（若为分支）> 主 worktree 分支
+      let source = prefillSourceBranch;
+      if (!source) {
+        const targetRef = splitRefIdentity(document.getElementById('diffTargetSelect')?.value || '');
+        if (targetRef.kind === 'branch') source = targetRef.value;
+      }
+      if (!source) {
+        const mainWt = currentWorktrees.find(w => w.isMain);
+        if (mainWt?.branch) source = mainWt.branch;
+      }
+
+      document.getElementById('mrCreateTitle').value = '';
+      document.getElementById('mrCreateDesc').value = '';
+      document.getElementById('mrCreateError').textContent = '';
+      createMrSourcePicker?.setSelected(source ? `branch:${source}` : '');
+      createMrTargetPicker?.setSelected(currentMainBranch ? `branch:${currentMainBranch}` : '');
+      document.getElementById('createMrModal').style.display = 'flex';
+      setTimeout(() => document.getElementById('mrCreateTitle').focus(), 0);
+    }
+
+    function closeCreateMrModal() {
+      document.getElementById('createMrModal').style.display = 'none';
+    }
+
+    /* 创建 MR：客户端先做基础校验，服务端错误（400/404/409）显示在弹层内且不关闭 */
+    async function submitCreateMr() {
+      const btn = document.getElementById('mrCreateSubmitBtn');
+      const errEl = document.getElementById('mrCreateError');
+      const title = document.getElementById('mrCreateTitle').value.trim();
+      const description = document.getElementById('mrCreateDesc').value.trim();
+      const source = splitRefIdentity(document.getElementById('mrSourceSelect').value).value;
+      const target = splitRefIdentity(document.getElementById('mrTargetSelect').value).value;
+
+      errEl.textContent = '';
+      if (!source) { errEl.textContent = '请选择源分支 (Source)'; return; }
+      if (!target) { errEl.textContent = '请选择目标分支 (Target)'; return; }
+      if (source === target) { errEl.textContent = '源分支与目标分支不能相同'; return; }
+      if (!title) { errEl.textContent = '请填写 MR 标题'; return; }
+
+      btn.disabled = true; // 提交期间禁用防重复
+      btn.textContent = '创建中...';
+      try {
+        const res = await fetch('/api/merge-requests', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            repoPath: currentRepo,
+            sourceBranch: source,
+            targetBranch: target,
+            title,
+            description
+          })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        closeCreateMrModal();
+        refreshMergeRequests(); // 刷新列表与计数徽章
+        if (data.mergeRequest?.id != null) {
+          openMrDetail(data.mergeRequest.id); // 直接打开新 MR 详情
+        }
+      } catch (err) {
+        errEl.textContent = err.message;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '创建 Merge Request';
+      }
+    }
+
+    /* 打开 MR 详情抽屉：先渲染加载态，再由 refreshMergeRequestDetail 拉取详情 */
+    async function openMrDetail(mrId, pushHistory = true) {
+      mrDrawerState = { isOpen: true, id: String(mrId) };
+      currentMrDetail = null;
+      const overlay = document.getElementById('mrDrawerOverlay');
+      const drawer = document.getElementById('mrDrawer');
+      setCommitsDrawerPageScrollLocked(true);
+      document.getElementById('mrDrawerBody').innerHTML = '<div class="loading">正在加载 Merge Request 详情...</div>';
+      overlay.style.display = 'block';
+      drawer.style.display = 'flex';
+      requestAnimationFrame(() => {
+        overlay.classList.add('open');
+        drawer.classList.add('open');
+      });
+      syncStateToUrl(pushHistory);
+      await refreshMergeRequestDetail();
+    }
+
+    function closeMrDrawer(pushHistory = true) {
+      if (!mrDrawerState.isOpen) return;
+      mrDrawerState = { isOpen: false, id: null };
+      mrDetailReqSeq++; // 使在途详情/提交请求失效
+      mrCommitsReqSeq++;
+      syncStateToUrl(pushHistory);
+      setCommitsDrawerPageScrollLocked(false);
+      const overlay = document.getElementById('mrDrawerOverlay');
+      const drawer = document.getElementById('mrDrawer');
+      overlay.classList.remove('open');
+      drawer.classList.remove('open');
+      setTimeout(() => {
+        if (!mrDrawerState.isOpen) {
+          drawer.style.display = 'none';
+          overlay.style.display = 'none';
+        }
+      }, 260);
+    }
+
+    /* 重拉当前 MR 详情并重渲染抽屉内容（保留抽屉打开状态与滚动位置） */
+    async function refreshMergeRequestDetail() {
+      if (!mrDrawerState.isOpen || mrDrawerState.id == null) return;
+      const seq = ++mrDetailReqSeq;
+      try {
+        const res = await fetch(`/api/merge-requests/${encodeURIComponent(mrDrawerState.id)}?repoPath=${encodeURIComponent(currentRepo)}`);
+        const data = await res.json();
+        if (seq !== mrDetailReqSeq) return;
+        if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        currentMrDetail = data.mergeRequest;
+        renderMrDetail(currentMrDetail, null, true);
+        loadMrAheadBehind();
+        loadMrCommits();
+      } catch (err) {
+        if (seq !== mrDetailReqSeq) return;
+        renderMrDetail(null, err.message, true);
+      }
+    }
+
+    /* 渲染 MR 详情抽屉内容；refreshMode 为真时保留滚动位置（操作后局部刷新） */
+    function renderMrDetail(mr, errorMessage, refreshMode = false) {
+      const body = document.getElementById('mrDrawerBody');
+      const prevScrollTop = refreshMode ? body.scrollTop : 0;
+
+      if (errorMessage || !mr) {
+        body.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state-icon">⚠️</div>
+            <div>加载 Merge Request 详情失败</div>
+            <div style="font-size:12px">${escapeHtml(errorMessage || '未知错误')}</div>
+            <button class="btn-outline" style="margin-top:8px" onclick="refreshMergeRequestDetail()">重试</button>
+          </div>`;
+        body.scrollTop = prevScrollTop;
+        return;
+      }
+
+      document.getElementById('mrDrawerTitle').textContent = `🔀 MR #${mr.id} · ${mr.title}`;
+      const updatedAtText = mr.updatedAt && mr.updatedAt !== mr.createdAt
+        ? ` · 更新于 ${escapeHtml(formatRelativeTimeCn(mr.updatedAt))}`
+        : '';
+
+      body.innerHTML = `
+        <div class="mr-detail-section">
+          <div class="item-tags">${mrStatusBadgeHtml(mr)}${mrReviewBadgeHtml(mr)}</div>
+          <div class="item-header-row" style="margin-top: 8px;">
+            <span class="mr-branch-flow">
+              <span>🌿 ${escapeHtml(mr.sourceBranch)}</span>
+              <span>→</span>
+              <span>🌿 ${escapeHtml(mr.targetBranch)}</span>
+            </span>
+            <span style="font-size: 12px; color: var(--text-muted);">
+              创建时 HEAD：<code>${escapeHtml(shortSha(mr.sourceHeadAtCreate))}</code> / <code>${escapeHtml(shortSha(mr.targetHeadAtCreate))}</code>
+            </span>
+          </div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">创建于 ${escapeHtml(formatRelativeTimeCn(mr.createdAt))}${updatedAtText}</div>
+        </div>
+
+        <div class="mr-detail-section">
+          <div class="mr-detail-section-title">描述</div>
+          ${mr.description
+            ? `<div style="font-size: 13px; color: var(--text); white-space: pre-wrap; word-break: break-word;">${escapeHtml(mr.description)}</div>`
+            : '<div style="font-size: 12px; color: var(--text-muted);">（无描述）</div>'}
+        </div>
+
+        <div class="mr-detail-section">${mrStatusExtraHtml(mr)}</div>
+
+        <div class="mr-detail-section" id="mrAheadBehindLine">
+          <span style="font-size: 12px; color: var(--text-muted);">正在统计提交差异...</span>
+        </div>
+
+        <div class="mr-detail-section">
+          <div class="mr-detail-actions" id="mrActionButtons">${buildMrActionButtonsHtml(mr)}</div>
+          <div id="mrDrawerActionError" class="mr-detail-error" role="alert"></div>
+          <div class="mr-detail-hint">📌 source Worktree 的未提交内容不参与合并；合并要求审阅通过，并会实际修改 target 分支绑定的 Worktree。</div>
+        </div>
+
+        <div class="mr-detail-section">
+          <button type="button" class="btn-outline" style="width: 100%;" onclick="openMrBranchDiff()">⚡ 在 Diff 中查看 Branch Diff</button>
+        </div>
+
+        <div class="mr-detail-section">
+          <div class="mr-detail-section-title">提交列表（source 相对 target）</div>
+          <div id="mrCommitsContainer"><div class="loading" style="padding: 12px;">正在加载提交列表...</div></div>
+        </div>
+      `;
+      body.scrollTop = prevScrollTop;
+    }
+
+    /* merged / rejected / canceled 状态的附加信息行 */
+    function mrStatusExtraHtml(mr) {
+      if (mr.status === 'merged') {
+        return `<span class="badge badge-success">已合并</span>
+          <span style="font-size: 12px; color: var(--text-muted);">合并于 ${escapeHtml(formatRelativeTimeCn(mr.mergedAt))} · 合并提交 <code>${escapeHtml(shortSha(mr.mergedCommit))}</code></span>`;
+      }
+      if (mr.status === 'rejected' || mr.status === 'canceled') {
+        const label = mr.status === 'rejected' ? '已拒绝' : '已取消';
+        return `<span class="badge badge-muted">${label}</span>
+          <span style="font-size: 12px; color: var(--text-muted);">原因：${escapeHtml(mr.decisionReason || '（未填写）')}</span>`;
+      }
+      return '';
+    }
+
+    /* 按 MR 状态与审阅状态渲染操作按钮区 */
+    function buildMrActionButtonsHtml(mr) {
+      if (mr.status !== 'open') {
+        return '<span style="font-size: 12px; color: var(--text-muted);">该 MR 已结束，无可用操作。</span>';
+      }
+      const parts = [];
+      if (mr.reviewStatus === 'approved') {
+        parts.push('<button type="button" class="btn-primary" onclick="mrAction(\'merge\', this, true)" title="将执行 --no-ff 合并到 target 分支的 Worktree">✅ 合并 (--no-ff)</button>');
+      } else if (mr.reviewStatus === 'changes_requested') {
+        parts.push('<button type="button" class="btn-outline" onclick="mrAction(\'approve\', this)">重新通过（审阅通过）</button>');
+        parts.push('<button type="button" class="btn-primary" disabled title="审阅通过后才能合并">✅ 合并</button>');
+      } else {
+        parts.push('<button type="button" class="btn-outline" onclick="mrAction(\'approve\', this)">审阅通过</button>');
+      }
+      parts.push('<button type="button" class="btn-outline" onclick="mrAction(\'changes_requested\', this)">要求修改</button>');
+      parts.push('<button type="button" class="btn-danger" onclick="mrAction(\'rejected\', this)">拒绝</button>');
+      parts.push('<button type="button" class="btn-outline" onclick="mrAction(\'canceled\', this)">取消</button>');
+      return parts.join('');
+    }
+
+    /* 操作期间禁用全部操作按钮；恢复时按当前 MR 状态重建（保持「合并」的条件禁用态） */
+    function setMrActionButtonsDisabled(disabled) {
+      const holder = document.getElementById('mrActionButtons');
+      if (!holder) return;
+      if (disabled) {
+        holder.querySelectorAll('button').forEach(b => { b.disabled = true; });
+      } else if (currentMrDetail) {
+        holder.innerHTML = buildMrActionButtonsHtml(currentMrDetail);
+      }
+    }
+
+    /* MR 操作统一入口：中文确认/prompt 收集原因，成功后局部刷新详情与列表；
+       失败（含 Git 冲突 409）在抽屉内展示中文错误，MR 保持原状态，按钮恢复可用 */
+    async function mrAction(action, btn, needConfirm = false) {
+      const mr = currentMrDetail;
+      if (!mr || !MR_ACTION_LABELS[action]) return;
+
+      let reason;
+      if (action === 'changes_requested' || action === 'rejected' || action === 'canceled') {
+        const input = prompt(`请输入${MR_ACTION_LABELS[action]}原因（可留空）：`);
+        if (input === null) return; // 用户取消
+        reason = input.trim();
+      }
+      if (action === 'merge' && needConfirm) {
+        const targetWt = currentWorktrees.find(w => w.branch === mr.targetBranch);
+        const targetHint = targetWt
+          ? `\n目标 Worktree：${targetWt.path}`
+          : '\n（未找到目标分支绑定的 Worktree，合并可能失败）';
+        if (!confirm(`确认合并 MR「${mr.title}」吗？\n将执行 --no-ff 合并到 ${mr.targetBranch} 分支的 Worktree。${targetHint}`)) return;
+      }
+
+      setMrActionButtonsDisabled(true);
+      try {
+        const res = await fetch('/api/merge-requests/action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoPath: currentRepo, id: mr.id, action, reason: reason || undefined })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+        // 成功：重拉详情（保留滚动位置）并刷新列表/计数
+        await refreshMergeRequestDetail();
+        refreshMergeRequests();
+      } catch (err) {
+        const errEl = document.getElementById('mrDrawerActionError');
+        if (errEl) errEl.textContent = `操作失败：${err.message}`;
+        setMrActionButtonsDisabled(false);
+        loadMrAheadBehind(); // 静默刷新一次 ahead/behind，冲突破坏提交关系时能及时反映
+      }
+    }
+
+    /* MR 详情的 ahead/behind 统计：以 target 为基准、source 为 ref；失败时降级为提示文案 */
+    async function loadMrAheadBehind() {
+      const mr = currentMrDetail;
+      const lineEl = document.getElementById('mrAheadBehindLine');
+      if (!mr || !lineEl) return;
+      try {
+        const params = new URLSearchParams({ worktree: currentRepo, base: mr.targetBranch, ref: mr.sourceBranch });
+        const res = await fetch(`/api/worktree-ahead-behind?${params}`);
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        if (!mrDrawerState.isOpen || mrDrawerState.id !== String(mr.id)) return;
+        if (data.baseAvailable === false) throw new Error(`无法解析基准分支 ${mr.targetBranch}`);
+        lineEl.innerHTML = `<span class="badge ${data.behind > 0 ? 'badge-warning' : 'badge-success'}" title="相对目标分支 ${escapeHtml(mr.targetBranch)} 的提交领先/落后统计">⇅ 领先 ${escapeHtml(String(data.ahead))} / 落后 ${escapeHtml(String(data.behind))}</span>`;
+      } catch (err) {
+        if (!mrDrawerState.isOpen || mrDrawerState.id !== String(mr.id)) return;
+        lineEl.innerHTML = `<span style="font-size: 12px; color: var(--text-muted);">提交差异统计不可用：${escapeHtml(err.message)}</span>`;
+      }
+    }
+
+    /* MR 详情的提交列表：以 target 为基准、source 为顶点的 fullHistory 简版渲染 */
+    async function loadMrCommits() {
+      const mr = currentMrDetail;
+      const container = document.getElementById('mrCommitsContainer');
+      if (!mr || !container) return;
+      const seq = ++mrCommitsReqSeq;
+      try {
+        const params = new URLSearchParams({
+          worktree: currentRepo,
+          base: mr.targetBranch,
+          ref: mr.sourceBranch,
+          fullHistory: '1',
+          limit: '50'
+        });
+        const res = await fetch(`/api/worktree-commits?${params}`);
+        const data = await res.json();
+        if (seq !== mrCommitsReqSeq) return;
+        if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        const commits = data.commits || [];
+        if (commits.length === 0) {
+          container.innerHTML = '<div class="commit-diff-empty">source 相对 target 没有可展示的提交。</div>';
+          return;
+        }
+        container.innerHTML = commits.map(c => `
+          <div class="commit-item">
+            <div class="commit-item-header">
+              <span class="commit-hash" title="点击复制完整 SHA" onclick="copyText('${escapeHtml(c.hash)}', this)">${escapeHtml(c.shortHash)}</span>
+              <span class="commit-time">${escapeHtml(c.relativeTime)}</span>
+            </div>
+            <div class="commit-subject" title="${escapeHtml(c.subject)}">${escapeHtml(c.subject)}</div>
+            <div class="commit-author">${escapeHtml(c.author)}</div>
+          </div>
+        `).join('');
+      } catch (err) {
+        if (seq !== mrCommitsReqSeq) return;
+        container.innerHTML = `<div class="commit-detail-error">提交列表加载失败：${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    /* 从 MR 详情跳转 Diff Tab：branch↔branch、仅已提交模式（Base=target，Target=source） */
+    function openMrBranchDiff() {
+      const mr = currentMrDetail;
+      if (!mr) return;
+      closeMrDrawer(false); // 关闭抽屉让出可视区域查看 Diff
+      switchTab('diff', false);
+      const baseIdentity = `branch:${mr.targetBranch}`;
+      const targetIdentity = `branch:${mr.sourceBranch}`;
+      if (!applyDiffIdentitiesOrReport(baseIdentity, targetIdentity)) {
+        document.getElementById('diffResultsContainer').innerHTML =
+          '<div class="empty-diff-box" style="color: var(--warning);">该 MR 的分支已不存在，无法展示 Branch Diff。</div>';
+        return;
+      }
+      refreshDiffPickerTriggers();
+      fetchAndRenderRefDiff('committed', true);
+    }
+
     async function restoreCurrentRepoHistoryState(state) {
       isRestoringHistory = true;
       try {
@@ -4640,6 +5346,10 @@
     document.getElementById('worktreeRemoveModal').addEventListener('click', (e) => {
       if (e.target.id === 'worktreeRemoveModal') closeWorktreeRemoveModal(false);
     });
+    // 点击新建 MR 弹层遮罩区域关闭弹层（与扫描目录弹窗一致）
+    document.getElementById('createMrModal').addEventListener('click', (e) => {
+      if (e.target.id === 'createMrModal') closeCreateMrModal();
+    });
     document.addEventListener('DOMContentLoaded', setupCommitsDrawerScrollGuard);
     document.getElementById('refreshBtn').addEventListener('click', () => {
       loadProjects();
@@ -4662,6 +5372,34 @@
       } else {
         alert('Prune 失败: ' + data.error);
       }
+    });
+
+    /* 初始化新建 MR 弹层内的两个分支搜索选择器（仅分支模式） */
+    createMrSourcePicker = createSearchablePicker({
+      wrapperId: 'mrSourcePickerWrapper',
+      triggerId: 'mrSourcePickerTrigger',
+      triggerTextId: 'mrSourcePickerText',
+      dropdownId: 'mrSourcePickerDropdown',
+      searchInputId: 'mrSourcePickerSearch',
+      listId: 'mrSourcePickerList',
+      selectId: 'mrSourceSelect',
+      getItems: branchPickerItems,
+      groupTitles: { branch: '🌿 本地分支' },
+      emptyText: '没有匹配的分支',
+      placeholder: '选择源分支'
+    });
+    createMrTargetPicker = createSearchablePicker({
+      wrapperId: 'mrTargetPickerWrapper',
+      triggerId: 'mrTargetPickerTrigger',
+      triggerTextId: 'mrTargetPickerText',
+      dropdownId: 'mrTargetPickerDropdown',
+      searchInputId: 'mrTargetPickerSearch',
+      listId: 'mrTargetPickerList',
+      selectId: 'mrTargetSelect',
+      getItems: branchPickerItems,
+      groupTitles: { branch: '🌿 本地分支' },
+      emptyText: '没有匹配的分支',
+      placeholder: '选择目标分支'
     });
 
     /* 初始化 Diff Tab 的两个可搜索选择器：选项来自 Worktree 与本地分支，
@@ -4722,6 +5460,12 @@
       }
       if (e.key === 'Escape' && commitsDrawerState.isOpen) {
         closeCommitsDrawer();
+      }
+      if (e.key === 'Escape' && mrDrawerState.isOpen) {
+        closeMrDrawer();
+      }
+      if (e.key === 'Escape' && document.getElementById('createMrModal').style.display !== 'none') {
+        closeCreateMrModal();
       }
       if (e.key === 'Escape' && document.getElementById('scanDirectoryModal').style.display !== 'none') {
         closeScanDirectoryModal();
