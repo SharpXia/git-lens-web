@@ -2071,8 +2071,9 @@
       const urlCommits = url.searchParams.get('commits');
       const urlCommitsFull = url.searchParams.get('commitsFull');
       const urlCommitsRef = url.searchParams.get('commitsRef');
+      const urlMr = url.searchParams.get('mr');
 
-      if (!urlRepo && !urlTab && !urlQ && !urlDiffType && !urlCommits) return null;
+      if (!urlRepo && !urlTab && !urlQ && !urlDiffType && !urlCommits && !urlMr) return null;
       return {
           repo: urlRepo || '',
           tab: urlTab || 'overview',
@@ -2086,7 +2087,8 @@
           mode: urlMode || null,
           commits: urlCommits || '',
           commitsFull: urlCommitsFull === '1',
-          commitsRef: urlCommitsRef || ''
+          commitsRef: urlCommitsRef || '',
+          mr: urlMr || ''
       };
     }
 
@@ -2178,6 +2180,13 @@
           url.searchParams.delete('commitsRef');
         }
 
+        // MR 详情抽屉打开状态持久化：刷新/前进后退均可恢复
+        if (mrDrawerState.isOpen && mrDrawerState.id != null) {
+          url.searchParams.set('mr', mrDrawerState.id);
+        } else {
+          url.searchParams.delete('mr');
+        }
+
         // 用户主动切换页面状态才新增历史项；恢复历史时保留浏览器正在访问的 URL。
         if (!isRestoringHistory) {
           if (pushHistory && url.toString() !== window.location.href) {
@@ -2203,7 +2212,8 @@
           mode: currentDiffMode,
           commits: commitsDrawerState.isOpen ? commitsDrawerState.worktreePath : '',
           commitsFull: commitsDrawerState.isOpen && commitsDrawerState.fullHistory,
-          commitsRef: commitsDrawerState.isOpen ? (commitsDrawerState.ref || '') : ''
+          commitsRef: commitsDrawerState.isOpen ? (commitsDrawerState.ref || '') : '',
+          mr: mrDrawerState.isOpen && mrDrawerState.id != null ? mrDrawerState.id : ''
         }));
       } catch (e) {
         console.warn('syncStateToUrl error:', e);
@@ -2675,6 +2685,10 @@
           }
           if (pendingRestoreState.commits) {
             await openCommitsDrawer(pendingRestoreState.commits, pendingRestoreState.commitsFull, false, pendingRestoreState.commitsRef || '');
+          }
+          // 恢复 MR 详情抽屉（mr 记录不存在时抽屉内展示错误与重试入口）
+          if (pendingRestoreState.mr) {
+            await openMrDetail(pendingRestoreState.mr, false);
           }
           pendingRestoreState = null;
         }
@@ -5129,6 +5143,12 @@
         // 成功：重拉详情（保留滚动位置）并刷新列表/计数
         await refreshMergeRequestDetail();
         refreshMergeRequests();
+        if (action === 'merge') {
+          // 合并会实际修改 target 分支：联动刷新仓库分析数据与相关视图（均为局部刷新，不做全量 reload）
+          await refreshRepoInspectData();
+          refreshCommitsDrawerIfRelatedToBranches([mr.sourceBranch, mr.targetBranch]);
+          refreshDiffViewIfRelatedToBranches([mr.sourceBranch, mr.targetBranch]);
+        }
       } catch (err) {
         const errEl = document.getElementById('mrDrawerActionError');
         if (errEl) errEl.textContent = `操作失败：${err.message}`;
@@ -5195,6 +5215,27 @@
       }
     }
 
+    /* 合并落库后联动刷新：提交抽屉若正查看相关分支的提交，按首屏语义重载。
+       刷新做法与 commitAction 成功后一致：loadedCount 归零重拉首屏，并作废 ahead/behind 缓存 */
+    function refreshCommitsDrawerIfRelatedToBranches(branchNames) {
+      if (!commitsDrawerState.isOpen) return;
+      const related = branchNames.some(name => commitsDrawerState.branch === name
+        || (commitsDrawerState.ref || '') === name
+        || currentWorktrees.some(w => w.branch === name && w.path === commitsDrawerState.worktreePath));
+      if (!related) return;
+      commitsDrawerState.loadedCount = 0;
+      commitsDrawerAheadBehind = null;
+      fetchAndRenderCommits();
+    }
+
+    /* 合并落库后联动刷新：Diff 结果区若正展示相关分支的 branch↔branch 对比，重拉当前 Diff */
+    function refreshDiffViewIfRelatedToBranches(branchNames) {
+      if (currentDiffType !== 'ref') return;
+      const refs = [splitRefIdentity(currentDiffBase), splitRefIdentity(currentDiffTarget)];
+      const related = refs.some(r => r.kind === 'branch' && branchNames.includes(r.value));
+      if (related) refreshCurrentDiff();
+    }
+
     /* 从 MR 详情跳转 Diff Tab：branch↔branch、仅已提交模式（Base=target，Target=source） */
     function openMrBranchDiff() {
       const mr = currentMrDetail;
@@ -5259,6 +5300,15 @@
           }
         } else if (commitsDrawerState.isOpen) {
           closeCommitsDrawer(false);
+        }
+
+        // 恢复/关闭 MR 详情抽屉，保证与浏览器当前 URL 一致
+        if (state.mr) {
+          if (!mrDrawerState.isOpen || mrDrawerState.id !== String(state.mr)) {
+            await openMrDetail(state.mr, false);
+          }
+        } else if (mrDrawerState.isOpen) {
+          closeMrDrawer(false);
         }
       } finally {
         isRestoringHistory = false;
