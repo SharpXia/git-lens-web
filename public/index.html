@@ -1421,6 +1421,33 @@
       opacity: 0.5;
     }
 
+    /* ---- 可搜索 Diff 选择器（Worktree/分支组合框） ---- */
+    .ref-picker-wrapper {
+      position: relative;
+      width: 100%;
+    }
+    /* 下拉面板宽度跟随触发器，避免固定 380px 在窄栏内溢出屏幕 */
+    .ref-picker-wrapper .repo-dropdown,
+    .mr-picker-wrapper .repo-dropdown {
+      min-width: 100%;
+    }
+    .ref-picker-trigger-caret {
+      color: var(--text-muted);
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    /* 复用 .repo-item 的行样式，仅补充键盘高亮与禁用（失联 Worktree）态 */
+    .repo-item.highlight {
+      background: var(--card-alt);
+    }
+    .repo-item.disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    .repo-item.disabled:hover {
+      background: transparent;
+    }
+
   </style>
 </head>
 <body>
@@ -1524,23 +1551,48 @@
     <div class="diff-view-container">
       <div class="diff-picker-bar">
         <div class="picker-col">
-          <label class="picker-label" for="diffBaseSelect">
-            <span>基准工作区 (Base / 原始分支)：</span>
+          <label class="picker-label">
+            <span>基准 (Worktree/分支)：</span>
           </label>
-          <select id="diffBaseSelect" class="picker-select"></select>
+          <div class="ref-picker-wrapper" id="diffBasePickerWrapper">
+            <div class="repo-trigger" id="diffBasePickerTrigger">
+              <div class="repo-trigger-text" id="diffBasePickerText"><span>加载中...</span></div>
+              <span class="ref-picker-trigger-caret">▼</span>
+            </div>
+            <div class="repo-dropdown" id="diffBasePickerDropdown">
+              <div class="repo-search-box">
+                <input type="text" id="diffBasePickerSearch" class="repo-search-input" placeholder="搜索 Worktree 或分支..." autocomplete="off">
+              </div>
+              <div class="repo-list-container" id="diffBasePickerList"></div>
+            </div>
+          </div>
+          <!-- 隐藏原生 select：仅作为 kind:value 身份串的状态载体，供 syncStateToUrl 等既有逻辑以最小改动复用 -->
+          <select id="diffBaseSelect" class="picker-select" style="display: none;"></select>
         </div>
 
-        <button class="swap-btn btn-outline" onclick="swapDiffTargets()" title="对调两边工作区">⇄ 对调</button>
+        <button class="swap-btn btn-outline" onclick="swapDiffTargets()" title="对调两边的 Worktree/分支">⇄ 对调</button>
 
         <div class="picker-col">
-          <label class="picker-label" for="diffTargetSelect">
-            <span>对比工作区 (Target / 变更分支)：</span>
+          <label class="picker-label">
+            <span>对比 (Worktree/分支)：</span>
           </label>
-          <select id="diffTargetSelect" class="picker-select"></select>
+          <div class="ref-picker-wrapper" id="diffTargetPickerWrapper">
+            <div class="repo-trigger" id="diffTargetPickerTrigger">
+              <div class="repo-trigger-text" id="diffTargetPickerText"><span>加载中...</span></div>
+              <span class="ref-picker-trigger-caret">▼</span>
+            </div>
+            <div class="repo-dropdown" id="diffTargetPickerDropdown">
+              <div class="repo-search-box">
+                <input type="text" id="diffTargetPickerSearch" class="repo-search-input" placeholder="搜索 Worktree 或分支..." autocomplete="off">
+              </div>
+              <div class="repo-list-container" id="diffTargetPickerList"></div>
+            </div>
+          </div>
+          <select id="diffTargetSelect" class="picker-select" style="display: none;"></select>
         </div>
 
         <div style="display: flex; gap: 8px; align-self: flex-end; margin-bottom: 2px;">
-          <button class="btn-primary" onclick="fetchAndRenderDiff(null, true)">比对工作区 Diff</button>
+          <button class="btn-primary" onclick="fetchAndRenderRefDiff(null, true)">比对 Diff</button>
           <button id="diffRefreshBtn" class="btn-outline" onclick="refreshCurrentDiff()" title="重新分析并刷新当前 Diff 视图">🔄 刷新 Diff</button>
         </div>
       </div>
@@ -1549,8 +1601,8 @@
 
       <div id="diffResultsContainer">
         <div class="empty-diff-box">
-          <div style="font-size: 16px; margin-bottom: 8px;">请选择两个不同的 Worktree 进行比对，或在总览列表点击【查看未提交代码】</div>
-          <div style="font-size: 13px;">支持跨工作区领先改动对比与本地未提交（Dirty）代码审查</div>
+          <div style="font-size: 16px; margin-bottom: 8px;">请选择两个不同的 Worktree 或分支进行比对，或在总览列表点击【查看未提交代码】</div>
+          <div style="font-size: 13px;">支持 Worktree/分支任意组合的领先改动对比与本地未提交（Dirty）代码审查</div>
         </div>
       </div>
     </div>
@@ -1636,9 +1688,15 @@
     let scanDirectoryDraft = [];
     let worktreeRemoveRequest = null;
 
+    // 可搜索 Diff 选择器实例与请求防竞态计数
+    let diffBasePicker = null;
+    let diffTargetPicker = null;
+    const searchablePickers = []; // 所有可搜索选择器实例，用于统一「点击外部关闭」
+    let diffRequestSeq = 0; // Diff 请求序列：仅最后一次请求的响应可上屏，丢弃过期响应
+
     function selectDiffMode(mode) {
       currentDiffMode = mode;
-      fetchAndRenderDiff(mode, true);
+      fetchAndRenderRefDiff(mode, true);
     }
 
     const STARRED_STORAGE_KEY = 'git_lens_starred_repos';
@@ -1819,6 +1877,9 @@
       const urlUncommitted = url.searchParams.get('uncommitted');
       const urlBase = url.searchParams.get('base');
       const urlTarget = url.searchParams.get('target');
+      // ref 模式的类型前缀；旧链接（diffType=worktree）无该参数，按 worktree 兼容解析
+      const urlBaseType = url.searchParams.get('diffBaseType');
+      const urlTargetType = url.searchParams.get('diffTargetType');
       const urlMode = url.searchParams.get('mode');
       const urlCommits = url.searchParams.get('commits');
       const urlCommitsFull = url.searchParams.get('commitsFull');
@@ -1833,6 +1894,8 @@
           uncommitted: urlUncommitted || '',
           base: urlBase || '',
           target: urlTarget || '',
+          baseType: urlBaseType === 'branch' ? 'branch' : 'worktree',
+          targetType: urlTargetType === 'branch' ? 'branch' : 'worktree',
           mode: urlMode || null,
           commits: urlCommits || '',
           commitsFull: urlCommitsFull === '1',
@@ -1871,18 +1934,38 @@
             url.searchParams.set('uncommitted', currentUncommittedPath);
             url.searchParams.delete('base');
             url.searchParams.delete('target');
-          } else if (currentDiffType === 'worktree') {
-            url.searchParams.set('diffType', 'worktree');
-            const b = document.getElementById('diffBaseSelect')?.value || currentDiffBase;
-            const t = document.getElementById('diffTargetSelect')?.value || currentDiffTarget;
-            if (b) url.searchParams.set('base', b);
-            if (t) url.searchParams.set('target', t);
+            url.searchParams.delete('diffBaseType');
+            url.searchParams.delete('diffTargetType');
+          } else if (currentDiffType === 'ref' || currentDiffType === 'worktree') {
+            // 选择器保存的是 kind:value 身份串；旧格式 diffType=worktree 的 base/target 仍按裸 worktree 路径写出
+            const b = splitRefIdentity(document.getElementById('diffBaseSelect')?.value || currentDiffBase);
+            const t = splitRefIdentity(document.getElementById('diffTargetSelect')?.value || currentDiffTarget);
+            if (b.value && t.value) {
+              url.searchParams.set('diffType', currentDiffType);
+              if (currentDiffType === 'ref') {
+                url.searchParams.set('diffBaseType', b.kind);
+                url.searchParams.set('diffTargetType', t.kind);
+              } else {
+                url.searchParams.delete('diffBaseType');
+                url.searchParams.delete('diffTargetType');
+              }
+              url.searchParams.set('base', b.value);
+              url.searchParams.set('target', t.value);
+            } else {
+              url.searchParams.delete('diffType');
+              url.searchParams.delete('base');
+              url.searchParams.delete('target');
+              url.searchParams.delete('diffBaseType');
+              url.searchParams.delete('diffTargetType');
+            }
             url.searchParams.delete('uncommitted');
           } else {
             url.searchParams.delete('diffType');
             url.searchParams.delete('uncommitted');
             url.searchParams.delete('base');
             url.searchParams.delete('target');
+            url.searchParams.delete('diffBaseType');
+            url.searchParams.delete('diffTargetType');
           }
           if (currentDiffMode) url.searchParams.set('mode', currentDiffMode);
           else url.searchParams.delete('mode');
@@ -1891,6 +1974,8 @@
           url.searchParams.delete('uncommitted');
           url.searchParams.delete('base');
           url.searchParams.delete('target');
+          url.searchParams.delete('diffBaseType');
+          url.searchParams.delete('diffTargetType');
           url.searchParams.delete('mode');
         }
 
@@ -1915,15 +2000,19 @@
           }
         }
 
-        // 同时写入当前 Tab 专属的 sessionStorage
+        // 同时写入当前 Tab 专属的 sessionStorage（base/target 存裸值 + 类型前缀，与 URL 语义一致）
+        const storedBaseIdentity = document.getElementById('diffBaseSelect')?.value || currentDiffBase;
+        const storedTargetIdentity = document.getElementById('diffTargetSelect')?.value || currentDiffTarget;
         sessionStorage.setItem(TAB_STATE_STORAGE_KEY, JSON.stringify({
           repo: currentRepo,
           tab: activeTab,
           q: searchKeyword,
           diffType: currentDiffType,
           uncommitted: currentUncommittedPath,
-          base: document.getElementById('diffBaseSelect')?.value || currentDiffBase,
-          target: document.getElementById('diffTargetSelect')?.value || currentDiffTarget,
+          base: splitRefIdentity(storedBaseIdentity).value,
+          target: splitRefIdentity(storedTargetIdentity).value,
+          baseType: splitRefIdentity(storedBaseIdentity).kind,
+          targetType: splitRefIdentity(storedTargetIdentity).kind,
           mode: currentDiffMode,
           commits: commitsDrawerState.isOpen ? commitsDrawerState.worktreePath : '',
           commitsFull: commitsDrawerState.isOpen && commitsDrawerState.fullHistory,
@@ -1990,6 +2079,187 @@
         document.getElementById('repoDropdown').classList.remove('show');
       }
     });
+
+    // 点击外部时关闭所有可搜索选择器下拉（Diff 基准/对比、MR 弹层内的分支选择器）
+    document.addEventListener('click', (e) => {
+      searchablePickers.forEach(p => {
+        if (p.wrapper && !p.wrapper.contains(e.target)) p.closeDropdown();
+      });
+    });
+
+    /* 可搜索下拉选择器工厂（视觉与交互对齐仓库选择器 repoPickerWrapper）：
+       触发器 + 搜索输入 + 分组列表，选中值写入隐藏 <select> 作为状态载体。
+       cfg: {
+         wrapperId/triggerId/triggerTextId/dropdownId/searchInputId/listId/selectId,
+         getItems: () => [{ kind, value, identity, label, searchText, disabled }],
+         groupTitles: { [kind]: 分组标题 }, emptyText: 无结果文案,
+         placeholder: 未选中时触发器文案, onSelect: (identity) => void
+       } */
+    function createSearchablePicker(cfg) {
+      const wrapper = document.getElementById(cfg.wrapperId);
+      const trigger = document.getElementById(cfg.triggerId);
+      const textEl = document.getElementById(cfg.triggerTextId);
+      const dropdown = document.getElementById(cfg.dropdownId);
+      const input = document.getElementById(cfg.searchInputId);
+      const listEl = document.getElementById(cfg.listId);
+      const state = { open: false, keyword: '', visible: [], rowEls: [], highlight: -1 };
+
+      function getSelectedIdentity() {
+        return document.getElementById(cfg.selectId)?.value || '';
+      }
+
+      /* 以隐藏 select 里的身份串为准过滤选项元数据，保证下拉列表与状态载体一致 */
+      function visibleSourceItems() {
+        const identities = new Set([...(document.getElementById(cfg.selectId)?.options || [])].map(o => o.value));
+        return cfg.getItems().filter(item => identities.has(item.identity));
+      }
+
+      /* 键盘高亮只切换类名并滚动到可见，不重建列表，避免滚动位置跳动 */
+      function applyHighlightClasses() {
+        state.rowEls.forEach((el, i) => {
+          el.classList.toggle('highlight', i === state.highlight);
+        });
+        const el = state.rowEls[state.highlight];
+        if (el) el.scrollIntoView({ block: 'nearest' });
+      }
+
+      function renderList() {
+        const kw = state.keyword.trim().toLowerCase();
+        // 大小写不敏感包含式搜索：匹配分支名/Worktree 路径/目录名
+        const items = visibleSourceItems().filter(item => !kw
+          || item.label.toLowerCase().includes(kw)
+          || item.searchText.toLowerCase().includes(kw));
+        state.visible = items;
+        state.rowEls = [];
+        // 初始高亮落在第一个可用选项上（跳过失联 Worktree 等禁用项）
+        state.highlight = items.findIndex(item => !item.disabled);
+
+        if (items.length === 0) {
+          listEl.innerHTML = `<div class="loading" style="padding: 20px;">${escapeHtml(cfg.emptyText || '没有匹配的选项')}</div>`;
+          return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        let lastKind = null;
+        items.forEach((item) => {
+          if (cfg.groupTitles && item.kind !== lastKind) {
+            lastKind = item.kind;
+            const title = document.createElement('div');
+            title.className = 'repo-list-group-title';
+            title.textContent = cfg.groupTitles[item.kind] || item.kind;
+            fragment.appendChild(title);
+          }
+          const selected = item.identity === getSelectedIdentity();
+          const row = document.createElement('div');
+          row.className = 'repo-item'
+            + (selected ? ' selected' : '')
+            + (item.disabled ? ' disabled' : '');
+          row.innerHTML = `
+            <div class="repo-item-left">
+              <span class="repo-item-name">${escapeHtml(item.label)}</span>
+            </div>
+            ${item.disabled ? '<span class="repo-item-group">已失联</span>' : (selected ? '<span class="repo-item-group">当前</span>' : '')}
+          `;
+          row.addEventListener('click', () => chooseItem(item));
+          state.rowEls.push(row);
+          fragment.appendChild(row);
+        });
+        listEl.innerHTML = '';
+        listEl.appendChild(fragment);
+        applyHighlightClasses();
+      }
+
+      function updateTriggerText() {
+        const identity = getSelectedIdentity();
+        if (!identity) {
+          textEl.innerHTML = `<span style="color: var(--text-muted);">${escapeHtml(cfg.placeholder || '请选择')}</span>`;
+          return;
+        }
+        // 选项元数据缺失（数据尚未刷新等）时直接展示身份串兜底
+        const item = cfg.getItems().find(o => o.identity === identity);
+        textEl.innerHTML = `<span style="font-weight: 600; color: var(--text-bright);">${escapeHtml(item ? item.label : identity)}</span>`;
+      }
+
+      function moveHighlight(delta) {
+        if (state.visible.length === 0) return;
+        let idx = state.highlight;
+        for (let step = 0; step < state.visible.length; step++) {
+          idx = (idx + delta + state.visible.length) % state.visible.length;
+          if (!state.visible[idx].disabled) break;
+        }
+        state.highlight = idx;
+        applyHighlightClasses();
+      }
+
+      function chooseItem(item) {
+        if (!item || item.disabled) return;
+        const sel = document.getElementById(cfg.selectId);
+        if (sel) sel.value = item.identity;
+        updateTriggerText();
+        closeDropdown();
+        if (cfg.onSelect) cfg.onSelect(item.identity);
+      }
+
+      function openDropdown() {
+        state.keyword = '';
+        input.value = '';
+        renderList();
+        dropdown.classList.add('show');
+        state.open = true;
+        setTimeout(() => input.focus(), 30);
+      }
+
+      function closeDropdown() {
+        dropdown.classList.remove('show');
+        state.open = false;
+      }
+
+      function toggleDropdown() {
+        if (state.open) closeDropdown();
+        else openDropdown();
+      }
+
+      input.addEventListener('input', () => {
+        state.keyword = input.value;
+        renderList();
+      });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          moveHighlight(1);
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          moveHighlight(-1);
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          const item = state.visible[state.highlight];
+          if (item && !item.disabled) chooseItem(item);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          closeDropdown();
+        }
+      });
+      trigger.addEventListener('click', toggleDropdown);
+
+      const picker = {
+        wrapper,
+        openDropdown,
+        closeDropdown,
+        toggleDropdown,
+        refresh: updateTriggerText, // 数据/选择变化后由外部调用，仅同步触发器文本
+        /* 指定身份串写回隐藏 select；身份串不在选项集中时清空选择（回退占位文案） */
+        setSelected(identity) {
+          const sel = document.getElementById(cfg.selectId);
+          if (sel) {
+            sel.value = (identity && [...sel.options].some(o => o.value === identity)) ? identity : '';
+          }
+          updateTriggerText();
+        }
+      };
+      searchablePickers.push(picker);
+      updateTriggerText();
+      return picker;
+    }
 
     function renderRepoDropdownList() {
       const container = document.getElementById('repoDropdownList');
@@ -2184,22 +2454,36 @@
             if (pendingRestoreState.diffType === 'uncommitted' && pendingRestoreState.uncommitted) {
               const baseSel = document.getElementById('diffBaseSelect');
               const targetSel = document.getElementById('diffTargetSelect');
-              if (targetSel) targetSel.value = pendingRestoreState.uncommitted;
-              if (baseSel && (!baseSel.value || baseSel.value === pendingRestoreState.uncommitted)) {
+              if (targetSel) targetSel.value = `worktree:${pendingRestoreState.uncommitted}`;
+              if (baseSel && (!baseSel.value || baseSel.value === `worktree:${pendingRestoreState.uncommitted}`)) {
                 const other = currentWorktrees.find(w => w.path !== pendingRestoreState.uncommitted);
-                if (other) baseSel.value = other.path;
+                if (other) baseSel.value = `worktree:${other.path}`;
               }
-              currentDiffType = 'worktree';
+              refreshDiffPickerTriggers();
+              currentDiffType = 'ref';
               currentUncommittedPath = pendingRestoreState.uncommitted;
               currentDiffMode = 'uncommitted';
-              fetchAndRenderDiff('uncommitted', false);
-            } else if (pendingRestoreState.diffType === 'worktree' && pendingRestoreState.base && pendingRestoreState.target) {
-              const baseSel = document.getElementById('diffBaseSelect');
-              const targetSel = document.getElementById('diffTargetSelect');
-              if (baseSel) baseSel.value = pendingRestoreState.base;
-              if (targetSel) targetSel.value = pendingRestoreState.target;
+              fetchAndRenderRefDiff('uncommitted', false);
+            } else if ((pendingRestoreState.diffType === 'ref' || pendingRestoreState.diffType === 'worktree')
+              && pendingRestoreState.base && pendingRestoreState.target) {
+              // diffType=ref 为新格式；旧链接 diffType=worktree 无类型前缀，base/target 按 worktree 兼容解析。
+              // 恢复流程在 inspectRepo 之后，选项（含分支）已就绪，可直接应用身份串
+              const baseIdentity = `${pendingRestoreState.baseType || 'worktree'}:${pendingRestoreState.base}`;
+              const targetIdentity = `${pendingRestoreState.targetType || 'worktree'}:${pendingRestoreState.target}`;
               currentDiffMode = pendingRestoreState.mode || null;
-              fetchAndRenderDiff(pendingRestoreState.mode, false);
+              if (applyDiffIdentitiesOrReport(baseIdentity, targetIdentity)) {
+                refreshDiffPickerTriggers();
+                fetchAndRenderRefDiff(pendingRestoreState.mode, false);
+              } else {
+                currentDiffType = 'ref';
+                currentDiffBase = baseIdentity;
+                currentDiffTarget = targetIdentity;
+                document.getElementById('diffResultsContainer').innerHTML = `
+                  <div class="empty-diff-box" style="color: var(--warning);">
+                    <div style="font-size: 15px; margin-bottom: 8px;">链接中的 Worktree 或分支已不存在，无法恢复原比对</div>
+                    <div style="font-size: 13px;">请重新在上方选择基准与对比对象</div>
+                  </div>`;
+              }
             }
           }
           if (pendingRestoreState.commits) {
@@ -2230,7 +2514,7 @@
         document.getElementById('diffResultsContainer').innerHTML = `
           <div class="empty-diff-box">
             <div style="font-size: 16px; margin-bottom: 8px;">请先添加扫描目录</div>
-            <div style="font-size: 13px;">添加目录后，Git Lens 会在这里展示可用仓库的 Worktree 差异。</div>
+            <div style="font-size: 13px;">添加目录后，Git Lens 会在这里展示可用仓库的 Worktree/分支差异。</div>
           </div>`;
         isRestoringHistory = false;
         syncStateToUrl();
@@ -2609,58 +2893,127 @@
     }
 
     /* 优化 3：Diff 选择器更新与操作 */
+
+    /* 汇总 Worktree 与本地分支为统一选项集合；identity = kind:value，
+       worktree 的 value 是路径、branch 的 value 是分支名，kind 前缀保证同名不冲突 */
+    function buildDiffRefOptions() {
+      const options = [];
+      currentWorktrees.forEach(w => {
+        const broken = w.existsOnDisk === false || w.isPrunable;
+        const dirName = w.path.split('/').filter(Boolean).pop() || w.path;
+        options.push({
+          kind: 'worktree',
+          value: w.path,
+          identity: `worktree:${w.path}`,
+          label: `🌳 ${w.isMain ? '[Main] ' : ''}${w.branch || 'HEAD'} (${dirName})${broken ? ' · 已失联' : ''}`,
+          searchText: `${w.branch || ''} ${dirName} ${w.path}`,
+          disabled: broken
+        });
+      });
+      currentBranches.forEach(b => {
+        options.push({
+          kind: 'branch',
+          value: b.name,
+          identity: `branch:${b.name}`,
+          label: `🌿 ${b.name}`,
+          searchText: b.name,
+          disabled: false
+        });
+      });
+      return options;
+    }
+
+    /* 默认基准：主 worktree 优先，其次第一个 worktree，无 worktree 时退回主分支/第一个分支 */
+    function defaultDiffBaseIdentity(options) {
+      const mainWt = currentWorktrees.find(w => w.isMain) || currentWorktrees[0];
+      if (mainWt) return `worktree:${mainWt.path}`;
+      const fallback = options.find(o => o.kind === 'branch' && o.value === currentMainBranch)
+        || options.find(o => o.kind === 'branch');
+      return fallback ? fallback.identity : '';
+    }
+
+    /* 默认对比对象：第一个非主 worktree，退回主 worktree，无 worktree 时退回分支 */
+    function defaultDiffTargetIdentity(options) {
+      const preferredWt = currentWorktrees.find(w => !w.isMain) || currentWorktrees[0];
+      if (preferredWt) return `worktree:${preferredWt.path}`;
+      const fallback = options.find(o => o.kind === 'branch' && o.value === currentMainBranch)
+        || options.find(o => o.kind === 'branch');
+      return fallback ? fallback.identity : '';
+    }
+
     function populateDiffSelectors() {
       const baseSel = document.getElementById('diffBaseSelect');
       const targetSel = document.getElementById('diffTargetSelect');
       if (!baseSel || !targetSel) return;
 
-      const curBase = baseSel.value;
-      const curTarget = targetSel.value;
+      const options = buildDiffRefOptions();
+      const rebuild = (sel, fallbackIdentity) => {
+        // 刷新后保留当前有效选择；身份串已不在选项集中时回退默认值
+        const kept = sel.value && options.some(o => o.identity === sel.value) ? sel.value : fallbackIdentity;
+        sel.innerHTML = '';
+        if (options.length === 0) {
+          sel.innerHTML = '<option value="">无可用 Worktree 或分支</option>';
+          return;
+        }
+        options.forEach(o => {
+          const opt = document.createElement('option');
+          opt.value = o.identity;
+          opt.textContent = o.label;
+          sel.appendChild(opt);
+        });
+        if (kept) sel.value = kept;
+      };
 
-      baseSel.innerHTML = '';
-      targetSel.innerHTML = '';
+      rebuild(baseSel, defaultDiffBaseIdentity(options));
+      rebuild(targetSel, defaultDiffTargetIdentity(options));
 
-      if (currentWorktrees.length === 0) {
-        baseSel.innerHTML = '<option value="">无可用 Worktree</option>';
-        targetSel.innerHTML = '<option value="">无可用 Worktree</option>';
-        return;
+      // 同步可搜索下拉的触发文本（列表在每次展开时按 select 选项重建）
+      if (diffBasePicker) diffBasePicker.refresh();
+      if (diffTargetPicker) diffTargetPicker.refresh();
+    }
+
+    /* 把 kind:value 身份串解析回类型与取值；无前缀的旧值一律按 worktree 兼容 */
+    function splitRefIdentity(identity) {
+      const str = identity || '';
+      const idx = str.indexOf(':');
+      if (idx <= 0) return { kind: 'worktree', value: str };
+      return {
+        kind: str.slice(0, idx) === 'branch' ? 'branch' : 'worktree',
+        value: str.slice(idx + 1)
+      };
+    }
+
+    /* 恢复场景：按身份串设置两个选择器；任一身份串不在选项集中返回 false，由调用方给出中文提示 */
+    function applyDiffIdentitiesOrReport(baseIdentity, targetIdentity) {
+      const baseSel = document.getElementById('diffBaseSelect');
+      const targetSel = document.getElementById('diffTargetSelect');
+      let ok = true;
+      if (baseIdentity) {
+        if ([...baseSel.options].some(o => o.value === baseIdentity)) baseSel.value = baseIdentity;
+        else ok = false;
       }
-
-      currentWorktrees.forEach((w) => {
-        const label = `${w.isMain ? '⭐ [Main] ' : '🌳 '}${w.branch || 'HEAD'} (${w.path.split('/').pop()})`;
-        const optA = document.createElement('option');
-        optA.value = w.path;
-        optA.textContent = label;
-        baseSel.appendChild(optA);
-
-        const optB = document.createElement('option');
-        optB.value = w.path;
-        optB.textContent = label;
-        targetSel.appendChild(optB);
-      });
-
-      if (curBase && currentWorktrees.some(w => w.path === curBase)) {
-        baseSel.value = curBase;
-      } else {
-        baseSel.value = currentWorktrees[0].path;
+      if (targetIdentity) {
+        if ([...targetSel.options].some(o => o.value === targetIdentity)) targetSel.value = targetIdentity;
+        else ok = false;
       }
+      return ok;
+    }
 
-      if (curTarget && currentWorktrees.some(w => w.path === curTarget)) {
-        targetSel.value = curTarget;
-      } else if (currentWorktrees.length > 1) {
-        targetSel.value = currentWorktrees[1].path;
-      } else {
-        targetSel.value = currentWorktrees[0].path;
-      }
+    /* 两个可搜索下拉触发器文本与选择状态同步（交换/程序化设置后调用） */
+    function refreshDiffPickerTriggers() {
+      if (diffBasePicker) diffBasePicker.refresh();
+      if (diffTargetPicker) diffTargetPicker.refresh();
     }
 
     function swapDiffTargets() {
       const baseSel = document.getElementById('diffBaseSelect');
       const targetSel = document.getElementById('diffTargetSelect');
+      // 身份串整体对调（kind 与 value 一起交换）
       const temp = baseSel.value;
       baseSel.value = targetSel.value;
       targetSel.value = temp;
-      fetchAndRenderDiff(null, true);
+      refreshDiffPickerTriggers();
+      fetchAndRenderRefDiff(null, true);
     }
 
     // 落后状态默认隐藏主干独有文件；用户明确查看时，反向对比即可看到这些更新。
@@ -2672,22 +3025,47 @@
       const temp = baseSel.value;
       baseSel.value = targetSel.value;
       targetSel.value = temp;
-      currentDiffType = 'worktree';
+      refreshDiffPickerTriggers();
+      currentDiffType = 'ref';
       currentDiffBase = baseSel.value;
       currentDiffTarget = targetSel.value;
       currentDiffMode = 'committed';
-      fetchAndRenderDiff('committed', true);
+      fetchAndRenderRefDiff('committed', true);
     }
 
     function viewDiffAgainstMain(targetWorktreePath) {
+      // 与主干对比保持 Worktree 类型（包含目标 Worktree 未提交修改），基准固定为主 worktree
+      const mainWt = currentWorktrees.find(w => w.isMain) || currentWorktrees[0];
+      if (!mainWt) return;
       const baseSel = document.getElementById('diffBaseSelect');
       const targetSel = document.getElementById('diffTargetSelect');
-      if (currentWorktrees.length > 0) {
-        baseSel.value = currentWorktrees[0].path;
-        targetSel.value = targetWorktreePath;
-        switchTab('diff');
-        fetchAndRenderDiff(null, false);
+      baseSel.value = `worktree:${mainWt.path}`;
+      targetSel.value = `worktree:${targetWorktreePath}`;
+      refreshDiffPickerTriggers();
+      switchTab('diff', false);
+      fetchAndRenderRefDiff(null, true);
+    }
+
+    /* 分支列表快捷入口：branch↔branch、仅已提交模式对比任意本地分支与主分支（无 Worktree 也可用） */
+    function viewBranchDiffAgainstMain(branchName) {
+      if (!currentMainBranch) {
+        alert('未能识别当前仓库的主分支，无法对比');
+        return;
       }
+      if (currentMainBranch === branchName) {
+        alert('该分支即为主分支，无需对比');
+        return;
+      }
+      switchTab('diff', false); // 先触发 populateDiffSelectors，确保选项基于最新数据
+      const baseIdentity = `branch:${currentMainBranch}`;
+      const targetIdentity = `branch:${branchName}`;
+      if (!applyDiffIdentitiesOrReport(baseIdentity, targetIdentity)) {
+        document.getElementById('diffResultsContainer').innerHTML =
+          `<div class="empty-diff-box" style="color: var(--warning);">分支 ${escapeHtml(branchName)} 或主分支 ${escapeHtml(currentMainBranch)} 已不存在，无法比对。</div>`;
+        return;
+      }
+      refreshDiffPickerTriggers();
+      fetchAndRenderRefDiff('committed', true);
     }
 
     /* 查看指定 Worktree 未提交修改 (Dirty Diff) */
@@ -2697,39 +3075,42 @@
       const targetSel = document.getElementById('diffTargetSelect');
 
       if (targetSel) {
-        targetSel.value = worktreePath;
+        targetSel.value = `worktree:${worktreePath}`;
       }
-      if (baseSel && (!baseSel.value || baseSel.value === worktreePath)) {
+      if (baseSel && (!baseSel.value || baseSel.value === `worktree:${worktreePath}`)) {
         const other = currentWorktrees.find(w => w.path !== worktreePath);
-        if (other) baseSel.value = other.path;
+        if (other) baseSel.value = `worktree:${other.path}`;
       }
+      refreshDiffPickerTriggers();
 
-      currentDiffType = 'worktree';
-      currentDiffTarget = worktreePath;
-      currentDiffBase = baseSel ? baseSel.value : '';
+      currentUncommittedPath = worktreePath;
       currentDiffMode = 'uncommitted';
 
-      switchTab('diff');
-      await fetchAndRenderDiff('uncommitted', false);
+      switchTab('diff', false);
+      await fetchAndRenderRefDiff('uncommitted', false);
     }
 
-    async function fetchAndRenderDiff(requestedMode = null, pushHistory = false) {
-      const base = document.getElementById('diffBaseSelect').value;
-      const target = document.getElementById('diffTargetSelect').value;
+    /* 统一 Diff 比对入口：读取两个选择器的 kind:value 身份串调用 /api/diff-refs，
+       worktree↔worktree 组合也走该接口，与 worktree↔branch 语义一致 */
+    async function fetchAndRenderRefDiff(requestedMode = null, pushHistory = false) {
+      const baseSel = document.getElementById('diffBaseSelect');
+      const targetSel = document.getElementById('diffTargetSelect');
       const container = document.getElementById('diffResultsContainer');
+      const base = baseSel?.value || '';
+      const target = targetSel?.value || '';
 
       if (!base || !target) {
-        alert('请选择两个工作区进行对比');
+        alert('请选择两个 Worktree 或分支进行对比');
         return;
       }
 
-      const isSameWorktree = (base === target);
-      if (isSameWorktree) {
-        // 同工作区自比：自动强制收敛到 uncommitted 模式
+      const isSameRef = base === target;
+      if (isSameRef) {
+        // 同一 Worktree / 同一分支自比：自动锁定 uncommitted 自审模式（现有行为保持）
         currentDiffMode = 'uncommitted';
       }
 
-      currentDiffType = 'worktree';
+      currentDiffType = 'ref';
       currentDiffBase = base;
       currentDiffTarget = target;
       if (requestedMode) {
@@ -2737,16 +3118,28 @@
       }
       syncStateToUrl(pushHistory);
 
-      container.innerHTML = '<div class="loading">正在比对工作区代码差异...</div>';
+      container.innerHTML = '<div class="loading">正在比对代码差异...</div>';
+
+      const seq = ++diffRequestSeq;
+      const baseRef = splitRefIdentity(base);
+      const targetRef = splitRefIdentity(target);
+      const params = new URLSearchParams({
+        path: currentRepo,
+        sourceType: baseRef.kind,
+        source: baseRef.value,
+        targetType: targetRef.kind,
+        target: targetRef.value
+      });
+      if (currentDiffMode) {
+        params.set('mode', currentDiffMode);
+      }
 
       try {
-        let url = `/api/diff-worktrees?path=${encodeURIComponent(currentRepo)}&source=${encodeURIComponent(base)}&target=${encodeURIComponent(target)}`;
-        if (currentDiffMode) {
-          url += `&mode=${encodeURIComponent(currentDiffMode)}`;
-        }
-        const res = await fetch(url);
+        const res = await fetch(`/api/diff-refs?${params}`);
         const data = await res.json();
-        if (!data.ok) throw new Error(data.error);
+        // 防竞态：响应返回时已有更新的比对请求在途，直接丢弃旧结果，避免覆盖新视图
+        if (seq !== diffRequestSeq) return;
+        if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
 
         const diff = data.diff;
         if (diff.effectiveMode) {
@@ -2754,8 +3147,14 @@
         }
         renderDiffView(diff);
       } catch (err) {
+        if (seq !== diffRequestSeq) return;
         container.innerHTML = `<div class="empty-diff-box" style="color: var(--danger);">Diff 计算失败: ${escapeHtml(err.message)}</div>`;
       }
+    }
+
+    /* 兼容旧入口：历史调用点统一转发到 ref 比对流程 */
+    async function fetchAndRenderDiff(requestedMode = null, pushHistory = false) {
+      return fetchAndRenderRefDiff(requestedMode, pushHistory);
     }
 
     /* 拉取最新仓库分析数据并刷新外层列表/徽标。
@@ -2790,14 +3189,14 @@
         // 根据当前 Diff 模式重新比对刷新
         if (currentDiffType === 'uncommitted' && currentUncommittedPath) {
           await viewUncommittedDiff(currentUncommittedPath);
-        } else if (currentDiffType === 'worktree') {
-          await fetchAndRenderDiff();
+        } else if (currentDiffBase && currentDiffTarget) {
+          await fetchAndRenderRefDiff();
         } else {
           // 如果尚未进行比对，触发一次当前所选选择器的比对
           const b = document.getElementById('diffBaseSelect')?.value;
           const t = document.getElementById('diffTargetSelect')?.value;
           if (b && t && b !== t) {
-            await fetchAndRenderDiff();
+            await fetchAndRenderRefDiff();
           }
         }
       } catch (e) {
@@ -2919,6 +3318,17 @@
       return `<pre class="diff-pre"><code>${formattedCode}</code></pre>`;
     }
 
+    /* Diff 摘要里的基准/对比对象徽章：branch 类型无 path，用 kind 图标区分并容错缺字段 */
+    function diffRefBadgeHtml(ref) {
+      const icon = ref.kind === 'branch' ? '🌿' : '🌳';
+      const name = ref.branch || ref.head || '-';
+      const title = ref.path
+        ? ` title="${escapeHtml(ref.path)}"`
+        : (ref.kind === 'branch' ? ' title="本地分支"' : '');
+      const head = ref.head ? `<code>${escapeHtml(String(ref.head).slice(0, 8))}</code>` : '<code>-</code>';
+      return `<span${title}>${icon} <span class="badge">${escapeHtml(name)}</span> ${head}</span>`;
+    }
+
     /* 渲染两个 Worktree 之间的 Diff 视图 */
     function renderDiffView(diff) {
       const container = document.getElementById('diffResultsContainer');
@@ -2931,7 +3341,10 @@
 
       let syncStatusBadge = '';
       if (diff.isSameWorktree) {
-        syncStatusBadge = '<span class="badge badge-success">🌿 本地工作区自审</span>';
+        // branch↔branch 同分支与同 Worktree 自审共用该徽章，按类型区分文案
+        syncStatusBadge = diff.source?.kind === 'branch'
+          ? '<span class="badge badge-success">🌿 同分支自审（内容一致）</span>'
+          : '<span class="badge badge-success">🌿 本地工作区自审</span>';
       } else if (diff.isCommittedContentEqual && (diff.historyAhead > 0 || diff.historyBehind > 0)) {
         syncStatusBadge = '<span class="badge badge-success">文件内容一致（提交历史已 squash 整合）</span>';
       } else if (diff.isCommittedContentEqual) {
@@ -2948,10 +3361,18 @@
       }
 
       let modeTipText = '';
-      const isSelfDiff = !!diff.isSameWorktree;
+      const isSelfDiff = !!diff.isSameWorktree || currentDiffBase === currentDiffTarget;
+      // branch 类型参与比对时后端会通过 modesAvailable 限制可用模式（如无 worktree 则无未提交可看），
+      // 前端据此禁用不可用的模式按钮
+      const modesAvailable = Array.isArray(diff.modesAvailable) ? diff.modesAvailable : null;
+      const isModeDisabled = (m) => (isSelfDiff && m !== 'uncommitted')
+        || (Boolean(modesAvailable) && !modesAvailable.includes(m));
+      const modeDisabledTitle = (m) => (isSelfDiff && m !== 'uncommitted')
+        ? '同分支对比不可用'
+        : (modesAvailable && !modesAvailable.includes(m) ? '当前比对对象不支持该模式' : '');
 
       if (isSelfDiff) {
-        modeTipText = '💡 分支自审模式：Base 与 Target 为同一工作区，已自动锁定为【仅未提交 & 未跟踪】模式';
+        modeTipText = '💡 分支自审模式：Base 与 Target 为同一对象，已自动锁定为【仅未提交 & 未跟踪】模式';
       } else if (effectiveMode === 'uncommitted') {
         modeTipText = '⚡ 仅展示 Target 本地未提交修改及 untracked 新增文件';
       } else if (effectiveMode === 'all') {
@@ -2963,15 +3384,15 @@
       const modeControlHtml = `
         <div class="diff-mode-control-row">
           <div class="diff-mode-segmented">
-            <button class="diff-mode-btn ${effectiveMode === 'uncommitted' ? 'active' : ''}" onclick="selectDiffMode('uncommitted')" title="仅查看当前工作区未提交和未跟踪的代码">
+            <button class="diff-mode-btn ${effectiveMode === 'uncommitted' ? 'active' : ''} ${isModeDisabled('uncommitted') ? 'disabled' : ''}" ${isModeDisabled('uncommitted') ? 'disabled' : ''} onclick="selectDiffMode('uncommitted')" title="${isModeDisabled('uncommitted') ? modeDisabledTitle('uncommitted') : '仅查看当前工作区未提交和未跟踪的代码'}">
               <span>⚡ 仅未提交 & 未跟踪</span>
               <span class="diff-mode-pill">${counts.uncommitted}</span>
             </button>
-            <button class="diff-mode-btn ${effectiveMode === 'all' ? 'active' : ''} ${isSelfDiff ? 'disabled' : ''}" ${isSelfDiff ? 'disabled' : ''} onclick="selectDiffMode('all')" title="${isSelfDiff ? '同分支对比不可用' : '全量对比：已提交分支修改 + 本地未提交改动'}">
+            <button class="diff-mode-btn ${effectiveMode === 'all' ? 'active' : ''} ${isModeDisabled('all') ? 'disabled' : ''}" ${isModeDisabled('all') ? 'disabled' : ''} onclick="selectDiffMode('all')" title="${isModeDisabled('all') ? modeDisabledTitle('all') : '全量对比：已提交分支修改 + 本地未提交改动'}">
               <span>📦 全量变更</span>
               <span class="diff-mode-pill">${counts.all}</span>
             </button>
-            <button class="diff-mode-btn ${effectiveMode === 'committed' ? 'active' : ''} ${isSelfDiff ? 'disabled' : ''}" ${isSelfDiff ? 'disabled' : ''} onclick="selectDiffMode('committed')" title="${isSelfDiff ? '同分支对比不可用' : '仅查看已提交的代码修改，忽略未提交'}">
+            <button class="diff-mode-btn ${effectiveMode === 'committed' ? 'active' : ''} ${isModeDisabled('committed') ? 'disabled' : ''}" ${isModeDisabled('committed') ? 'disabled' : ''} onclick="selectDiffMode('committed')" title="${isModeDisabled('committed') ? modeDisabledTitle('committed') : '仅查看已提交的代码修改，忽略未提交'}">
               <span>📌 仅已提交</span>
               <span class="diff-mode-pill">${counts.committed}</span>
             </button>
@@ -2993,8 +3414,8 @@
         container.innerHTML = `
           <div class="diff-summary-card">
             <div class="stat-bar">
-              <div>基准 (Base): <span class="badge">${escapeHtml(diff.source.branch)}</span> <code>${escapeHtml(diff.source.head ? diff.source.head.slice(0, 8) : '-')}</code></div>
-              <div>对比 (Target): <span class="badge">${escapeHtml(diff.target.branch)}</span> <code>${escapeHtml(diff.target.head ? diff.target.head.slice(0, 8) : '-')}</code></div>
+              <div>基准 (Base): ${diffRefBadgeHtml(diff.source)}</div>
+              <div>对比 (Target): ${diffRefBadgeHtml(diff.target)}</div>
               <div style="margin-left: auto;">${syncStatusBadge}</div>
             </div>
             ${modeControlHtml}
@@ -3015,6 +3436,8 @@
         }
       });
 
+      // 文件内容对比的 revision：worktree 与 branch 类型都优先用 head SHA；
+      // branch 类型缺 head 时退回分支名（/api/raw-file 的 revision 参数可解析分支名）
       const sourceRef = diff.source.head || diff.source.branch || 'HEAD';
       const targetRef = diff.target.head || diff.target.branch || 'HEAD';
 
@@ -3066,8 +3489,8 @@
       container.innerHTML = `
         <div class="diff-summary-card">
           <div class="stat-bar">
-            <div>基准 (Base): <span class="badge">${escapeHtml(diff.source.branch)}</span> <code>${escapeHtml(diff.source.head ? diff.source.head.slice(0, 8) : '-')}</code></div>
-            <div>对比 (Target): <span class="badge">${escapeHtml(diff.target.branch)}</span> <code>${escapeHtml(diff.target.head ? diff.target.head.slice(0, 8) : '-')}</code></div>
+            <div>基准 (Base): ${diffRefBadgeHtml(diff.source)}</div>
+            <div>对比 (Target): ${diffRefBadgeHtml(diff.target)}</div>
             <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
               ${syncStatusBadge}
               <span style="color: var(--text-muted);">|</span>
@@ -4089,16 +4512,30 @@
         renderFilteredLists();
 
         switchTab(state.tab === 'diff' ? 'diff' : 'overview', false);
-        if (state.tab === 'diff' && state.diffType === 'worktree' && state.base && state.target) {
-          document.getElementById('diffBaseSelect').value = state.base;
-          document.getElementById('diffTargetSelect').value = state.target;
+        if (state.tab === 'diff' && (state.diffType === 'ref' || state.diffType === 'worktree') && state.base && state.target) {
+          // diffType=ref 为新格式；旧链接 diffType=worktree 无类型前缀，base/target 按 worktree 兼容解析
+          const baseIdentity = `${state.baseType || 'worktree'}:${state.base}`;
+          const targetIdentity = `${state.targetType || 'worktree'}:${state.target}`;
           currentDiffMode = state.mode || null;
-          await fetchAndRenderDiff(currentDiffMode, false);
+          if (applyDiffIdentitiesOrReport(baseIdentity, targetIdentity)) {
+            refreshDiffPickerTriggers();
+            await fetchAndRenderRefDiff(currentDiffMode, false);
+          } else {
+            currentDiffType = 'ref';
+            currentDiffBase = baseIdentity;
+            currentDiffTarget = targetIdentity;
+            document.getElementById('diffResultsContainer').innerHTML = `
+              <div class="empty-diff-box" style="color: var(--warning);">
+                <div style="font-size: 15px; margin-bottom: 8px;">链接中的 Worktree 或分支已不存在，无法恢复原比对</div>
+                <div style="font-size: 13px;">请重新在上方选择基准与对比对象</div>
+              </div>`;
+          }
         } else if (state.tab === 'diff' && state.diffType === 'uncommitted' && state.uncommitted) {
           currentUncommittedPath = state.uncommitted;
           currentDiffMode = 'uncommitted';
-          document.getElementById('diffTargetSelect').value = state.uncommitted;
-          await fetchAndRenderDiff('uncommitted', false);
+          applyDiffIdentitiesOrReport('', `worktree:${state.uncommitted}`);
+          refreshDiffPickerTriggers();
+          await fetchAndRenderRefDiff('uncommitted', false);
         } else if (state.tab === 'diff') {
           currentDiffType = null;
           currentDiffMode = null;
@@ -4225,8 +4662,39 @@
       }
     });
 
+    /* 初始化 Diff Tab 的两个可搜索选择器：选项来自 Worktree 与本地分支，
+       选中变化后自动触发比对（同时保留「比对 Diff」按钮可手动重拉） */
+    diffBasePicker = createSearchablePicker({
+      wrapperId: 'diffBasePickerWrapper',
+      triggerId: 'diffBasePickerTrigger',
+      triggerTextId: 'diffBasePickerText',
+      dropdownId: 'diffBasePickerDropdown',
+      searchInputId: 'diffBasePickerSearch',
+      listId: 'diffBasePickerList',
+      selectId: 'diffBaseSelect',
+      getItems: buildDiffRefOptions,
+      groupTitles: { worktree: '🌳 Worktree', branch: '🌿 本地分支' },
+      emptyText: '没有匹配的 Worktree 或分支',
+      placeholder: '请选择基准',
+      onSelect: () => fetchAndRenderRefDiff(null, true)
+    });
+    diffTargetPicker = createSearchablePicker({
+      wrapperId: 'diffTargetPickerWrapper',
+      triggerId: 'diffTargetPickerTrigger',
+      triggerTextId: 'diffTargetPickerText',
+      dropdownId: 'diffTargetPickerDropdown',
+      searchInputId: 'diffTargetPickerSearch',
+      listId: 'diffTargetPickerList',
+      selectId: 'diffTargetSelect',
+      getItems: buildDiffRefOptions,
+      groupTitles: { worktree: '🌳 Worktree', branch: '🌿 本地分支' },
+      emptyText: '没有匹配的 Worktree 或分支',
+      placeholder: '请选择对比对象',
+      onSelect: () => fetchAndRenderRefDiff(null, true)
+    });
+
     loadProjects();
-  
+
     // 回到顶部逻辑
     function scrollToTop() {
       window.scrollTo({
@@ -4246,6 +4714,10 @@
     }, { passive: true });
 
     document.addEventListener('keydown', (e) => {
+      // Escape 优先关闭可搜索选择器的下拉面板
+      if (e.key === 'Escape') {
+        searchablePickers.forEach(p => p.closeDropdown());
+      }
       if (e.key === 'Escape' && commitsDrawerState.isOpen) {
         closeCommitsDrawer();
       }
