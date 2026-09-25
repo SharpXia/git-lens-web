@@ -94,7 +94,9 @@ mkdir -p "$REPO/assets"
 # 最小 1x1 PNG（70 字节），printf 直接写字节。注意：转义后若紧跟十六进制字符会被
 # printf 的 \x 解析贪婪吞并（如 \xda63 被读成 \xda6），因此一律改写为显式转义
 printf '\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0dIDATx\xda\x63\xfc\xcf\xc0P\x0f\x00\x04\x85\x01\x80\x84\xa9\x8c\x21\x00\x00\x00\x00IEND\xae\x42\x60\x82' > "$REPO/assets/logo.png"
-head -c 64 /dev/urandom > "$REPO/assets/blob.bin"
+# urandom 64 字节有约 78% 概率不含 NUL，git 文本启发式会把它当文本 diff（numstat 给行数而非 - -）；
+# 显式补一个 NUL 字节确保 git 判定为二进制，供 isBinary 断言使用
+{ head -c 64 /dev/urandom; printf '\x00'; } > "$REPO/assets/blob.bin"
 git -C "$REPO" add assets
 qa_commit "$REPO" -m 'main: 添加 PNG 图片与二进制文件'
 

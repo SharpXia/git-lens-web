@@ -280,8 +280,11 @@ async function runStageMr(ctx) {
     detail.repoPath === repo && detail.sourceBranch === branches.mergeNoFF &&
       detail.targetBranch === 'main' && detail.title === 'QA: --no-ff 合并成功路径'
   );
-  const bogusDetail = await requestJson(baseUrl, mrDetailUrl(repo, 'qa-no-such-mr-id'));
-  checkStatus('不存在的 MR 详情返回 404', bogusDetail, 404, mrDetailUrl(repo, 'qa-no-such-mr-id'));
+  // 不存在的 MR：用格式合法但从未使用过的 UUID（格式非法的 id 会被服务的参数校验层以 400 拒绝，
+  // 那是另一条校验路径；这里验证的是"合法 id 但查无此 MR"的 404 语义）
+  const bogusUuid = '00000000-0000-4000-8000-000000000000';
+  const bogusDetail = await requestJson(baseUrl, mrDetailUrl(repo, bogusUuid));
+  checkStatus('不存在的 MR 详情返回 404', bogusDetail, 404, mrDetailUrl(repo, bogusUuid));
 
   // 审阅：approve
   const approveRes = await requestJson(baseUrl, '/api/merge-requests/action', {
