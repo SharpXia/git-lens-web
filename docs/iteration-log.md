@@ -76,3 +76,18 @@
 
 - 集成回归脚本：/tmp/glw-setup-repo.sh（造 main 14 提交 + feature/feat2 分叉与二进制/merge 提交）+ /tmp/glw-verify.mjs（STAGE=b/a/c/d/e/f/g/full 分阶段断言，全部通过）。
 - 每次合入前后的固定检查：`node --check` 两个后端文件；awk 抽取 index.html 内联 JS 后 `node --check`；9599 端口起服务跑对应阶段断言；结束后 kill 进程。
+
+### 2026-09-25（本地 MR 与 Branch Diff 协调开发）
+
+- **四 worktree 并行分工**（均基于 main@b78d1aa）：
+  - `mr-backend`（分支 codex/local-mr-backend）：MR API 与本地合并语义（创建/列表/详情/审阅动作/`--no-ff` 合并/失败自动 abort）；
+  - `branch-diff-backend`（分支 codex/branch-diff-backend）：`GET /api/diff-refs` 六种 Worktree/分支组合与 kind 标注，保留 `/api/diff-worktrees` 原行为；
+  - `ui`（分支 codex/local-mr-branch-diff-ui）：Diff 选择器类型切换、URL 参数恢复、MR 面板与局部刷新；
+  - `qa`（分支 codex/local-mr-branch-diff-qa，本 worktree）：契约文档、fixture 构建脚本、HTTP 集成验证脚本，不改 `src/` 与 `public/`。
+- **协调分支**：codex/local-mr-branch-diff（integration worktree），负责按 mr-backend → branch-diff-backend → ui 顺序 `merge --no-ff` 汇总；契约以 `docs/local-mr-branch-diff.md` 为准。
+- **实施顺序**：先冻结契约（数据模型/状态机/API 错误码/合并前置检查/局部刷新表），qa 据此先产出验证脚本作为机械化验收标准；后端两分支按契约并行实现；ui 依赖契约字段并行开发；最后集成、跑 full 回归。
+- **验证方式备忘**：
+  - `bash scripts/mr-diff-fixture.sh /tmp/<目录>`：幂等构建 8 分支 5 worktree 的场景素材（冲突/吸收/dirty/deep 分支名/plain 分支/--no-ff 素材/图片与二进制），stdout 末行为 JSON 汇总，脚本内自检；
+  - `node scripts/verify-mr-branch-diff.mjs --base-url http://127.0.0.1:<端口> --config-dir /tmp/<私有目录> --stage <full|mr|diff|compat>`：STAGE 分阶段 HTTP 断言（mr=MR 全链路，diff=Branch Diff 矩阵与兼容，compat=既有接口回归，full=全部）；fixture 与扫描目录写入全部隔离在 /tmp 与脚本参数指定的 config-dir；
+  - 本基线（未合入新接口）实测：STAGE=compat 11 项断言全绿；STAGE=mr 在 404 处给出「该接口尚未在当前基线实现」提示，属预期。
+- **状态：开发中，待集成回归。** 集成后由协调方在 integration worktree 起 `--stage full` 一键回归。
