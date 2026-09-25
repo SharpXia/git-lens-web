@@ -630,6 +630,31 @@
       gap: 8px;
     }
 
+    /* 未提交面板的 stash 列表条目 */
+    .stash-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+    .stash-ref {
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      font-size: 12px;
+      color: var(--accent);
+    }
+    .stash-subject {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     .file-diff-card {
       background: #090d13;
       border: 1px solid var(--border);
@@ -1077,7 +1102,8 @@
       position: fixed;
       top: 0;
       right: 0;
-      width: min(420px, 92vw);
+      /* 720px 在 1080p 屏幕上超过三分之一宽度，保证提交详情与 Diff 可读性；窄屏仍受 92vw 约束 */
+      width: min(720px, 92vw);
       height: 100vh;
       background: var(--card-bg);
       border-left: 1px solid var(--border);
@@ -1128,6 +1154,45 @@
       gap: 8px;
       font-size: 12px;
       color: var(--text-muted);
+      flex-shrink: 0;
+    }
+    /* 提交过滤行: 位于 meta 与列表之间, 过宽时允许换行 */
+    .commits-drawer-filters {
+      padding: 10px 20px;
+      border-bottom: 1px solid var(--border-muted);
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .commits-drawer-filters input {
+      background: var(--card-alt);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-bright);
+      font-size: 12px;
+      padding: 4px 8px;
+      color-scheme: dark; /* 让原生日期控件按暗色主题渲染 */
+    }
+    .commits-drawer-filters input::placeholder {
+      color: var(--text-muted);
+    }
+    .commits-drawer-filters input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .commit-filter-text {
+      flex: 1 1 104px;
+      min-width: 96px;
+    }
+    .commit-filter-date {
+      width: 128px;
+      flex: 0 1 128px;
+    }
+    .commit-filter-btn {
+      padding: 3px 10px;
+      font-size: 12px;
       flex-shrink: 0;
     }
     .commits-drawer-body {
@@ -1186,6 +1251,147 @@
       color: var(--text-muted);
       white-space: pre-wrap;
       word-break: break-word;
+    }
+    /* 提交卡片可点击展开详情 */
+    .commit-item.clickable {
+      cursor: pointer;
+    }
+    /* 时间线分组头：按日期给提交列表分节，小号加粗 + muted 色，右侧引出一条浅分隔线 */
+    .commit-date-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 14px 0 10px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    .commit-date-group::after {
+      content: '';
+      flex: 1;
+      border-top: 1px solid var(--border-muted);
+    }
+    .commit-detail {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .commit-detail-body {
+      margin: 0 0 8px;
+      padding: 0;
+      font-family: inherit;
+      font-size: 12px;
+      color: var(--text-muted);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .commit-detail-parents {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .commit-detail-parent {
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      font-size: 12px;
+      color: var(--accent);
+      cursor: pointer;
+    }
+    .commit-detail-parent:hover {
+      text-decoration: underline;
+    }
+    .commit-detail-stats {
+      margin-bottom: 6px;
+      color: var(--text);
+    }
+    .commit-detail-file {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      padding: 3px 0;
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      font-size: 12px;
+    }
+    .commit-detail-file-path {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text);
+    }
+    .commit-detail-file-stats {
+      flex-shrink: 0;
+    }
+    .commit-detail-loading {
+      padding: 4px 0;
+      color: var(--text-muted);
+    }
+    .commit-detail-error {
+      color: var(--danger);
+    }
+    /* 提交详情面板内「查看 Diff」按钮与逐文件 Diff 区块 */
+    .commit-diff-toggle-btn {
+      margin-top: 2px;
+      padding: 3px 10px;
+      font-size: 12px;
+    }
+    /* 提交详情面板内 Cherry-pick / Revert 操作按钮行 */
+    .commit-detail-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      margin-top: 2px;
+    }
+    .commit-action-btn {
+      padding: 3px 10px;
+      font-size: 12px;
+    }
+    /* Cherry-pick / Revert 的目标工作区选择器，与操作按钮同行（配色沿用全局 select 基础样式） */
+    .commit-action-target {
+      padding: 3px 6px;
+      font-size: 12px;
+      max-width: 220px;
+    }
+    .commit-diff-section {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+    }
+    .commit-diff-file-card {
+      margin-bottom: 8px;
+      padding: 6px 8px;
+      background: #090d13;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .commit-diff-file-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 6px;
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      font-size: 12px;
+    }
+    .commit-diff-file-path {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text);
+    }
+    .commit-diff-empty {
+      padding: 2px 0;
+      color: var(--text-muted);
+      font-size: 12px;
     }
     .commits-drawer-footer {
       padding: 12px 20px;
@@ -1616,6 +1822,7 @@
       const urlMode = url.searchParams.get('mode');
       const urlCommits = url.searchParams.get('commits');
       const urlCommitsFull = url.searchParams.get('commitsFull');
+      const urlCommitsRef = url.searchParams.get('commitsRef');
 
       if (!urlRepo && !urlTab && !urlQ && !urlDiffType && !urlCommits) return null;
       return {
@@ -1628,7 +1835,8 @@
           target: urlTarget || '',
           mode: urlMode || null,
           commits: urlCommits || '',
-          commitsFull: urlCommitsFull === '1'
+          commitsFull: urlCommitsFull === '1',
+          commitsRef: urlCommitsRef || ''
       };
     }
 
@@ -1690,9 +1898,12 @@
           url.searchParams.set('commits', commitsDrawerState.worktreePath);
           if (commitsDrawerState.fullHistory) url.searchParams.set('commitsFull', '1');
           else url.searchParams.delete('commitsFull');
+          if (commitsDrawerState.ref) url.searchParams.set('commitsRef', commitsDrawerState.ref);
+          else url.searchParams.delete('commitsRef');
         } else {
           url.searchParams.delete('commits');
           url.searchParams.delete('commitsFull');
+          url.searchParams.delete('commitsRef');
         }
 
         // 用户主动切换页面状态才新增历史项；恢复历史时保留浏览器正在访问的 URL。
@@ -1715,7 +1926,8 @@
           target: document.getElementById('diffTargetSelect')?.value || currentDiffTarget,
           mode: currentDiffMode,
           commits: commitsDrawerState.isOpen ? commitsDrawerState.worktreePath : '',
-          commitsFull: commitsDrawerState.isOpen && commitsDrawerState.fullHistory
+          commitsFull: commitsDrawerState.isOpen && commitsDrawerState.fullHistory,
+          commitsRef: commitsDrawerState.isOpen ? (commitsDrawerState.ref || '') : ''
         }));
       } catch (e) {
         console.warn('syncStateToUrl error:', e);
@@ -1991,7 +2203,7 @@
             }
           }
           if (pendingRestoreState.commits) {
-            await openCommitsDrawer(pendingRestoreState.commits, pendingRestoreState.commitsFull, false);
+            await openCommitsDrawer(pendingRestoreState.commits, pendingRestoreState.commitsFull, false, pendingRestoreState.commitsRef || '');
           }
           pendingRestoreState = null;
         }
@@ -2142,7 +2354,7 @@
         if (wt.aheadCount > 0) {
           tags.push(`<span class="badge badge-success" title="分支文件内容相对 Main 仍有实际差异，提交历史领先 ${wt.historyAheadCount || wt.aheadCount} 个提交">🚀 领先 ${wt.aheadCount} 提交</span>`);
         } else if (wt.isContentEqualToMain && (wt.historyAheadCount || 0) > 0) {
-          tags.push(`<span class="badge badge-success" title="提交历史领先 ${wt.historyAheadCount} 个提交，但最终文件内容与 Main 一致，通常是 squash 合入造成的历史差异">内容已与主干同步</span>`);
+          tags.push(`<span class="badge badge-success" title="提交历史领先 ${wt.historyAheadCount} 个提交，但分支改动已被主干吸收（revert 抵消 / cherry-pick / squash 合入等），合入主干不会产生实际变化">内容已与主干同步</span>`);
         }
         if (wt.isLocked) tags.push('<span class="badge">已加锁</span>');
 
@@ -2209,6 +2421,7 @@
             : ''}
         </div>
         <div class="item-actions">
+          <button class="btn-outline" onclick="openBranchCommitsDrawer('${escapeHtml(b.name)}')" title="${b.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>
           ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${escapeHtml(b.name)}', ${!b.isMerged})">删除</button>` : ''}
         </div>
       `;
@@ -2545,6 +2758,23 @@
       }
     }
 
+    /* 拉取最新仓库分析数据并刷新外层列表/徽标。
+       任何改变提交关系的写操作（cherry-pick/revert/stash 等）后都应调用，
+       保证 worktree 列表的领先/同步徽标与提交抽屉徽章一致 */
+    async function refreshRepoInspectData() {
+      if (!currentRepo) return;
+      const res = await fetch(`/api/inspect?path=${encodeURIComponent(currentRepo)}`);
+      const data = await res.json();
+      if (data.ok) {
+        currentWorktrees = data.worktrees || [];
+        currentBranches = data.branches || [];
+        currentMainBranch = data.mainBranch;
+        updateMetrics();
+        renderFilteredLists();
+        populateDiffSelectors();
+      }
+    }
+
     /* Diff Tab 内部专用：一键刷新当前 Diff 视图及仓库最新状态 */
     async function refreshCurrentDiff() {
       const btn = document.getElementById('diffRefreshBtn');
@@ -2555,18 +2785,7 @@
 
       try {
         // 先同步更新仓库分析数据（以防最新提交或分支发生变化）
-        if (currentRepo) {
-          const res = await fetch(`/api/inspect?path=${encodeURIComponent(currentRepo)}`);
-          const data = await res.json();
-          if (data.ok) {
-            currentWorktrees = data.worktrees || [];
-            currentBranches = data.branches || [];
-            currentMainBranch = data.mainBranch;
-            updateMetrics();
-            renderFilteredLists();
-            populateDiffSelectors();
-          }
-        }
+        await refreshRepoInspectData();
 
         // 根据当前 Diff 模式重新比对刷新
         if (currentDiffType === 'uncommitted' && currentUncommittedPath) {
@@ -2894,7 +3113,10 @@
               🎉 该工作区没有任何未暂存或未提交的修改。
             </div>
           </div>
+          <div id="stashListContainer"></div>
         `;
+        // 工作树干净时也可能存在历史 stash，仍需加载 stash 列表供 Pop/Drop
+        fetchAndRenderStashList(uncommitted.worktreePath);
         return;
       }
 
@@ -2948,6 +3170,8 @@
           <div class="stat-bar">
             <div>本地工作区: <code>${escapeHtml(uncommitted.worktreePath)}</code></div>
             <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
+              <button class="btn-outline" style="font-size: 12px; padding: 4px 10px;" title="将全部未提交修改（含未跟踪文件）存入 stash" onclick="stashActionWithConfirm('push', '', this)">📥 暂存 (Stash)</button>
+              <button class="btn-danger" style="font-size: 12px; padding: 4px 10px;" title="丢弃全部未提交修改（含未跟踪文件），不可恢复" onclick="stashActionWithConfirm('discard', '', this)">🗑 丢弃全部修改</button>
               <span class="badge badge-warning">未提交代码 (${files.length} 个文件)</span>
               <span style="color: var(--text-muted);">|</span>
               <span>新增: <span class="add-count">+${uncommitted.totalAdded}</span> 行</span>
@@ -2955,6 +3179,8 @@
             </div>
           </div>
         </div>
+
+        <div id="stashListContainer"></div>
 
         <div class="diff-tools-bar">
           <div class="diff-tools-left">
@@ -2971,6 +3197,92 @@
           ${fileCardsHtml}
         </div>
       `;
+      fetchAndRenderStashList(uncommitted.worktreePath);
+    }
+
+    /**
+     * 拉取并渲染指定工作区的 stash 列表到未提交面板的 stash 区块；无条目时清空隐藏。
+     * stash ref 只有匹配 stash@{n} 白名单格式才会进入内联 onclick，杜绝任意字符串注入。
+     * @param {string} worktreePath - 工作区绝对路径
+     */
+    async function fetchAndRenderStashList(worktreePath) {
+      const el = document.getElementById('stashListContainer');
+      if (!el) return;
+      try {
+        const resp = await fetch(`/api/stash-list?worktree=${encodeURIComponent(worktreePath)}`);
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+        const stashes = data.stashes || [];
+        if (stashes.length === 0) {
+          el.innerHTML = '';
+          return;
+        }
+        const rows = stashes.map(s => {
+          const refOk = /^stash@\{\d+\}$/.test(s.ref || '');
+          const actions = refOk
+            ? `<button class="btn-outline" style="font-size: 12px; padding: 3px 10px;" onclick="stashActionWithConfirm('pop', '${s.ref}', this)">Pop</button>` +
+              `<button class="btn-danger" style="font-size: 12px; padding: 3px 10px;" onclick="stashActionWithConfirm('drop', '${s.ref}', this)">Drop</button>`
+            : '';
+          return `<div class="stash-item">
+            <span class="stash-ref">${escapeHtml(s.ref)}</span>
+            <span style="color: var(--text-muted); font-size: 12px; white-space: nowrap;">${escapeHtml(s.relativeTime)}</span>
+            <span class="stash-subject" title="${escapeHtml(s.subject)}">${escapeHtml(s.subject)}</span>
+            <span style="display: flex; gap: 6px;">${actions}</span>
+          </div>`;
+        }).join('');
+        el.innerHTML = `
+          <div class="diff-tools-bar">
+            <div class="diff-tools-left">
+              <span>📦 Stash 列表 (${stashes.length})</span>
+              <span style="font-size: 12px; color: var(--text-muted); font-weight: normal;">Pop 恢复到工作区，Drop 删除该条 stash</span>
+            </div>
+          </div>
+          ${rows}
+        `;
+      } catch (err) {
+        el.innerHTML = `<div class="stash-item" style="color: var(--danger);">Stash 列表加载失败：${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    /**
+     * 未提交面板 stash 相关写操作统一入口：
+     * push（prompt 可选备注）/ discard（强警告二次确认，不可恢复）/ pop / drop（各自中文确认）。
+     * 成功后调 refreshCurrentDiff 统一刷新未提交面板、stash 列表与外层 worktree dirty 状态。
+     * @param {string} action - 仅允许 'push' | 'pop' | 'drop' | 'discard'
+     * @param {string} stashRef - pop/drop 的目标引用，已在渲染侧做过白名单校验
+     * @param {HTMLElement} [btn] - 被点击的按钮，执行期间禁用以防重复提交
+     */
+    async function stashActionWithConfirm(action, stashRef, btn) {
+      const worktreePath = currentUncommittedPath;
+      if (!worktreePath) return;
+      let message;
+      if (action === 'push') {
+        message = prompt('Stash 备注（可留空）：');
+        if (message === null) return; // 用户取消
+        if (!message.trim()) message = undefined; // 空备注不传，由 git 生成默认说明
+      } else if (action === 'discard') {
+        if (!confirm(`确认丢弃该工作区的全部未提交修改吗？\n将还原所有已跟踪文件的修改并删除未跟踪文件，此操作不可恢复！\n工作区：${worktreePath}`)) return;
+      } else if (action === 'pop') {
+        if (!confirm(`确认将 ${stashRef} 恢复到工作区吗？\n工作区：${worktreePath}`)) return;
+      } else if (action === 'drop') {
+        if (!confirm(`确认删除 ${stashRef} 吗？删除后无法从 stash 列表恢复。`)) return;
+      } else {
+        return;
+      }
+      if (btn) btn.disabled = true;
+      try {
+        const resp = await fetch('/api/stash-action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ worktree: worktreePath, action, message, stashRef: stashRef || undefined })
+        });
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+        await refreshCurrentDiff();
+      } catch (err) {
+        alert(`操作失败：${err.message}`);
+        if (btn && btn.isConnected) btn.disabled = false;
+      }
     }
 
     function copyText(text, btn) {
@@ -2996,6 +3308,7 @@
     }
 
     /* ---- 提交记录抽屉 ---- */
+    // filters 为当前提交过滤条件, 会随每个请求传给后端; 空字符串表示该维度不过滤
     let commitsDrawerState = {
       worktreePath: null,
       branch: null,
@@ -3008,10 +3321,29 @@
       totalCommits: 0,
       loadedCount: 0,
       limit: 30,
-      isOpen: false
+      isOpen: false,
+      lastGroupLabel: null, // 上一个提交所属的日期分组标签, 「加载更多」追加时据此判断是否插入新组头
+      filters: { author: '', grep: '', since: '', until: '' }
     };
     let commitsDrawerReqSeq = 0;
+    // 领先/落后统计缓存：每次打开抽屉时重置；切换全量/领先视图时复用，避免重复请求
+    let commitsDrawerAheadBehind = null;
     let commitsDrawerPageScrollY = null;
+
+    // 提交详情缓存：同一提交内容不可变，收起再展开不重复请求。
+    // 键为 `${worktreePath}::${sha}`，避免不同仓库对同一短 SHA 解析出不同提交的歧义。
+    const commitDetailCache = new Map();
+    const COMMIT_DETAIL_CACHE_MAX = 200;
+
+    /**
+     * 写入提交详情缓存，超过上限时按插入顺序淘汰最早的条目，防止长会话内存无限增长。
+     */
+    function setCommitDetailCache(key, value) {
+      if (commitDetailCache.size >= COMMIT_DETAIL_CACHE_MAX) {
+        commitDetailCache.delete(commitDetailCache.keys().next().value);
+      }
+      commitDetailCache.set(key, value);
+    }
 
     // 抽屉打开期间固定主页面，触控板、滚轮和触摸滑动都只能作用于抽屉。
     function setCommitsDrawerPageScrollLocked(locked) {
@@ -3030,11 +3362,15 @@
       }
     }
 
-    async function openCommitsDrawer(worktreePath, fullHistory = false, pushHistory = true) {
+    async function openCommitsDrawer(worktreePath, fullHistory = false, pushHistory = true, ref = '') {
       commitsDrawerState = {
         worktreePath, branch: null, base: null, baseAvailable: true, fullHistory, isFullHistory: false, isMainHistory: false, head: null,
-        totalCommits: 0, loadedCount: 0, limit: 30, isOpen: true
+        totalCommits: 0, loadedCount: 0, limit: 30, isOpen: true, lastGroupLabel: null,
+        ref, // 分支查看模式：非空时以后端 options.ref 为提交顶点（分支列表入口）
+        filters: { author: '', grep: '', since: '', until: '' } // 每次打开新 worktree 都重置过滤条件
       };
+      commitsDrawerAheadBehind = null; // 新抽屉丢弃上一轮的领先/落后统计
+      clearCommitsFilterInputs();
 
       const overlay = document.getElementById('commitsDrawerOverlay');
       const drawer = document.getElementById('commitsDrawer');
@@ -3052,6 +3388,13 @@
         `<div class="loading">正在加载${fullHistory ? '完整历史' : '提交记录'}...</div>`;
 
       await fetchAndRenderCommits();
+    }
+
+    // 分支列表「提交记录」入口：以分支名为 ref 打开抽屉，worktreePath 传仓库主路径
+    // （ref 为仓库级引用，主路径下 git 命令同样可解析；详情/Diff 接口也只要求仓库路径）
+    async function openBranchCommitsDrawer(branchName) {
+      if (!currentRepo || !branchName) return;
+      await openCommitsDrawer(currentRepo, false, true, branchName);
     }
 
     function closeCommitsDrawer(pushHistory = true) {
@@ -3072,6 +3415,49 @@
       }, 260);
     }
 
+    // 读取过滤输入区的当前值; 文本框去首尾空白, 日期控件值本身即为 YYYY-MM-DD
+    function readCommitsFilterInputs() {
+      return {
+        author: document.getElementById('commitFilterAuthor').value.trim(),
+        grep: document.getElementById('commitFilterGrep').value.trim(),
+        since: document.getElementById('commitFilterSince').value,
+        until: document.getElementById('commitFilterUntil').value
+      };
+    }
+
+    // 清空过滤输入区
+    function clearCommitsFilterInputs() {
+      document.getElementById('commitFilterAuthor').value = '';
+      document.getElementById('commitFilterGrep').value = '';
+      document.getElementById('commitFilterSince').value = '';
+      document.getElementById('commitFilterUntil').value = '';
+    }
+
+    // 判断 state 中是否存在任一生效的过滤条件
+    function hasActiveCommitsFilters() {
+      const f = commitsDrawerState.filters || {};
+      return Boolean(f.author || f.grep || f.since || f.until);
+    }
+
+    // 应用过滤: 写回 state 并按首屏语义重载(清空列表、重置分页与 footer)
+    function applyCommitsFilters() {
+      if (!commitsDrawerState.isOpen) return;
+      commitsDrawerState.filters = readCommitsFilterInputs();
+      commitsDrawerState.loadedCount = 0;
+      document.getElementById('commitsDrawerFooter').style.display = 'none';
+      syncStateToUrl(true);
+      document.getElementById('commitsDrawerBody').innerHTML =
+        '<div class="loading">正在按过滤条件加载提交...</div>';
+      fetchAndRenderCommits();
+    }
+
+    // 清空过滤输入与条件, 恢复全量列表
+    function clearCommitsFilters() {
+      if (!commitsDrawerState.isOpen) return;
+      clearCommitsFilterInputs();
+      applyCommitsFilters();
+    }
+
     async function fetchAndRenderCommits() {
       const { worktreePath, loadedCount, limit } = commitsDrawerState;
       const seq = ++commitsDrawerReqSeq;
@@ -3083,6 +3469,16 @@
       if (commitsDrawerState.fullHistory) {
         params.set('fullHistory', '1');
       }
+      // 分支查看模式：以后端 options.ref 指定的分支为提交顶点
+      if (commitsDrawerState.ref) {
+        params.set('ref', commitsDrawerState.ref);
+      }
+      // 追加过滤条件(仅非空项): 值只经 URLSearchParams 编码进请求, 不参与任何 HTML 拼接
+      const filters = commitsDrawerState.filters || {};
+      if (filters.author) params.set('author', filters.author);
+      if (filters.grep) params.set('grep', filters.grep);
+      if (filters.since) params.set('since', filters.since);
+      if (filters.until) params.set('until', filters.until);
 
       try {
         const resp = await fetch(`/api/worktree-commits?${params}`);
@@ -3100,6 +3496,8 @@
           commitsDrawerState.head = data.head;
           commitsDrawerState.totalCommits = data.totalCommits;
           renderCommitsMeta(data);
+          // 异步补拉领先/落后统计，不阻塞提交列表渲染
+          fetchCommitsAheadBehind(seq);
         }
 
         commitsDrawerState.loadedCount += data.commits.length;
@@ -3133,8 +3531,90 @@
         <span class="badge" title="基准: ${escapeHtml(data.base)}">🌿 ${escapeHtml(data.branch)}</span>
         <code style="color: var(--accent);">${escapeHtml((data.head || '').slice(0, 7))}</code>
         <span>${scopeText}</span>
+        ${renderAheadBehindBadgeHtml()}
         ${fullHistoryButton}
       `;
+    }
+
+    // 根据缓存的领先/落后数据生成徽章 HTML；无数据或基准不可解析时返回空串（静默隐藏）
+    function renderAheadBehindBadgeHtml() {
+      const ab = commitsDrawerAheadBehind;
+      if (!ab || ab.baseAvailable === false) return '';
+      // 数字统一转字符串后再转义，避免 escapeHtml 对数字入参报错
+      const baseLabel = escapeHtml(ab.baseBranch);
+      const aheadText = escapeHtml(String(ab.ahead));
+      const behindText = escapeHtml(String(ab.behind));
+
+      // 内容等价判定（复用 worktree 列表的祖先/树一致/补丁等价/merge-tree 判定）：
+      // revert 抵消、squash 合入等场景机械计数会显示「领先 N」，但改动已被基准吸收，
+      // 此时以绿色「无差异」徽章为主，原始计数降级为弱色小字供核查
+      if (ab.contentEquivalent === true) {
+        const mergeTypeNotes = {
+          direct: '提交已在基准历史中',
+          tree: '树内容一致（改动已被抵消，如 revert）',
+          patch: '补丁已等价合入基准',
+          'merge-tree': '合并结果与基准一致'
+        };
+        const note = mergeTypeNotes[ab.mergeType] || '改动已被基准吸收';
+        const rawCounts = `提交计数：领先 ${aheadText} / 落后 ${behindText}`;
+        if (ab.behind > 0) {
+          // 自身无独有改动但落后于基准：仍提示需要同步主干
+          return `<span id="commitsAheadBehindBadge" class="badge badge-warning" title="${note}">⇅ 落后 ${baseLabel} ${behindText}（无独有改动）</span>` +
+            `<span id="commitsAheadBehindRawCounts" style="font-size: 11px; color: var(--text-muted);" title="机械提交计数，含 revert 等相互抵消的提交">${rawCounts}</span>`;
+        }
+        return `<span id="commitsAheadBehindBadge" class="badge badge-success" title="${note}">✓ 与 ${baseLabel} 无差异</span>` +
+          `<span id="commitsAheadBehindRawCounts" style="font-size: 11px; color: var(--text-muted);" title="机械提交计数，含 revert 等相互抵消的提交">${rawCounts}</span>`;
+      }
+
+      const title = `相对基准分支 ${baseLabel} 的提交领先/落后统计`;
+      let text;
+      if (ab.ahead > 0 && ab.behind > 0) text = `⇅ 领先 ${aheadText} / 落后 ${behindText}`;
+      else if (ab.ahead > 0) text = `⇅ 领先 ${aheadText}`;
+      else if (ab.behind > 0) text = `⇅ 落后 ${behindText}`;
+      else text = `与 ${baseLabel} 同步`;
+      // 有落后时用警示色提醒需要同步主干，纯领先视为正常状态
+      const cls = ab.behind > 0 ? 'badge badge-warning' : 'badge badge-success';
+      return `<span id="commitsAheadBehindBadge" class="${cls}" title="${title}">${text}</span>`;
+    }
+
+    // 把领先/落后徽章插入抽屉 meta 行（渲染在"查看全量历史"按钮之前），已存在时原地替换
+    function updateAheadBehindBadgeInMeta() {
+      const metaEl = document.getElementById('commitsDrawerMeta');
+      if (!metaEl) return;
+      // 徽章与附属的原始计数字段是兄弟节点，替换时两个都要移除
+      const old = document.getElementById('commitsAheadBehindBadge');
+      if (old) old.remove();
+      const oldRaw = document.getElementById('commitsAheadBehindRawCounts');
+      if (oldRaw) oldRaw.remove();
+      const html = renderAheadBehindBadgeHtml();
+      if (!html) return;
+      const btn = metaEl.querySelector('button');
+      if (btn) btn.insertAdjacentHTML('beforebegin', html);
+      else metaEl.insertAdjacentHTML('beforeend', html);
+    }
+
+    // 异步获取当前分支相对基准的领先/落后统计。主干看全量历史、或分支与基准同名时与自身比较无意义，直接跳过。
+    async function fetchCommitsAheadBehind(seq) {
+      if (commitsDrawerState.isMainHistory || commitsDrawerState.branch === commitsDrawerState.base) return;
+      if (commitsDrawerAheadBehind) return; // 本轮抽屉已获取过，切换历史视图时复用缓存
+      try {
+        const params = new URLSearchParams({ worktree: commitsDrawerState.worktreePath });
+        // 分支查看模式：统计该分支（而非 worktree 当前 HEAD）相对基准的领先/落后
+        if (commitsDrawerState.ref) params.set('ref', commitsDrawerState.ref);
+        const resp = await fetch(`/api/worktree-ahead-behind?${params}`);
+        const data = await resp.json();
+        // 抽屉已关闭或已切换到更新的请求时，丢弃旧响应避免污染 meta 行
+        if (seq !== commitsDrawerReqSeq || !commitsDrawerState.isOpen) return;
+        if (!data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+        if (data.baseAvailable === false) {
+          commitsDrawerAheadBehind = null; // 基准不可解析时保持空，徽章静默隐藏
+        } else {
+          commitsDrawerAheadBehind = data;
+          updateAheadBehindBadgeInMeta();
+        }
+      } catch {
+        // 接口失败时静默不显示徽章，不影响提交列表展示
+      }
     }
 
     // 功能分支默认只看相对主干的领先提交，完整历史由用户手动切换。
@@ -3149,10 +3629,48 @@
       fetchAndRenderCommits();
     }
 
+    /**
+     * 计算提交日期对应的时间线分组标签：今天/昨天用相对标签，更早用本地时区 YYYY-MM-DD。
+     * date 为后端 git log %aI 输出的严格 ISO 8601 字符串（含时区偏移），new Date 可正确解析；
+     * 按本地日历日归类，避免 UTC 深夜的提交在东八区被误分到相邻日期。
+     * 解析失败（空值或非法日期）统一归入"未知日期"分组，不中断整段渲染。
+     * @param {string} dateStr - 提交的 ISO 8601 日期字符串
+     * @param {Date} [now] - 当前时间，默认取系统时间；单测可注入固定基准
+     * @returns {string} 分组标签
+     */
+    function getCommitDateGroupLabel(dateStr, now = new Date()) {
+      const d = new Date(dateStr);
+      if (!dateStr || Number.isNaN(d.getTime())) return '未知日期';
+      // 用「本地年-月-日」键比较日历日，屏蔽时分秒与时区偏移的干扰
+      const dayKey = (x) => `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`;
+      if (dayKey(d) === dayKey(now)) return '今天';
+      const yesterday = new Date(now);
+      // setDate 跨月/跨年由 Date 自动进位，无需手工处理边界
+      yesterday.setDate(yesterday.getDate() - 1);
+      if (dayKey(d) === dayKey(yesterday)) return '昨天';
+      const pad = (n) => String(n).padStart(2, '0');
+      // YYYY-MM-DD 本身自带年份，跨年提交天然展示为完整日期，无需特判
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    }
+
     function renderCommitsList(commits, isFirstLoad) {
       const body = document.getElementById('commitsDrawerBody');
 
+      // 首屏（打开抽屉、切换全量/领先视图、应用/清空过滤、重试）一律重置分组游标，从头分组
+      if (isFirstLoad) commitsDrawerState.lastGroupLabel = null;
+
       if (isFirstLoad && commits.length === 0) {
+        // 过滤生效时的空结果与"本来就没有提交"区分开, 并给出清空过滤入口
+        if (hasActiveCommitsFilters()) {
+          body.innerHTML = `
+            <div class="empty-state">
+              <div class="empty-state-icon">🔍</div>
+              <div>没有符合过滤条件的提交</div>
+              <div style="font-size:12px">可调整过滤条件，或清空后查看全部提交</div>
+              <button class="btn-outline" style="margin-top:8px" onclick="clearCommitsFilters()">清空过滤</button>
+            </div>`;
+          return;
+        }
         const emptyText = commitsDrawerState.isFullHistory
           ? (commitsDrawerState.isMainHistory ? '该主干暂无提交记录' : '该分支暂无提交记录')
           : commitsDrawerState.base && commitsDrawerState.baseAvailable === false
@@ -3172,17 +3690,28 @@
         return;
       }
 
-      const html = commits.map(c => `
-        <div class="commit-item">
+      // 按遇到顺序分组：标签与上一条不同时插入组头（git log 新到旧有序，正常场景组头单调递减；
+      // 若出现乱序输入，重复的标签会再次插入组头，仅影响观感不影响功能）
+      const chunks = [];
+      commits.forEach(c => {
+        const groupLabel = getCommitDateGroupLabel(c.date);
+        if (groupLabel !== commitsDrawerState.lastGroupLabel) {
+          commitsDrawerState.lastGroupLabel = groupLabel;
+          chunks.push(`<div class="commit-date-group">${escapeHtml(groupLabel)}</div>`);
+        }
+        chunks.push(`
+        <div class="commit-item clickable" onclick="toggleCommitDetail(this, '${escapeHtml(c.hash)}')">
           <div class="commit-item-header">
-            <span class="commit-hash" onclick="copyText('${escapeHtml(c.hash)}', this)" title="点击复制完整 SHA">${escapeHtml(c.shortHash)}</span>
+            <span class="commit-hash" onclick="event.stopPropagation(); copyText('${escapeHtml(c.hash)}', this)" title="点击复制完整 SHA">${escapeHtml(c.shortHash)}</span>
             <span class="commit-time">${escapeHtml(c.relativeTime)}</span>
           </div>
           <div class="commit-subject" title="${escapeHtml(c.subject)}">${escapeHtml(c.subject)}</div>
           <div class="commit-author">${escapeHtml(c.author)}</div>
           ${c.body ? `<div class="commit-body">${escapeHtml(c.body)}</div>` : ''}
         </div>
-      `).join('');
+      `);
+      });
+      const html = chunks.join('');
 
       if (isFirstLoad) {
         body.innerHTML = html;
@@ -3190,6 +3719,326 @@
       } else {
         body.insertAdjacentHTML('beforeend', html);
       }
+    }
+
+    /**
+     * 切换提交卡片的详情面板展开/收起。首次展开时懒加载 GET /api/commit-detail，
+     * 同一提交的结果写入模块级缓存，收起再展开不重复请求。
+     * @param {HTMLElement} card - 被点击的提交卡片元素
+     * @param {string} sha - 提交完整 SHA
+     */
+    async function toggleCommitDetail(card, sha) {
+      // 内联 onclick 参数只放行十六进制 SHA，杜绝任意字符串进入事件处理
+      if (!/^[0-9a-fA-F]{7,40}$/.test(sha || '')) return;
+      // worktreePath 一律从抽屉状态读取，不通过内联字符串传递
+      const worktreePath = commitsDrawerState.worktreePath;
+      if (!worktreePath) return;
+
+      const existingPanel = card.querySelector('.commit-detail');
+      if (existingPanel) {
+        existingPanel.remove();
+        return;
+      }
+
+      const panel = document.createElement('div');
+      panel.className = 'commit-detail';
+      panel.innerHTML = '<div class="commit-detail-loading">加载中...</div>';
+      card.appendChild(panel);
+
+      const cacheKey = `${worktreePath}::${sha}`;
+      if (commitDetailCache.has(cacheKey)) {
+        renderCommitDetail(panel, commitDetailCache.get(cacheKey), null);
+        return;
+      }
+
+      try {
+        const params = new URLSearchParams({ worktree: worktreePath, sha });
+        const resp = await fetch(`/api/commit-detail?${params}`);
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+        setCommitDetailCache(cacheKey, data);
+        // 请求期间用户可能已收起面板，此时不再渲染
+        if (panel.isConnected) {
+          renderCommitDetail(panel, data, null);
+        }
+      } catch (err) {
+        if (panel.isConnected) {
+          renderCommitDetail(panel, null, err.message);
+        }
+      }
+    }
+
+    /**
+     * 将提交详情渲染进展开面板：完整正文、父提交列表、统计行与逐文件清单。
+     * @param {HTMLElement} panel - 详情面板容器
+     * @param {object|null} data - 接口返回的详情数据
+     * @param {string|null} errorMessage - 请求失败时的错误信息
+     */
+    function renderCommitDetail(panel, data, errorMessage) {
+      if (errorMessage) {
+        panel.innerHTML = `<div class="commit-detail-error">加载详情失败：${escapeHtml(errorMessage)}</div>`;
+        return;
+      }
+      // 统计字段用 Number 收敛为数字后再插值，保证任何异常响应都不会注入标记
+      const filesChanged = Number(data.filesChanged) || 0;
+      const insertions = Number(data.insertions) || 0;
+      const deletions = Number(data.deletions) || 0;
+      // 父提交只放行十六进制 SHA 才会进入 onclick，展示时取短哈希、复制时给完整值
+      const parents = (data.parents || []).filter(p => /^[0-9a-fA-F]{7,40}$/.test(p));
+      const parentsHtml = parents.length === 0
+        ? '<span>无（根提交）</span>'
+        : parents.map(p => `<span class="commit-detail-parent" title="点击复制完整 SHA" onclick="event.stopPropagation(); copyText('${p}', this)">${escapeHtml(p.slice(0, 7))}</span>`).join('');
+      const filesHtml = (data.files || []).map(f => {
+        const filePath = escapeHtml(f.filePath || '');
+        if (f.isBinary) {
+          return `<div class="commit-detail-file"><span class="commit-detail-file-path" title="${filePath}">${filePath}</span><span class="commit-detail-file-stats" style="color: var(--text-muted);">二进制</span></div>`;
+        }
+        const added = Number(f.added) || 0;
+        const deleted = Number(f.deleted) || 0;
+        return `<div class="commit-detail-file"><span class="commit-detail-file-path" title="${filePath}">${filePath}</span><span class="commit-detail-file-stats"><span class="add-count">+${added}</span> / <span class="del-count">-${deleted}</span></span></div>`;
+      }).join('');
+      // 「查看 Diff」按钮：确有文件变更且响应里是合法十六进制 SHA 时才展示，onclick 只传 SHA
+      const detailSha = /^[0-9a-fA-F]{7,40}$/.test(data.hash || '') ? data.hash : '';
+      const diffToggleHtml = filesChanged > 0 && detailSha
+        ? `<button type="button" class="btn-outline commit-diff-toggle-btn" onclick="event.stopPropagation(); toggleCommitDiff(this.closest('.commit-detail'), '${detailSha}')">查看 Diff</button>`
+        : '';
+      // Cherry-pick / Revert 按钮：仅在详情面板已拿到合法 SHA 时渲染，onclick 只传 action 名与 SHA
+      // 目标工作区选择器：选项来自当前仓库的 worktree 列表，主工作区置顶；
+      // 只对 Cherry-pick 生效（Revert 固定作用于当前查看的 worktree，与选择器解绑，
+      // 见 commitActionWithConfirm）。默认选中主工作区（Cherry-pick 的语义默认目标就是它），
+      // 与入口无关——branch 入口与 worktree 入口保持一致；
+      // 无主工作区时回退到当前查看的 worktree，再退到列表首项
+      const contextPath = commitsDrawerState.worktreePath || '';
+      const targetWts = (currentWorktrees || [])
+        .filter(w => w && w.path && w.existsOnDisk !== false)
+        .slice()
+        .sort((a, b) => (b.isMain ? 1 : 0) - (a.isMain ? 1 : 0));
+      const hasMain = targetWts.some(w => w.isMain);
+      const hasContext = targetWts.some(w => w.path === contextPath);
+      const targetSelectHtml = detailSha && targetWts.length > 0
+        ? `<select class="commit-action-target" title="Cherry-pick 作用的目标工作区（Revert 固定作用于当前查看的 worktree，不受此选项影响）" onclick="event.stopPropagation()" onchange="this.dataset.touched='1'">` +
+          targetWts.map((w, idx) => {
+            const selected = hasMain ? w.isMain : (hasContext ? w.path === contextPath : idx === 0);
+            const label = `${w.isMain ? '主工作区' : 'Worktree'} (${w.branch || 'detached'})`;
+            return `<option value="${escapeHtml(w.path)}"${selected ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+          }).join('') + `</select>`
+        : '';
+      const actionButtonsHtml = detailSha
+        ? targetSelectHtml +
+          `<button type="button" class="btn-outline commit-action-btn" onclick="event.stopPropagation(); commitActionWithConfirm('cherry-pick', '${detailSha}', this)">🍒 Cherry-pick</button>` +
+          `<button type="button" class="btn-outline commit-action-btn" onclick="event.stopPropagation(); commitActionWithConfirm('revert', '${detailSha}', this)">↩️ Revert</button>`
+        : '';
+      // 「查看 Diff」与写操作按钮统一放进一行操作区，两者皆空时不渲染容器
+      const actionsHtml = (diffToggleHtml || actionButtonsHtml)
+        ? `<div class="commit-detail-actions">${diffToggleHtml}${actionButtonsHtml}</div>`
+        : '';
+      panel.innerHTML = `
+        ${data.body ? `<pre class="commit-detail-body">${escapeHtml(data.body)}</pre>` : ''}
+        <div class="commit-detail-parents"><span>父提交：</span>${parentsHtml}</div>
+        <div class="commit-detail-stats">${filesChanged} 个文件变更 · <span class="add-count">+${insertions}</span> / <span class="del-count">-${deletions}</span></div>
+        ${filesHtml}
+        ${actionsHtml}
+      `;
+    }
+
+    /**
+     * 详情面板内 Cherry-pick / Revert 写操作的统一入口，中文确认后
+     * POST /api/commit-action。作用目标按动作解绑：Cherry-pick 从面板内
+     * 「目标工作区」选择器读取（用户未手动选择时默认主工作区），Revert 固定
+     * 作用于抽屉当前查看的 worktree（只能撤销本分支已有提交，选择器对其无效）。
+     * 后端执行失败（含冲突）时会自动回滚仓库现场，
+     * 这里只负责把成功结果或错误原因弹窗告知用户。
+     * 成功后按首屏语义重载抽屉提交列表（loadedCount 归零），让新产生的提交出现在列表顶部。
+     * @param {string} action - 仅允许 'cherry-pick' | 'revert'
+     * @param {string} sha - 目标提交完整 SHA（内联 onclick 只传十六进制）
+     * @param {HTMLElement} btn - 被点击的按钮，执行期间禁用以防重复提交
+     */
+    async function commitActionWithConfirm(action, sha, btn) {
+      // 内联 onclick 参数只放行白名单 action 与十六进制 SHA，杜绝任意字符串进入事件处理
+      if (action !== 'cherry-pick' && action !== 'revert') return;
+      if (!/^[0-9a-fA-F]{7,40}$/.test(sha || '')) return;
+      // Cherry-pick 的作用目标从详情面板的「目标工作区」选择器读取，不通过内联字符串传递；
+      // 用户未手动改动选择器时默认取主工作区（典型意图是把别处分支的提交合入主干）。
+      // Revert 与选择器完全解绑：固定作用于抽屉当前查看的 worktree，
+      // 因为 Revert 只能撤销本分支上已存在的提交，跨 worktree 选择没有意义。
+      const panel = btn ? btn.closest('.commit-detail') : null;
+      const targetSel = panel ? panel.querySelector('.commit-action-target') : null;
+      let worktreePath = '';
+      if (action === 'cherry-pick') {
+        if (targetSel && !targetSel.dataset.touched) {
+          const mainWt = (currentWorktrees || []).find(w => w.isMain && w.path && w.existsOnDisk !== false);
+          if (mainWt) targetSel.value = mainWt.path;
+        }
+        worktreePath = (targetSel && targetSel.value) || commitsDrawerState.worktreePath;
+      } else {
+        worktreePath = commitsDrawerState.worktreePath;
+        // 选择器可能已被用户改动过，回显为实际作用目标，避免界面与行为不一致造成误解
+        if (targetSel && [...targetSel.options].some(o => o.value === worktreePath)) {
+          targetSel.value = worktreePath;
+        }
+      }
+      if (!worktreePath) return;
+
+      const actionLabel = action === 'cherry-pick' ? 'Cherry-pick' : 'Revert';
+      const confirmText = action === 'cherry-pick'
+        ? `确认将提交 ${sha.slice(0, 7)} Cherry-pick 到所选目标工作区的当前分支吗？\n作用对象：${worktreePath}`
+        : `确认在当前工作区的当前分支上 Revert 提交 ${sha.slice(0, 7)} 吗？将生成一条内容相反的新提交。\n作用对象：${worktreePath}`;
+      if (!confirm(confirmText)) return;
+
+      // 用户停留在确认弹窗期间面板可能已被收起，isConnected=false 时不再发起写操作
+      if (btn && !btn.isConnected) return;
+
+      if (btn) btn.disabled = true;
+      try {
+        const resp = await fetch('/api/commit-action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ worktree: worktreePath, action, sha })
+        });
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+        const newHeadShort = (typeof data.newHead === 'string' && data.newHead)
+          ? data.newHead.slice(0, 7)
+          : '未知';
+        alert(`${actionLabel} 成功！当前分支新 HEAD：${newHeadShort}`);
+        // 首屏语义重载：loadedCount 归零后重新拉取首屏，cherry-pick 产生的新提交会出现在列表顶部。
+        // 写操作改变了分支与基准的关系（cherry-pick 后补丁等价、revert 后树一致），
+        // 领先/落后徽章缓存必须作废重拉，否则仍显示操作前的旧计数
+        commitsDrawerState.loadedCount = 0;
+        commitsDrawerAheadBehind = null;
+        await fetchAndRenderCommits();
+        // 外层 worktree 列表的领先/同步徽标同样受写操作影响，同步刷新保持两处一致
+        await refreshRepoInspectData();
+      } catch (err) {
+        alert(`${actionLabel} 失败：${err.message}`);
+      } finally {
+        // 重载会整体重建列表 DOM，旧按钮多已离线；仅在按钮仍连着文档时恢复可点
+        if (btn && btn.isConnected) btn.disabled = false;
+      }
+    }
+
+    // 提交 Diff 缓存：与详情缓存同一键格式与淘汰策略，但独立存放（详情与 Diff 是两个接口）
+    const commitDiffCache = new Map();
+    const COMMIT_DIFF_CACHE_MAX = 200;
+
+    /**
+     * 写入提交 Diff 缓存，超过上限时按插入顺序淘汰最早的条目。
+     */
+    function setCommitDiffCache(key, value) {
+      if (commitDiffCache.size >= COMMIT_DIFF_CACHE_MAX) {
+        commitDiffCache.delete(commitDiffCache.keys().next().value);
+      }
+      commitDiffCache.set(key, value);
+    }
+
+    /**
+     * 切换提交详情面板内「查看 Diff」区块的展开/收起。首次展开懒加载 GET /api/commit-diff，
+     * 结果写入独立缓存避免重复请求；再次点击整块收起。
+     * @param {HTMLElement} panel - 提交详情面板容器
+     * @param {string} sha - 提交完整 SHA（内联 onclick 只传十六进制）
+     */
+    async function toggleCommitDiff(panel, sha) {
+      if (!panel) return;
+      // 内联 onclick 参数只放行十六进制 SHA，杜绝任意字符串进入事件处理
+      if (!/^[0-9a-fA-F]{7,40}$/.test(sha || '')) return;
+      // worktreePath 一律从抽屉状态读取，不通过内联字符串传递
+      const worktreePath = commitsDrawerState.worktreePath;
+      if (!worktreePath) return;
+
+      const toggleBtn = panel.querySelector('.commit-diff-toggle-btn');
+      // 已展开则整块收起，按钮文案复位
+      const existing = panel.querySelector('.commit-diff-section');
+      if (existing) {
+        existing.remove();
+        if (toggleBtn) toggleBtn.textContent = '查看 Diff';
+        return;
+      }
+      if (toggleBtn) toggleBtn.textContent = '收起 Diff';
+
+      const section = document.createElement('div');
+      section.className = 'commit-diff-section';
+      // 阻止区块内点击冒泡到提交卡片，避免阅读/选中 Diff 文本时面板被收起
+      section.addEventListener('click', e => e.stopPropagation());
+      section.innerHTML = '<div class="commit-detail-loading">正在加载 Diff...</div>';
+      panel.appendChild(section);
+      await loadCommitDiffSection(section, worktreePath, sha);
+    }
+
+    /**
+     * 向 Diff 区块写入内容：命中缓存直接渲染，否则请求接口后渲染；
+     * 请求期间面板可能已被收起（isConnected 为 false），此时不再写入。
+     */
+    async function loadCommitDiffSection(section, worktreePath, sha) {
+      const cacheKey = `${worktreePath}::${sha}`;
+      if (commitDiffCache.has(cacheKey)) {
+        renderCommitDiffSection(section, commitDiffCache.get(cacheKey));
+        return;
+      }
+      try {
+        const params = new URLSearchParams({ worktree: worktreePath, sha });
+        const resp = await fetch(`/api/commit-diff?${params}`);
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+        setCommitDiffCache(cacheKey, data);
+        if (section.isConnected) {
+          renderCommitDiffSection(section, data);
+        }
+      } catch (err) {
+        if (!section.isConnected) return;
+        section.innerHTML = `
+          <div class="commit-detail-error">加载 Diff 失败：${escapeHtml(err.message)}</div>
+          <button type="button" class="btn-outline commit-diff-toggle-btn" onclick="retryCommitDiff(this, '${sha}')">重试</button>`;
+      }
+    }
+
+    /**
+     * Diff 加载失败后的重试入口：复用原区块，避免在面板里堆叠多个 Diff 区块。
+     */
+    function retryCommitDiff(btn, sha) {
+      // 内联 onclick 参数只放行十六进制 SHA
+      if (!/^[0-9a-fA-F]{7,40}$/.test(sha || '')) return;
+      const section = btn.closest('.commit-diff-section');
+      const worktreePath = commitsDrawerState.worktreePath;
+      if (!section || !worktreePath) return;
+      section.innerHTML = '<div class="commit-detail-loading">正在加载 Diff...</div>';
+      loadCommitDiffSection(section, worktreePath, sha);
+    }
+
+    /**
+     * 渲染逐文件 Diff 小卡片：文件路径 + 行数统计 + 染色后的文本 Diff。
+     * 二进制/图片/空 diff 分别给中文占位文案，动态文本全部经过 escapeHtml。
+     */
+    function renderCommitDiffSection(section, data) {
+      const files = Array.isArray(data.files) ? data.files : [];
+      if (files.length === 0) {
+        section.innerHTML = '<div class="commit-diff-empty">无文本差异</div>';
+        return;
+      }
+      const filesHtml = files.map(f => {
+        const filePath = escapeHtml(f.filePath || '');
+        // 统计字段一律 Number 收敛后再插值，防止异常响应注入标记
+        const added = Number(f.added) || 0;
+        const deleted = Number(f.deleted) || 0;
+        let bodyHtml;
+        if (f.isBinary) {
+          bodyHtml = '<div class="commit-diff-empty">二进制文件变更，不展示文本 Diff</div>';
+        } else if (f.isImage) {
+          bodyHtml = '<div class="commit-diff-empty">图片文件变更，不展示文本 Diff</div>';
+        } else if (!f.diffChunk) {
+          bodyHtml = '<div class="commit-diff-empty">无文本差异</div>';
+        } else {
+          bodyHtml = `<pre class="diff-pre"><code>${formatDiffLines(f.diffChunk)}</code></pre>`;
+        }
+        return `
+          <div class="commit-diff-file-card">
+            <div class="commit-diff-file-header">
+              <span class="commit-diff-file-path" title="${filePath}">${filePath}</span>
+              <span class="commit-detail-file-stats"><span class="add-count">+${added}</span> / <span class="del-count">-${deleted}</span></span>
+            </div>
+            ${bodyHtml}
+          </div>`;
+      }).join('');
+      section.innerHTML = filesHtml;
     }
 
     function renderCommitsFooter(data) {
@@ -3259,8 +4108,9 @@
         if (state.commits) {
           if (!commitsDrawerState.isOpen
             || commitsDrawerState.worktreePath !== state.commits
-            || commitsDrawerState.fullHistory !== state.commitsFull) {
-            await openCommitsDrawer(state.commits, state.commitsFull, false);
+            || commitsDrawerState.fullHistory !== state.commitsFull
+            || (commitsDrawerState.ref || '') !== (state.commitsRef || '')) {
+            await openCommitsDrawer(state.commits, state.commitsFull, false, state.commitsRef || '');
           }
         } else if (commitsDrawerState.isOpen) {
           closeCommitsDrawer(false);
@@ -3329,6 +4179,20 @@
       if (e.key === 'Enter') {
         e.preventDefault();
         addScanDirectory();
+      }
+    });
+    // 提交过滤输入框回车即应用, 与「应用」按钮同语义。
+    // 这些输入框位于脚本文档流之后的抽屉 DOM 中，脚本解析到此处时它们尚不存在，
+    // 必须等 DOMContentLoaded 再绑定；否则顶层 TypeError 会中断整个脚本，
+    // 导致后面的 loadProjects() 等初始化语句全部不执行（表现为页面永远停在加载中）。
+    document.addEventListener('DOMContentLoaded', () => {
+      for (const filterInputId of ['commitFilterAuthor', 'commitFilterGrep', 'commitFilterSince', 'commitFilterUntil']) {
+        document.getElementById(filterInputId).addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            applyCommitsFilters();
+          }
+        });
       }
     });
     document.getElementById('scanDirectoryModal').addEventListener('click', (e) => {
@@ -3409,6 +4273,14 @@
       <button class="drawer-close" onclick="closeCommitsDrawer()" aria-label="关闭">×</button>
     </div>
     <div class="commits-drawer-meta" id="commitsDrawerMeta"></div>
+    <div class="commits-drawer-filters" id="commitsDrawerFilters">
+      <input type="text" id="commitFilterAuthor" class="commit-filter-text" placeholder="作者" title="按作者名过滤" autocomplete="off">
+      <input type="text" id="commitFilterGrep" class="commit-filter-text" placeholder="关键词" title="按提交说明关键词过滤（字面匹配）" autocomplete="off">
+      <input type="date" id="commitFilterSince" class="commit-filter-date" title="起始日期（含当天）">
+      <input type="date" id="commitFilterUntil" class="commit-filter-date" title="结束日期（含当天）">
+      <button type="button" class="btn-outline commit-filter-btn" onclick="applyCommitsFilters()" title="应用过滤条件">应用</button>
+      <button type="button" class="btn-outline commit-filter-btn" onclick="clearCommitsFilters()" title="清空过滤条件">清空</button>
+    </div>
     <div class="commits-drawer-body" id="commitsDrawerBody"></div>
     <div class="commits-drawer-footer" id="commitsDrawerFooter" style="display:none">
       <button id="loadMoreCommitsBtn" class="btn-outline" onclick="loadMoreCommits()">加载更多</button>

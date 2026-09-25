@@ -1,6 +1,6 @@
 # Worktree 提交记录入口方案设计
 
-> 版本: v2.0 | 日期: 2026-09-24 | 状态: 开发中（后端已实现并验证，前端待实现）
+> 版本: v2.1 | 日期: 2026-09-24 | 状态: 已完成（P1–P3 全部迭代已落地，延后项见 §7.5 与 docs/iteration-log.md）
 
 > 本文档为「Worktree 提交记录入口」的唯一权威方案。早期的 Tab 式备选方案
 > (`../design-worktree-commit-history-entry.md`) 已废弃，其有价值的设计点
@@ -10,17 +10,24 @@
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
-| `src/git-inspector.js` — `getWorktreeCommits()` | ✅ 已实现 | limit/offset 分页、base 自动检测、orphan 降级、NUL 安全分隔解析 |
-| `src/server.js` — `GET /api/worktree-commits` | ✅ 已实现 | 400（缺参/路径/base 非法）、404（路径不存在）、500（git 失败）|
-| 路径安全（§3.3.1/§3.3.2） | ✅ 已实现 | 绝对路径校验、目录存在性 stat 校验、base 字符白名单（拒绝 `..`）|
-| `public/index.html` — 抽屉 UI（§4） | ⏳ 进行中 | 本分支接续开发 |
+| `src/git-inspector.js` — `getWorktreeCommits()` | ✅ 已实现 | limit/offset 分页、base 自动检测、orphan 降级、NUL 安全分隔解析；另支持 author/since/until/grep 过滤与 graph=1 图形前缀（§7.4/§7.5） |
+| `src/git-inspector.js` — `getWorktreeAheadBehind()` | ✅ 已实现 | `rev-list --left-right --count`，realpath 规避符号链接误判，基准不可解析时降级返回 |
+| `src/git-inspector.js` — `getCommitDetail()` / `getCommitDiff()` | ✅ 已实现 | 元信息+文件级统计 / 逐文件 Diff；merge 用显式第一父区间 `<sha>^1 <sha>`（实测 `diff-tree --first-parent` 对 merge 无输出），根提交靠 `--root` |
+| `src/git-inspector.js` — `commitAction()` | ✅ 已实现 | cherry-pick / revert；失败自动 `--abort` 恢复现场并返回 409 |
+| `src/server.js` — `GET /api/worktree-commits` | ✅ 已实现 | 400（缺参/路径/base/过滤参数非法）、404（路径不存在）、500（git 失败） |
+| `src/server.js` — `GET /api/worktree-ahead-behind`、`GET /api/commit-detail`、`GET /api/commit-diff`、`POST /api/commit-action` | ✅ 已实现 | statusCode 透传风格与列表端点一致 |
+| 路径安全（§3.3.1/§3.3.2） | ✅ 已实现 | 绝对路径校验、目录存在性 stat 校验、base/sha/过滤参数白名单（拒绝 `..`、flag 注入） |
+| `public/index.html` — 抽屉 UI（§4） | ✅ 已实现 | 抽屉、领先/落后徽章、搜索过滤行、时间线分组、图形历史切换、详情展开与单提交 Diff、Cherry-pick/Revert 按钮 |
 
-**已验证行为**（2026-09-24 冒烟测试）:
+**已验证行为**（2026-09-24 全量回归，详见 docs/iteration-log.md）:
 - 正常分支: `branch`/`head`/`base=main`/`totalCommits`/`commits[]` 全字段正确
-- 领先 base 的 worktree: `totalCommits=1`, `hasMore=false`
-- 主工作区（HEAD == main）: `totalCommits=0` → 前端需渲染空状态（§2.3.4）
-- `worktree=/tmp/xxx` → 404 `指定的 worktree 路径不存在`
-- `worktree=relative/path` → 400；`base=../etc` → 400
+- ahead/behind: ahead=1 behind=2 场景顺序正确；基准不可解析时 200 降级
+- commit-detail/commit-diff: 普通/二进制/merge/根提交均正确；merge 仅对第一父且不重复
+- 过滤: author/grep/since/until 单独与组合过滤计数一致，分页不重不漏；非法值全部 400
+- commit-action: 成功返回 newHead；冲突场景 409 且 `status --porcelain` 恢复为空
+- `worktree=/tmp/xxx` → 404 `指定的 worktree 路径不存在`；`worktree=relative/path` → 400；`base=../etc` → 400
+
+**已知问题**: macOS 下 `/tmp → /private/tmp` 符号链接路径传入时，部分既有端点的 `path.resolve` 比对会失配（`getWorktreeAheadBehind` 已用 realpath 修复）；生产 `/Users` 等真实路径不受影响。详见 docs/iteration-log.md。
 
 ---
 
@@ -909,7 +916,10 @@ function loadMoreCommits() {
 |------|----------|------|
 | `src/git-inspector.js` | 新增函数 `getWorktreeCommits(worktreePath, options)`（含 §3.3 路径/参数安全校验） | ✅ 已完成 |
 | `src/server.js` | 新增 `GET /api/worktree-commits` 路由处理（`statusCode` 透传） | ✅ 已完成 |
-| `public/index.html` | 新增抽屉 DOM、CSS 样式、JS 交互逻辑 | ⏳ 进行中 |
+| `public/index.html` | 新增抽屉 DOM、CSS 样式、JS 交互逻辑 | ✅ 已完成 |
+| `src/git-inspector.js` | 新增 `getWorktreeAheadBehind` / `getCommitDetail` / `getCommitDiff` / `commitAction` 与列表过滤、graph 解析（§7） | ✅ 已完成 |
+| `src/server.js` | 新增 ahead-behind / commit-detail / commit-diff / commit-action 路由（§7） | ✅ 已完成 |
+| `public/index.html` | 领先落后徽章、过滤行、时间线分组、图形历史、详情展开与单提交 Diff、Cherry-pick/Revert 按钮（§7） | ✅ 已完成 |
 
 ---
 
@@ -918,7 +928,7 @@ function loadMoreCommits() {
 > 以下条目按优先级排序，吸收自已废弃的 Tab 式备选方案
 > (`../design-worktree-commit-history-entry.md` §4/§5/§8)，接口契约均已对齐本文现有 API 风格。
 
-### 7.1 P1 — Ahead/Behind 统计（抽屉头部增强）
+### 7.1 P1 — Ahead/Behind 统计（抽屉头部增强）✅ 已实现
 
 抽屉头部增加相对 base 的 ahead/behind 计数，用户可一眼判断分支与主干的分叉程度。
 
@@ -928,30 +938,40 @@ GET /api/worktree-ahead-behind?worktree=<path>&base=<mainBranch>
 底层: git rev-list --left-right --count <base>...HEAD  (输出 "behind\tahead")
 ```
 
-### 7.2 P1 — 提交详情展开
+实现补充：base 不可解析时不抛错，返回 `baseAvailable: false` 且 ahead/behind 为 null，前端隐藏徽章；主干全量历史视图与 branch===base 时不发起请求。
+
+### 7.2 P1 — 提交详情展开 ✅ 已实现
 
 点击提交条目展开详情：完整 body、parent SHA、`--numstat` 统计（filesChanged/insertions/deletions）。
-列表接口已返回 `body` 字段；文件级统计需扩展 list 接口或新增详情接口（建议后者，按需加载）。
+列表接口已返回 `body` 字段；详情按需加载。
 
 ```
 GET /api/commit-detail?worktree=<path>&sha=<sha>
-底层: git diff-tree -p --numstat --stat <sha>  (merge commit 默认 first-parent)
+底层: git diff-tree --root --numstat --stat <sha>  (merge commit 默认 first-parent)
 ```
 
-### 7.3 P2 — 单提交 Diff 查看
+实现补充：实测 git 2.50 下 `diff-tree --first-parent` 对 merge 无输出、`-m --first-parent` 逐父不去重，merge 改用显式区间 `<sha>^1 <sha>`，与「对第一父 diff」契约等价且跨版本稳定；根提交由 `--root` 覆盖。前端懒加载 + LRU 缓存（200 条）。
 
-在提交详情中提供「查看 Diff」，复用现有 Diff 视图的渲染管线（parseDiffOutput）。
+### 7.3 P2 — 单提交 Diff 查看 ✅ 已实现
 
-### 7.4 P2 — 提交搜索/过滤
+在提交详情中提供「查看 Diff」，复用现有 Diff 视图的渲染管线（formatDiffLines）。
 
-按作者、日期范围、关键词过滤：新增 `author`、`since`、`until`、`grep` 查询参数，直通 `git log` 对应 flag。
+```
+GET /api/commit-diff?worktree=<path>&sha=<sha>
+→ { ok, sha, isMerge, files: [{ filePath, added, deleted, isBinary, isImage, diffChunk }] }
+底层: git diff-tree -p --root -U3 <sha>；merge 用 <sha>^1 <sha>，规则同 7.2
+```
 
-### 7.5 P3 — 远期扩展
+### 7.4 P2 — 提交搜索/过滤 ✅ 已实现
 
-| 扩展 | 说明 | 预留接口 |
-|------|------|----------|
-| 跨 worktree 提交对比 | 在 Diff 面板展示两个 worktree 的 commit 差异 | API 的 `base` 参数可扩展为任意 ref |
-| Cherry-pick / Revert | 从提交记录中挑选 commit 应用到其他分支 | 需要新增 POST 端点 |
-| 图形化历史 | ASCII graph 或 SVG 分支图 | `git log --graph` 输出可解析 |
-| 时间线视图 | 按日期分组展示（类似 GitHub） | 纯前端分组渲染 |
-| WebSocket 实时推送 | 新提交自动刷新 | 现架构为无状态轮询，需评估 |
+按作者、日期范围、关键词过滤：`author`、`since`、`until`、`grep` 查询参数，直通 `git log` 对应 flag（`grep` 附带 `--fixed-strings` 字面匹配）。过滤 flag 同时作用于 `rev-list --count` 与 `git log`，保证 totalCommits/hasMore/分页一致。白名单：author/grep 拒绝换行/NUL 与 `-` 开头（防 flag 注入）；since/until 仅放行 ISO 日期/日期时间。前端在抽屉头部下方提供过滤行，应用/清空时按首屏语义重载。
+
+### 7.5 P3 — 扩展项落地情况
+
+| 扩展 | 状态 | 说明 |
+|------|------|------|
+| 跨 worktree 提交对比 | ⏸ 延后 | 工作量与侵入性评估见 docs/iteration-log.md；建议在抽屉内加对比入口复用现有管线 |
+| Cherry-pick / Revert | ✅ 已实现 | `POST /api/commit-action`（action 白名单）；git 失败（含冲突）自动执行对应 `--abort` 恢复现场并返回 409；前端详情面板按钮 + confirm 确认 |
+| 图形化历史 | ✅ 已实现（最小版本） | 列表接口 `graph=1` 直通 `git log --graph`，解析提交块首行图形前缀以等宽文本渲染；未引入 SVG 库；局限（不逐行绘制行间连线、`--topo-order` 导致顺序差异）已在代码注释说明 |
+| 时间线视图 | ✅ 已实现 | 纯前端按日期分组渲染：今天/昨天相对标签 + 本地时区 YYYY-MM-DD，兼容「加载更多」追加 |
+| WebSocket 实时推送 | ⏸ 延后 | 无状态轮询架构下属全局架构级改动，评估见 docs/iteration-log.md；建议先做手动刷新 + visibilitychange 轻量替代 |
