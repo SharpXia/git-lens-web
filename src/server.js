@@ -18,12 +18,20 @@ import {
   getUncommittedDiff,
   getFileContentBuffer,
   getMimeType,
-  getWorktreeCommits
+  getWorktreeCommits,
+  getWorktreeAheadBehind,
+  getCommitDetail,
+  getCommitDiff,
+  commitAction,
+  getStashList,
+  stashAction
 } from './git-inspector.js';
 
 const PORT = process.env.PORT || 9527;
 const HOME = os.homedir();
-const CONFIG_DIR = path.join(HOME, '.config', 'git-lens-web');
+// 配置目录支持环境变量覆盖：测试实例与真实服务共用 $HOME，若不隔离，
+// 测试期间对扫描目录的任何写入都会覆盖用户真实配置（2026-09-25 曾因此覆盖过用户配置）
+const CONFIG_DIR = process.env.GIT_LENS_CONFIG_DIR || path.join(HOME, '.config', 'git-lens-web');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const execFileAsync = promisify(execFile);
 
@@ -386,8 +394,69 @@ const server = http.createServer(async (req, res) => {
           limit: parsed.query.limit,
           offset: parsed.query.offset,
           base: parsed.query.base,
-          fullHistory: parsed.query.fullHistory
+          fullHistory: parsed.query.fullHistory,
+          author: parsed.query.author,
+          since: parsed.query.since,
+          until: parsed.query.until,
+          grep: parsed.query.grep,
+          ref: parsed.query.ref
         });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify(result));
+      } catch (err) {
+        const status = err.statusCode || 500;
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+    }
+
+    // 8.1 API: 获取单条提交详情（元信息 + 逐文件统计）
+    if (pathname === '/api/commit-detail' && req.method === 'GET') {
+      const worktreePath = parsed.query.worktree;
+      const sha = parsed.query.sha;
+      if (!worktreePath || !sha) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: 'Missing worktree or sha parameter' }));
+      }
+      try {
+        const result = await getCommitDetail(worktreePath, sha);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify(result));
+      } catch (err) {
+        const status = err.statusCode || 500;
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+    }
+
+    // 8.2 API: 获取指定 Worktree 相对基准分支的领先/落后统计
+    if (pathname === '/api/worktree-ahead-behind' && req.method === 'GET') {
+      const worktreePath = parsed.query.worktree;
+      if (!worktreePath) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: 'Missing worktree parameter' }));
+      }
+      try {
+        const result = await getWorktreeAheadBehind(worktreePath, { base: parsed.query.base, ref: parsed.query.ref });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify(result));
+      } catch (err) {
+        const status = err.statusCode || 500;
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+    }
+
+    // 8.3 API: 获取单条提交的逐文件文本 Diff（merge 对第一父、根提交用 --root，规则与 8.1 一致）
+    if (pathname === '/api/commit-diff' && req.method === 'GET') {
+      const worktreePath = parsed.query.worktree;
+      const sha = parsed.query.sha;
+      if (!worktreePath || !sha) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: 'Missing worktree or sha parameter' }));
+      }
+      try {
+        const result = await getCommitDiff(worktreePath, sha);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         return res.end(JSON.stringify(result));
       } catch (err) {
@@ -407,6 +476,56 @@ const server = http.createServer(async (req, res) => {
       const uncommitted = await getUncommittedDiff(worktreePath);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify({ ok: true, uncommitted }));
+    }
+
+    // 10. API: 对指定 Worktree 的当前分支执行 cherry-pick / revert 写操作。
+    // 请求体 { worktree, action, sha }；所有业务校验（action 白名单/路径/sha）都在
+    // commitAction 内完成并抛带 statusCode 的中文错误，冲突等失败时后端已自动回滚现场。
+    if (pathname === '/api/commit-action' && req.method === 'POST') {
+      const { worktree, action, sha } = await readJson();
+      try {
+        const result = await commitAction(worktree, action, sha);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify(result));
+      } catch (err) {
+        const status = err.statusCode || 500;
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+    }
+
+    // 11.1 API: 获取指定 Worktree 的 stash 列表
+    if (pathname === '/api/stash-list' && req.method === 'GET') {
+      const worktreePath = parsed.query.worktree;
+      if (!worktreePath) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: 'Missing worktree parameter' }));
+      }
+      try {
+        const stashes = await getStashList(worktreePath);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: true, stashes }));
+      } catch (err) {
+        const status = err.statusCode || 500;
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+    }
+
+    // 11.2 API: 对指定 Worktree 执行 stash 写操作（push/pop/drop/discard）。
+    // 请求体 { worktree, action, message?, stashRef? }；校验与 commitAction 同样收敛在
+    // stashAction 内，discard 为不可恢复操作，前端必须二次确认后才调用。
+    if (pathname === '/api/stash-action' && req.method === 'POST') {
+      const { worktree, action, message, stashRef } = await readJson();
+      try {
+        const result = await stashAction(worktree, action, { message, stashRef });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify(result));
+      } catch (err) {
+        const status = err.statusCode || 500;
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
     }
 
     // 8.5 API: 获取指定版本或工作区的原始文件二进制流 (如图片显示)
