@@ -2706,6 +2706,8 @@
         </div>
         <div class="item-actions">
           <button class="btn-outline" onclick="openBranchCommitsDrawer('${escapeHtml(b.name)}')" title="${b.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>
+          ${!b.isMain ? `<button class="btn-outline" onclick="viewBranchDiffAgainstMain('${escapeHtml(b.name)}')" title="以「仅已提交」模式对比该分支与主分支（仅比较已提交内容，无 Worktree 的分支也可用）">与主分支对比</button>` : ''}
+          ${!b.isMain ? `<button class="btn-outline" onclick="openCreateMrModal('${escapeHtml(b.name)}')" title="以该分支为源分支发起 Merge Request">发起 MR</button>` : ''}
           ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${escapeHtml(b.name)}', ${!b.isMerged})">删除</button>` : ''}
         </div>
       `;
