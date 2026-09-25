@@ -91,3 +91,22 @@
   - `node scripts/verify-mr-branch-diff.mjs --base-url http://127.0.0.1:<端口> --config-dir /tmp/<私有目录> --stage <full|mr|diff|compat>`：STAGE 分阶段 HTTP 断言（mr=MR 全链路，diff=Branch Diff 矩阵与兼容，compat=既有接口回归，full=全部）；fixture 与扫描目录写入全部隔离在 /tmp 与脚本参数指定的 config-dir；
   - 本基线（未合入新接口）实测：STAGE=compat 11 项断言全绿；STAGE=mr 在 404 处给出「该接口尚未在当前基线实现」提示，属预期。
 - **状态：开发中，待集成回归。** 集成后由协调方在 integration worktree 起 `--stage full` 一键回归。
+
+### 2026-09-25（本地 MR 与 Branch Diff 集成回归结论）
+
+- **集成完成**：协调分支 codex/local-mr-branch-diff 已按顺序合入 A（78204df+327ff2a）→ B（4088299+2cbde68）→ 协调方路由（2630b53）→ D（8648954+91b3169）→ C（55e836a/7880c1e/3b486b4/1fe6004，合并提交 812c315）。
+- **路由接入（协调方 2630b53）**：`GET/POST /api/merge-requests`、`GET /api/merge-requests/<id>`、`POST /api/merge-requests/action`、`GET /api/diff-refs`（参数名按契约用 sourceType/targetType，未采纳 B 汇报建议的 sourceKind）。
+- **后端回归**：`node --test` 30/30（MR 20 + diff-refs 10）；STAGE=full 106/106 全绿。
+- **集成期修复（均属 QA 交付物偏差，实现无缺陷）**：
+  1. fixture 的 blob.bin 用纯 urandom 生成，约 78% 概率不含 NUL，git 文本启发式按文本 diff 输出（numstat 给行数而非 `- -`），isBinary 断言失败；改为显式补 `\x00`。
+  2. 「不存在 MR」断言误用非 UUID 字符串（触发 400 参数校验路径），改为格式合法的未知 UUID 验证 404 语义。
+- **浏览器 GUI 回归（9529 隔离实例 + /tmp fixture，真实浏览器操作）**：
+  - 分支行「与主分支对比」：无 worktree 的 plain-branch 与含 `/` 的 feature/deep/name 均正确切 Diff Tab 并以 branch↔branch committed 加载；URL 形如 `diffType=ref&diffBaseType=branch&...&mode=committed`；
+  - 可搜索选择器：Worktree/本地分支分组、「deep」过滤只剩目标分支、↓/Enter 键盘选中生效；
+  - MR 全生命周期：分支行「发起 MR」预填 source/target、顶部「新建 MR」按钮、创建后列表局部刷新、审阅通过出现「审阅已通过」徽章与「✓ 合并 (--no-ff)」主按钮、合并成功后抽屉显示「已合并 · 合并提交 3678834b」且分支列表/Worktree 徽章/冗余计数联动更新；
+  - 冲突场景：feature/conflict 的 MR 合并返回红色「合并失败（已自动中止合并并恢复现场）」，MR 保持 open+approved，目标 worktree `status --porcelain` 干净、无 MERGE_HEAD；
+  - 状态恢复：刷新后 `mr=<id>` 恢复 MR 抽屉、`diffType=ref` 完整恢复 Branch Diff 选择器与结果；旧格式 `diffType=worktree`/`uncommitted` 链接按 worktree/未提交语义兼容解析；
+  - 隔离确认：9527 主实例全程在线、真实配置目录无 merge-requests 且扫描目录未被修改。
+- **端口变更说明**：任务书指定 9528，但该端口被待验收分支 feat/worktree-commits-entry 的测试实例占用，为不中断其验收，全程改用 9529 + /tmp/git-lens-web-dev-9529（隔离语义不变）。
+- **已知问题（测试环境，非产品缺陷）**：ZCode 内置浏览器的 layout 坐标读数（getBoundingClientRect/scrollY）与真实渲染存在脱节，且滚轮事件管线超时，导致自动化操作需以截图坐标 + confirm 对话框处理辅助完成；人工浏览器操作不受影响。
+- **状态：已集成，全部回归通过，待用户验收合入 main。**
