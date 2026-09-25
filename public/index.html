@@ -1421,6 +1421,120 @@
       opacity: 0.5;
     }
 
+    /* ---- 可搜索 Diff 选择器（Worktree/分支组合框） ---- */
+    .ref-picker-wrapper {
+      position: relative;
+      width: 100%;
+    }
+    /* 下拉面板宽度跟随触发器，避免固定 380px 在窄栏内溢出屏幕 */
+    .ref-picker-wrapper .repo-dropdown,
+    .mr-picker-wrapper .repo-dropdown {
+      min-width: 100%;
+    }
+    .ref-picker-trigger-caret {
+      color: var(--text-muted);
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    /* 复用 .repo-item 的行样式，仅补充键盘高亮与禁用（失联 Worktree）态 */
+    .repo-item.highlight {
+      background: var(--card-alt);
+    }
+    .repo-item.disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    .repo-item.disabled:hover {
+      background: transparent;
+    }
+
+    /* ---- 本地 Merge Request：面板 / 详情抽屉 / 新建弹层 ---- */
+    .badge-muted {
+      background: rgba(139, 148, 158, 0.15);
+      color: var(--text-muted);
+      border-color: rgba(139, 148, 158, 0.35);
+    }
+    .mr-panel-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .mr-branch-flow {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .mr-detail-section {
+      margin-bottom: 16px;
+    }
+    .mr-detail-section-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    .mr-detail-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+    .mr-detail-error {
+      min-height: 18px;
+      margin: 8px 0 0;
+      color: var(--danger);
+      font-size: 12px;
+    }
+    .mr-detail-hint {
+      margin-top: 8px;
+      padding: 6px 10px;
+      border: 1px solid rgba(210, 153, 34, 0.25);
+      border-radius: 6px;
+      background: rgba(210, 153, 34, 0.08);
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+    .mr-form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 14px;
+    }
+    .mr-form-group > label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    .mr-form-input,
+    .mr-form-textarea {
+      background: #0d1117;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-bright);
+      padding: 8px 10px;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    .mr-form-input:focus,
+    .mr-form-textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .mr-form-textarea {
+      min-height: 88px;
+      resize: vertical;
+    }
+    .mr-picker-wrapper {
+      position: relative;
+      width: 100%;
+    }
+
   </style>
 </head>
 <body>
@@ -1470,7 +1584,8 @@
     <input id="searchInput" type="search" placeholder="搜索分支或 Worktree..." autocomplete="off" aria-label="搜索分支或 Worktree">
     <button id="scanDirectoryBtn" class="btn-outline" type="button" onclick="openScanDirectoryModal()">📁 扫描目录</button>
     <button id="refreshBtn" class="btn-outline">全量刷新</button>
-    <button id="pruneBtn" class="btn-primary" style="margin-left: auto;">一键 Prune 无效引用</button>
+    <button id="newMrBtn" class="btn-primary" style="margin-left: auto;" onclick="openCreateMrModal()" title="基于当前仓库的两个本地分支发起 Merge Request">🔀 新建 MR</button>
+    <button id="pruneBtn" class="btn-primary">一键 Prune 无效引用</button>
   </div>
 
   <!-- TAB 1: 仓库透视与管理面板 -->
@@ -1495,6 +1610,26 @@
     </div>
 
     <div class="panels">
+      <!-- 本地 Merge Requests 面板 -->
+      <div class="panel">
+        <div class="panel-header">
+          <h2>🔀 Merge Requests</h2>
+          <div class="mr-panel-controls">
+            <div class="diff-mode-segmented" id="mrStatusFilterGroup">
+              <button type="button" class="diff-mode-btn active" data-status="all" onclick="setMrStatusFilter('all')">全部</button>
+              <button type="button" class="diff-mode-btn" data-status="open" onclick="setMrStatusFilter('open')">开启</button>
+              <button type="button" class="diff-mode-btn" data-status="merged" onclick="setMrStatusFilter('merged')">已合并</button>
+              <button type="button" class="diff-mode-btn" data-status="rejected" onclick="setMrStatusFilter('rejected')">已拒绝</button>
+              <button type="button" class="diff-mode-btn" data-status="canceled" onclick="setMrStatusFilter('canceled')">已取消</button>
+            </div>
+            <span id="mrCountBadge" class="badge">0 个</span>
+          </div>
+        </div>
+        <div id="mrList">
+          <div class="loading">加载中...</div>
+        </div>
+      </div>
+
       <!-- Worktrees 面板 -->
       <div class="panel">
         <div class="panel-header">
@@ -1524,23 +1659,48 @@
     <div class="diff-view-container">
       <div class="diff-picker-bar">
         <div class="picker-col">
-          <label class="picker-label" for="diffBaseSelect">
-            <span>基准工作区 (Base / 原始分支)：</span>
+          <label class="picker-label">
+            <span>基准 (Worktree/分支)：</span>
           </label>
-          <select id="diffBaseSelect" class="picker-select"></select>
+          <div class="ref-picker-wrapper" id="diffBasePickerWrapper">
+            <div class="repo-trigger" id="diffBasePickerTrigger">
+              <div class="repo-trigger-text" id="diffBasePickerText"><span>加载中...</span></div>
+              <span class="ref-picker-trigger-caret">▼</span>
+            </div>
+            <div class="repo-dropdown" id="diffBasePickerDropdown">
+              <div class="repo-search-box">
+                <input type="text" id="diffBasePickerSearch" class="repo-search-input" placeholder="搜索 Worktree 或分支..." autocomplete="off">
+              </div>
+              <div class="repo-list-container" id="diffBasePickerList"></div>
+            </div>
+          </div>
+          <!-- 隐藏原生 select：仅作为 kind:value 身份串的状态载体，供 syncStateToUrl 等既有逻辑以最小改动复用 -->
+          <select id="diffBaseSelect" class="picker-select" style="display: none;"></select>
         </div>
 
-        <button class="swap-btn btn-outline" onclick="swapDiffTargets()" title="对调两边工作区">⇄ 对调</button>
+        <button class="swap-btn btn-outline" onclick="swapDiffTargets()" title="对调两边的 Worktree/分支">⇄ 对调</button>
 
         <div class="picker-col">
-          <label class="picker-label" for="diffTargetSelect">
-            <span>对比工作区 (Target / 变更分支)：</span>
+          <label class="picker-label">
+            <span>对比 (Worktree/分支)：</span>
           </label>
-          <select id="diffTargetSelect" class="picker-select"></select>
+          <div class="ref-picker-wrapper" id="diffTargetPickerWrapper">
+            <div class="repo-trigger" id="diffTargetPickerTrigger">
+              <div class="repo-trigger-text" id="diffTargetPickerText"><span>加载中...</span></div>
+              <span class="ref-picker-trigger-caret">▼</span>
+            </div>
+            <div class="repo-dropdown" id="diffTargetPickerDropdown">
+              <div class="repo-search-box">
+                <input type="text" id="diffTargetPickerSearch" class="repo-search-input" placeholder="搜索 Worktree 或分支..." autocomplete="off">
+              </div>
+              <div class="repo-list-container" id="diffTargetPickerList"></div>
+            </div>
+          </div>
+          <select id="diffTargetSelect" class="picker-select" style="display: none;"></select>
         </div>
 
         <div style="display: flex; gap: 8px; align-self: flex-end; margin-bottom: 2px;">
-          <button class="btn-primary" onclick="fetchAndRenderDiff(null, true)">比对工作区 Diff</button>
+          <button class="btn-primary" onclick="fetchAndRenderRefDiff(null, true)">比对 Diff</button>
           <button id="diffRefreshBtn" class="btn-outline" onclick="refreshCurrentDiff()" title="重新分析并刷新当前 Diff 视图">🔄 刷新 Diff</button>
         </div>
       </div>
@@ -1549,8 +1709,8 @@
 
       <div id="diffResultsContainer">
         <div class="empty-diff-box">
-          <div style="font-size: 16px; margin-bottom: 8px;">请选择两个不同的 Worktree 进行比对，或在总览列表点击【查看未提交代码】</div>
-          <div style="font-size: 13px;">支持跨工作区领先改动对比与本地未提交（Dirty）代码审查</div>
+          <div style="font-size: 16px; margin-bottom: 8px;">请选择两个不同的 Worktree 或分支进行比对，或在总览列表点击【查看未提交代码】</div>
+          <div style="font-size: 13px;">支持 Worktree/分支任意组合的领先改动对比与本地未提交（Dirty）代码审查</div>
         </div>
       </div>
     </div>
@@ -1612,6 +1772,74 @@
     </div>
   </div>
 
+  <!-- 新建 Merge Request 弹层（结构与样式沿用扫描目录弹窗模式） -->
+  <div id="createMrModal" class="scan-directory-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="createMrModalTitle">
+    <div class="scan-directory-card">
+      <div class="scan-directory-header">
+        <h2 id="createMrModalTitle">新建 Merge Request</h2>
+        <button class="drawer-close" type="button" onclick="closeCreateMrModal()" aria-label="关闭">×</button>
+      </div>
+      <div class="scan-directory-body">
+        <div class="mr-form-group">
+          <label>源分支 (Source)</label>
+          <div class="mr-picker-wrapper" id="mrSourcePickerWrapper">
+            <div class="repo-trigger" id="mrSourcePickerTrigger">
+              <div class="repo-trigger-text" id="mrSourcePickerText"></div>
+              <span class="ref-picker-trigger-caret">▼</span>
+            </div>
+            <div class="repo-dropdown" id="mrSourcePickerDropdown">
+              <div class="repo-search-box">
+                <input type="text" id="mrSourcePickerSearch" class="repo-search-input" placeholder="搜索分支..." autocomplete="off">
+              </div>
+              <div class="repo-list-container" id="mrSourcePickerList"></div>
+            </div>
+          </div>
+          <!-- 隐藏 select：分支身份串状态载体 -->
+          <select id="mrSourceSelect" style="display: none;"></select>
+        </div>
+        <div class="mr-form-group">
+          <label>目标分支 (Target)</label>
+          <div class="mr-picker-wrapper" id="mrTargetPickerWrapper">
+            <div class="repo-trigger" id="mrTargetPickerTrigger">
+              <div class="repo-trigger-text" id="mrTargetPickerText"></div>
+              <span class="ref-picker-trigger-caret">▼</span>
+            </div>
+            <div class="repo-dropdown" id="mrTargetPickerDropdown">
+              <div class="repo-search-box">
+                <input type="text" id="mrTargetPickerSearch" class="repo-search-input" placeholder="搜索分支..." autocomplete="off">
+              </div>
+              <div class="repo-list-container" id="mrTargetPickerList"></div>
+            </div>
+          </div>
+          <select id="mrTargetSelect" style="display: none;"></select>
+        </div>
+        <div class="mr-form-group">
+          <label for="mrCreateTitle">标题（必填）</label>
+          <input id="mrCreateTitle" class="mr-form-input" type="text" placeholder="例如：支持 Worktree 分支级 Diff 比对" maxlength="120">
+        </div>
+        <div class="mr-form-group">
+          <label for="mrCreateDesc">描述（可空）</label>
+          <textarea id="mrCreateDesc" class="mr-form-textarea" placeholder="补充说明改动背景、自测情况等"></textarea>
+        </div>
+        <div id="mrCreateError" class="mr-detail-error" role="alert"></div>
+      </div>
+      <div class="scan-directory-footer">
+        <button class="btn-outline" type="button" onclick="closeCreateMrModal()">取消</button>
+        <button id="mrCreateSubmitBtn" class="btn-primary" type="button" onclick="submitCreateMr()">创建 Merge Request</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MR 详情抽屉：复用提交抽屉的抽屉 DOM/CSS 模式 -->
+  <div id="mrDrawerOverlay" class="drawer-overlay" style="display:none" onclick="closeMrDrawer()"></div>
+  <div id="mrDrawer" class="commits-drawer" style="display:none" role="dialog" aria-label="Merge Request 详情">
+    <div class="commits-drawer-header">
+      <h3 id="mrDrawerTitle">🔀 Merge Request 详情</h3>
+      <button class="drawer-close" onclick="closeMrDrawer()" aria-label="关闭">×</button>
+    </div>
+    <div class="commits-drawer-body" id="mrDrawerBody"></div>
+  </div>
+
   <script>
     let allRepos = [];
     let currentRepo = '';
@@ -1636,9 +1864,26 @@
     let scanDirectoryDraft = [];
     let worktreeRemoveRequest = null;
 
+    // 可搜索 Diff 选择器实例与请求防竞态计数
+    let diffBasePicker = null;
+    let diffTargetPicker = null;
+    const searchablePickers = []; // 所有可搜索选择器实例，用于统一「点击外部关闭」
+    let diffRequestSeq = 0; // Diff 请求序列：仅最后一次请求的响应可上屏，丢弃过期响应
+
+    // 本地 Merge Request 状态
+    let mrStatusFilter = 'all';  // MR 面板状态筛选：all | open | merged | rejected | canceled
+    let mergeRequestsCache = []; // 最近一次成功拉取的 MR 列表
+    let mrListReqSeq = 0;        // MR 列表请求序列防竞态
+    let mrDetailReqSeq = 0;      // MR 详情请求序列防竞态
+    let mrCommitsReqSeq = 0;     // MR 提交列表请求序列防竞态
+    let mrDrawerState = { isOpen: false, id: null }; // MR 详情抽屉状态（id 统一为字符串）
+    let currentMrDetail = null;  // 抽屉当前展示的 MR 记录
+    let createMrSourcePicker = null;
+    let createMrTargetPicker = null;
+
     function selectDiffMode(mode) {
       currentDiffMode = mode;
-      fetchAndRenderDiff(mode, true);
+      fetchAndRenderRefDiff(mode, true);
     }
 
     const STARRED_STORAGE_KEY = 'git_lens_starred_repos';
@@ -1819,12 +2064,16 @@
       const urlUncommitted = url.searchParams.get('uncommitted');
       const urlBase = url.searchParams.get('base');
       const urlTarget = url.searchParams.get('target');
+      // ref 模式的类型前缀；旧链接（diffType=worktree）无该参数，按 worktree 兼容解析
+      const urlBaseType = url.searchParams.get('diffBaseType');
+      const urlTargetType = url.searchParams.get('diffTargetType');
       const urlMode = url.searchParams.get('mode');
       const urlCommits = url.searchParams.get('commits');
       const urlCommitsFull = url.searchParams.get('commitsFull');
       const urlCommitsRef = url.searchParams.get('commitsRef');
+      const urlMr = url.searchParams.get('mr');
 
-      if (!urlRepo && !urlTab && !urlQ && !urlDiffType && !urlCommits) return null;
+      if (!urlRepo && !urlTab && !urlQ && !urlDiffType && !urlCommits && !urlMr) return null;
       return {
           repo: urlRepo || '',
           tab: urlTab || 'overview',
@@ -1833,10 +2082,13 @@
           uncommitted: urlUncommitted || '',
           base: urlBase || '',
           target: urlTarget || '',
+          baseType: urlBaseType === 'branch' ? 'branch' : 'worktree',
+          targetType: urlTargetType === 'branch' ? 'branch' : 'worktree',
           mode: urlMode || null,
           commits: urlCommits || '',
           commitsFull: urlCommitsFull === '1',
-          commitsRef: urlCommitsRef || ''
+          commitsRef: urlCommitsRef || '',
+          mr: urlMr || ''
       };
     }
 
@@ -1871,18 +2123,38 @@
             url.searchParams.set('uncommitted', currentUncommittedPath);
             url.searchParams.delete('base');
             url.searchParams.delete('target');
-          } else if (currentDiffType === 'worktree') {
-            url.searchParams.set('diffType', 'worktree');
-            const b = document.getElementById('diffBaseSelect')?.value || currentDiffBase;
-            const t = document.getElementById('diffTargetSelect')?.value || currentDiffTarget;
-            if (b) url.searchParams.set('base', b);
-            if (t) url.searchParams.set('target', t);
+            url.searchParams.delete('diffBaseType');
+            url.searchParams.delete('diffTargetType');
+          } else if (currentDiffType === 'ref' || currentDiffType === 'worktree') {
+            // 选择器保存的是 kind:value 身份串；旧格式 diffType=worktree 的 base/target 仍按裸 worktree 路径写出
+            const b = splitRefIdentity(document.getElementById('diffBaseSelect')?.value || currentDiffBase);
+            const t = splitRefIdentity(document.getElementById('diffTargetSelect')?.value || currentDiffTarget);
+            if (b.value && t.value) {
+              url.searchParams.set('diffType', currentDiffType);
+              if (currentDiffType === 'ref') {
+                url.searchParams.set('diffBaseType', b.kind);
+                url.searchParams.set('diffTargetType', t.kind);
+              } else {
+                url.searchParams.delete('diffBaseType');
+                url.searchParams.delete('diffTargetType');
+              }
+              url.searchParams.set('base', b.value);
+              url.searchParams.set('target', t.value);
+            } else {
+              url.searchParams.delete('diffType');
+              url.searchParams.delete('base');
+              url.searchParams.delete('target');
+              url.searchParams.delete('diffBaseType');
+              url.searchParams.delete('diffTargetType');
+            }
             url.searchParams.delete('uncommitted');
           } else {
             url.searchParams.delete('diffType');
             url.searchParams.delete('uncommitted');
             url.searchParams.delete('base');
             url.searchParams.delete('target');
+            url.searchParams.delete('diffBaseType');
+            url.searchParams.delete('diffTargetType');
           }
           if (currentDiffMode) url.searchParams.set('mode', currentDiffMode);
           else url.searchParams.delete('mode');
@@ -1891,6 +2163,8 @@
           url.searchParams.delete('uncommitted');
           url.searchParams.delete('base');
           url.searchParams.delete('target');
+          url.searchParams.delete('diffBaseType');
+          url.searchParams.delete('diffTargetType');
           url.searchParams.delete('mode');
         }
 
@@ -1906,6 +2180,13 @@
           url.searchParams.delete('commitsRef');
         }
 
+        // MR 详情抽屉打开状态持久化：刷新/前进后退均可恢复
+        if (mrDrawerState.isOpen && mrDrawerState.id != null) {
+          url.searchParams.set('mr', mrDrawerState.id);
+        } else {
+          url.searchParams.delete('mr');
+        }
+
         // 用户主动切换页面状态才新增历史项；恢复历史时保留浏览器正在访问的 URL。
         if (!isRestoringHistory) {
           if (pushHistory && url.toString() !== window.location.href) {
@@ -1915,19 +2196,24 @@
           }
         }
 
-        // 同时写入当前 Tab 专属的 sessionStorage
+        // 同时写入当前 Tab 专属的 sessionStorage（base/target 存裸值 + 类型前缀，与 URL 语义一致）
+        const storedBaseIdentity = document.getElementById('diffBaseSelect')?.value || currentDiffBase;
+        const storedTargetIdentity = document.getElementById('diffTargetSelect')?.value || currentDiffTarget;
         sessionStorage.setItem(TAB_STATE_STORAGE_KEY, JSON.stringify({
           repo: currentRepo,
           tab: activeTab,
           q: searchKeyword,
           diffType: currentDiffType,
           uncommitted: currentUncommittedPath,
-          base: document.getElementById('diffBaseSelect')?.value || currentDiffBase,
-          target: document.getElementById('diffTargetSelect')?.value || currentDiffTarget,
+          base: splitRefIdentity(storedBaseIdentity).value,
+          target: splitRefIdentity(storedTargetIdentity).value,
+          baseType: splitRefIdentity(storedBaseIdentity).kind,
+          targetType: splitRefIdentity(storedTargetIdentity).kind,
           mode: currentDiffMode,
           commits: commitsDrawerState.isOpen ? commitsDrawerState.worktreePath : '',
           commitsFull: commitsDrawerState.isOpen && commitsDrawerState.fullHistory,
-          commitsRef: commitsDrawerState.isOpen ? (commitsDrawerState.ref || '') : ''
+          commitsRef: commitsDrawerState.isOpen ? (commitsDrawerState.ref || '') : '',
+          mr: mrDrawerState.isOpen && mrDrawerState.id != null ? mrDrawerState.id : ''
         }));
       } catch (e) {
         console.warn('syncStateToUrl error:', e);
@@ -1990,6 +2276,187 @@
         document.getElementById('repoDropdown').classList.remove('show');
       }
     });
+
+    // 点击外部时关闭所有可搜索选择器下拉（Diff 基准/对比、MR 弹层内的分支选择器）
+    document.addEventListener('click', (e) => {
+      searchablePickers.forEach(p => {
+        if (p.wrapper && !p.wrapper.contains(e.target)) p.closeDropdown();
+      });
+    });
+
+    /* 可搜索下拉选择器工厂（视觉与交互对齐仓库选择器 repoPickerWrapper）：
+       触发器 + 搜索输入 + 分组列表，选中值写入隐藏 <select> 作为状态载体。
+       cfg: {
+         wrapperId/triggerId/triggerTextId/dropdownId/searchInputId/listId/selectId,
+         getItems: () => [{ kind, value, identity, label, searchText, disabled }],
+         groupTitles: { [kind]: 分组标题 }, emptyText: 无结果文案,
+         placeholder: 未选中时触发器文案, onSelect: (identity) => void
+       } */
+    function createSearchablePicker(cfg) {
+      const wrapper = document.getElementById(cfg.wrapperId);
+      const trigger = document.getElementById(cfg.triggerId);
+      const textEl = document.getElementById(cfg.triggerTextId);
+      const dropdown = document.getElementById(cfg.dropdownId);
+      const input = document.getElementById(cfg.searchInputId);
+      const listEl = document.getElementById(cfg.listId);
+      const state = { open: false, keyword: '', visible: [], rowEls: [], highlight: -1 };
+
+      function getSelectedIdentity() {
+        return document.getElementById(cfg.selectId)?.value || '';
+      }
+
+      /* 以隐藏 select 里的身份串为准过滤选项元数据，保证下拉列表与状态载体一致 */
+      function visibleSourceItems() {
+        const identities = new Set([...(document.getElementById(cfg.selectId)?.options || [])].map(o => o.value));
+        return cfg.getItems().filter(item => identities.has(item.identity));
+      }
+
+      /* 键盘高亮只切换类名并滚动到可见，不重建列表，避免滚动位置跳动 */
+      function applyHighlightClasses() {
+        state.rowEls.forEach((el, i) => {
+          el.classList.toggle('highlight', i === state.highlight);
+        });
+        const el = state.rowEls[state.highlight];
+        if (el) el.scrollIntoView({ block: 'nearest' });
+      }
+
+      function renderList() {
+        const kw = state.keyword.trim().toLowerCase();
+        // 大小写不敏感包含式搜索：匹配分支名/Worktree 路径/目录名
+        const items = visibleSourceItems().filter(item => !kw
+          || item.label.toLowerCase().includes(kw)
+          || item.searchText.toLowerCase().includes(kw));
+        state.visible = items;
+        state.rowEls = [];
+        // 初始高亮落在第一个可用选项上（跳过失联 Worktree 等禁用项）
+        state.highlight = items.findIndex(item => !item.disabled);
+
+        if (items.length === 0) {
+          listEl.innerHTML = `<div class="loading" style="padding: 20px;">${escapeHtml(cfg.emptyText || '没有匹配的选项')}</div>`;
+          return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        let lastKind = null;
+        items.forEach((item) => {
+          if (cfg.groupTitles && item.kind !== lastKind) {
+            lastKind = item.kind;
+            const title = document.createElement('div');
+            title.className = 'repo-list-group-title';
+            title.textContent = cfg.groupTitles[item.kind] || item.kind;
+            fragment.appendChild(title);
+          }
+          const selected = item.identity === getSelectedIdentity();
+          const row = document.createElement('div');
+          row.className = 'repo-item'
+            + (selected ? ' selected' : '')
+            + (item.disabled ? ' disabled' : '');
+          row.innerHTML = `
+            <div class="repo-item-left">
+              <span class="repo-item-name">${escapeHtml(item.label)}</span>
+            </div>
+            ${item.disabled ? '<span class="repo-item-group">已失联</span>' : (selected ? '<span class="repo-item-group">当前</span>' : '')}
+          `;
+          row.addEventListener('click', () => chooseItem(item));
+          state.rowEls.push(row);
+          fragment.appendChild(row);
+        });
+        listEl.innerHTML = '';
+        listEl.appendChild(fragment);
+        applyHighlightClasses();
+      }
+
+      function updateTriggerText() {
+        const identity = getSelectedIdentity();
+        if (!identity) {
+          textEl.innerHTML = `<span style="color: var(--text-muted);">${escapeHtml(cfg.placeholder || '请选择')}</span>`;
+          return;
+        }
+        // 选项元数据缺失（数据尚未刷新等）时直接展示身份串兜底
+        const item = cfg.getItems().find(o => o.identity === identity);
+        textEl.innerHTML = `<span style="font-weight: 600; color: var(--text-bright);">${escapeHtml(item ? item.label : identity)}</span>`;
+      }
+
+      function moveHighlight(delta) {
+        if (state.visible.length === 0) return;
+        let idx = state.highlight;
+        for (let step = 0; step < state.visible.length; step++) {
+          idx = (idx + delta + state.visible.length) % state.visible.length;
+          if (!state.visible[idx].disabled) break;
+        }
+        state.highlight = idx;
+        applyHighlightClasses();
+      }
+
+      function chooseItem(item) {
+        if (!item || item.disabled) return;
+        const sel = document.getElementById(cfg.selectId);
+        if (sel) sel.value = item.identity;
+        updateTriggerText();
+        closeDropdown();
+        if (cfg.onSelect) cfg.onSelect(item.identity);
+      }
+
+      function openDropdown() {
+        state.keyword = '';
+        input.value = '';
+        renderList();
+        dropdown.classList.add('show');
+        state.open = true;
+        setTimeout(() => input.focus(), 30);
+      }
+
+      function closeDropdown() {
+        dropdown.classList.remove('show');
+        state.open = false;
+      }
+
+      function toggleDropdown() {
+        if (state.open) closeDropdown();
+        else openDropdown();
+      }
+
+      input.addEventListener('input', () => {
+        state.keyword = input.value;
+        renderList();
+      });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          moveHighlight(1);
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          moveHighlight(-1);
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          const item = state.visible[state.highlight];
+          if (item && !item.disabled) chooseItem(item);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          closeDropdown();
+        }
+      });
+      trigger.addEventListener('click', toggleDropdown);
+
+      const picker = {
+        wrapper,
+        openDropdown,
+        closeDropdown,
+        toggleDropdown,
+        refresh: updateTriggerText, // 数据/选择变化后由外部调用，仅同步触发器文本
+        /* 指定身份串写回隐藏 select；身份串不在选项集中时清空选择（回退占位文案） */
+        setSelected(identity) {
+          const sel = document.getElementById(cfg.selectId);
+          if (sel) {
+            sel.value = (identity && [...sel.options].some(o => o.value === identity)) ? identity : '';
+          }
+          updateTriggerText();
+        }
+      };
+      searchablePickers.push(picker);
+      updateTriggerText();
+      return picker;
+    }
 
     function renderRepoDropdownList() {
       const container = document.getElementById('repoDropdownList');
@@ -2184,26 +2651,44 @@
             if (pendingRestoreState.diffType === 'uncommitted' && pendingRestoreState.uncommitted) {
               const baseSel = document.getElementById('diffBaseSelect');
               const targetSel = document.getElementById('diffTargetSelect');
-              if (targetSel) targetSel.value = pendingRestoreState.uncommitted;
-              if (baseSel && (!baseSel.value || baseSel.value === pendingRestoreState.uncommitted)) {
+              if (targetSel) targetSel.value = `worktree:${pendingRestoreState.uncommitted}`;
+              if (baseSel && (!baseSel.value || baseSel.value === `worktree:${pendingRestoreState.uncommitted}`)) {
                 const other = currentWorktrees.find(w => w.path !== pendingRestoreState.uncommitted);
-                if (other) baseSel.value = other.path;
+                if (other) baseSel.value = `worktree:${other.path}`;
               }
-              currentDiffType = 'worktree';
+              refreshDiffPickerTriggers();
+              currentDiffType = 'ref';
               currentUncommittedPath = pendingRestoreState.uncommitted;
               currentDiffMode = 'uncommitted';
-              fetchAndRenderDiff('uncommitted', false);
-            } else if (pendingRestoreState.diffType === 'worktree' && pendingRestoreState.base && pendingRestoreState.target) {
-              const baseSel = document.getElementById('diffBaseSelect');
-              const targetSel = document.getElementById('diffTargetSelect');
-              if (baseSel) baseSel.value = pendingRestoreState.base;
-              if (targetSel) targetSel.value = pendingRestoreState.target;
+              fetchAndRenderRefDiff('uncommitted', false);
+            } else if ((pendingRestoreState.diffType === 'ref' || pendingRestoreState.diffType === 'worktree')
+              && pendingRestoreState.base && pendingRestoreState.target) {
+              // diffType=ref 为新格式；旧链接 diffType=worktree 无类型前缀，base/target 按 worktree 兼容解析。
+              // 恢复流程在 inspectRepo 之后，选项（含分支）已就绪，可直接应用身份串
+              const baseIdentity = `${pendingRestoreState.baseType || 'worktree'}:${pendingRestoreState.base}`;
+              const targetIdentity = `${pendingRestoreState.targetType || 'worktree'}:${pendingRestoreState.target}`;
               currentDiffMode = pendingRestoreState.mode || null;
-              fetchAndRenderDiff(pendingRestoreState.mode, false);
+              if (applyDiffIdentitiesOrReport(baseIdentity, targetIdentity)) {
+                refreshDiffPickerTriggers();
+                fetchAndRenderRefDiff(pendingRestoreState.mode, false);
+              } else {
+                currentDiffType = 'ref';
+                currentDiffBase = baseIdentity;
+                currentDiffTarget = targetIdentity;
+                document.getElementById('diffResultsContainer').innerHTML = `
+                  <div class="empty-diff-box" style="color: var(--warning);">
+                    <div style="font-size: 15px; margin-bottom: 8px;">链接中的 Worktree 或分支已不存在，无法恢复原比对</div>
+                    <div style="font-size: 13px;">请重新在上方选择基准与对比对象</div>
+                  </div>`;
+              }
             }
           }
           if (pendingRestoreState.commits) {
             await openCommitsDrawer(pendingRestoreState.commits, pendingRestoreState.commitsFull, false, pendingRestoreState.commitsRef || '');
+          }
+          // 恢复 MR 详情抽屉（mr 记录不存在时抽屉内展示错误与重试入口）
+          if (pendingRestoreState.mr) {
+            await openMrDetail(pendingRestoreState.mr, false);
           }
           pendingRestoreState = null;
         }
@@ -2218,6 +2703,9 @@
         currentUncommittedPath = '';
         currentDiffBase = '';
         currentDiffTarget = '';
+        mergeRequestsCache = [];
+        renderMrList();
+        if (mrDrawerState.isOpen) closeMrDrawer(false);
         document.getElementById('headerPath').textContent = '';
         sel.innerHTML = '<option value="">未扫描到仓库</option>';
         document.getElementById('repoTriggerText').textContent = scanDirectoryConfig.customDirectories.length > 0
@@ -2230,7 +2718,7 @@
         document.getElementById('diffResultsContainer').innerHTML = `
           <div class="empty-diff-box">
             <div style="font-size: 16px; margin-bottom: 8px;">请先添加扫描目录</div>
-            <div style="font-size: 13px;">添加目录后，Git Lens 会在这里展示可用仓库的 Worktree 差异。</div>
+            <div style="font-size: 13px;">添加目录后，Git Lens 会在这里展示可用仓库的 Worktree/分支差异。</div>
           </div>`;
         isRestoringHistory = false;
         syncStateToUrl();
@@ -2262,6 +2750,7 @@
         updateMetrics();
         renderFilteredLists();
         populateDiffSelectors();
+        refreshMergeRequests();
       } catch (err) {
         alert('分析失败: ' + err.message);
       }
@@ -2422,6 +2911,8 @@
         </div>
         <div class="item-actions">
           <button class="btn-outline" onclick="openBranchCommitsDrawer('${escapeHtml(b.name)}')" title="${b.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>
+          ${!b.isMain ? `<button class="btn-outline" onclick="viewBranchDiffAgainstMain('${escapeHtml(b.name)}')" title="以「仅已提交」模式对比该分支与主分支（仅比较已提交内容，无 Worktree 的分支也可用）">与主分支对比</button>` : ''}
+          ${!b.isMain ? `<button class="btn-outline" onclick="openCreateMrModal('${escapeHtml(b.name)}')" title="以该分支为源分支发起 Merge Request">发起 MR</button>` : ''}
           ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${escapeHtml(b.name)}', ${!b.isMerged})">删除</button>` : ''}
         </div>
       `;
@@ -2609,58 +3100,127 @@
     }
 
     /* 优化 3：Diff 选择器更新与操作 */
+
+    /* 汇总 Worktree 与本地分支为统一选项集合；identity = kind:value，
+       worktree 的 value 是路径、branch 的 value 是分支名，kind 前缀保证同名不冲突 */
+    function buildDiffRefOptions() {
+      const options = [];
+      currentWorktrees.forEach(w => {
+        const broken = w.existsOnDisk === false || w.isPrunable;
+        const dirName = w.path.split('/').filter(Boolean).pop() || w.path;
+        options.push({
+          kind: 'worktree',
+          value: w.path,
+          identity: `worktree:${w.path}`,
+          label: `🌳 ${w.isMain ? '[Main] ' : ''}${w.branch || 'HEAD'} (${dirName})${broken ? ' · 已失联' : ''}`,
+          searchText: `${w.branch || ''} ${dirName} ${w.path}`,
+          disabled: broken
+        });
+      });
+      currentBranches.forEach(b => {
+        options.push({
+          kind: 'branch',
+          value: b.name,
+          identity: `branch:${b.name}`,
+          label: `🌿 ${b.name}`,
+          searchText: b.name,
+          disabled: false
+        });
+      });
+      return options;
+    }
+
+    /* 默认基准：主 worktree 优先，其次第一个 worktree，无 worktree 时退回主分支/第一个分支 */
+    function defaultDiffBaseIdentity(options) {
+      const mainWt = currentWorktrees.find(w => w.isMain) || currentWorktrees[0];
+      if (mainWt) return `worktree:${mainWt.path}`;
+      const fallback = options.find(o => o.kind === 'branch' && o.value === currentMainBranch)
+        || options.find(o => o.kind === 'branch');
+      return fallback ? fallback.identity : '';
+    }
+
+    /* 默认对比对象：第一个非主 worktree，退回主 worktree，无 worktree 时退回分支 */
+    function defaultDiffTargetIdentity(options) {
+      const preferredWt = currentWorktrees.find(w => !w.isMain) || currentWorktrees[0];
+      if (preferredWt) return `worktree:${preferredWt.path}`;
+      const fallback = options.find(o => o.kind === 'branch' && o.value === currentMainBranch)
+        || options.find(o => o.kind === 'branch');
+      return fallback ? fallback.identity : '';
+    }
+
     function populateDiffSelectors() {
       const baseSel = document.getElementById('diffBaseSelect');
       const targetSel = document.getElementById('diffTargetSelect');
       if (!baseSel || !targetSel) return;
 
-      const curBase = baseSel.value;
-      const curTarget = targetSel.value;
+      const options = buildDiffRefOptions();
+      const rebuild = (sel, fallbackIdentity) => {
+        // 刷新后保留当前有效选择；身份串已不在选项集中时回退默认值
+        const kept = sel.value && options.some(o => o.identity === sel.value) ? sel.value : fallbackIdentity;
+        sel.innerHTML = '';
+        if (options.length === 0) {
+          sel.innerHTML = '<option value="">无可用 Worktree 或分支</option>';
+          return;
+        }
+        options.forEach(o => {
+          const opt = document.createElement('option');
+          opt.value = o.identity;
+          opt.textContent = o.label;
+          sel.appendChild(opt);
+        });
+        if (kept) sel.value = kept;
+      };
 
-      baseSel.innerHTML = '';
-      targetSel.innerHTML = '';
+      rebuild(baseSel, defaultDiffBaseIdentity(options));
+      rebuild(targetSel, defaultDiffTargetIdentity(options));
 
-      if (currentWorktrees.length === 0) {
-        baseSel.innerHTML = '<option value="">无可用 Worktree</option>';
-        targetSel.innerHTML = '<option value="">无可用 Worktree</option>';
-        return;
+      // 同步可搜索下拉的触发文本（列表在每次展开时按 select 选项重建）
+      if (diffBasePicker) diffBasePicker.refresh();
+      if (diffTargetPicker) diffTargetPicker.refresh();
+    }
+
+    /* 把 kind:value 身份串解析回类型与取值；无前缀的旧值一律按 worktree 兼容 */
+    function splitRefIdentity(identity) {
+      const str = identity || '';
+      const idx = str.indexOf(':');
+      if (idx <= 0) return { kind: 'worktree', value: str };
+      return {
+        kind: str.slice(0, idx) === 'branch' ? 'branch' : 'worktree',
+        value: str.slice(idx + 1)
+      };
+    }
+
+    /* 恢复场景：按身份串设置两个选择器；任一身份串不在选项集中返回 false，由调用方给出中文提示 */
+    function applyDiffIdentitiesOrReport(baseIdentity, targetIdentity) {
+      const baseSel = document.getElementById('diffBaseSelect');
+      const targetSel = document.getElementById('diffTargetSelect');
+      let ok = true;
+      if (baseIdentity) {
+        if ([...baseSel.options].some(o => o.value === baseIdentity)) baseSel.value = baseIdentity;
+        else ok = false;
       }
-
-      currentWorktrees.forEach((w) => {
-        const label = `${w.isMain ? '⭐ [Main] ' : '🌳 '}${w.branch || 'HEAD'} (${w.path.split('/').pop()})`;
-        const optA = document.createElement('option');
-        optA.value = w.path;
-        optA.textContent = label;
-        baseSel.appendChild(optA);
-
-        const optB = document.createElement('option');
-        optB.value = w.path;
-        optB.textContent = label;
-        targetSel.appendChild(optB);
-      });
-
-      if (curBase && currentWorktrees.some(w => w.path === curBase)) {
-        baseSel.value = curBase;
-      } else {
-        baseSel.value = currentWorktrees[0].path;
+      if (targetIdentity) {
+        if ([...targetSel.options].some(o => o.value === targetIdentity)) targetSel.value = targetIdentity;
+        else ok = false;
       }
+      return ok;
+    }
 
-      if (curTarget && currentWorktrees.some(w => w.path === curTarget)) {
-        targetSel.value = curTarget;
-      } else if (currentWorktrees.length > 1) {
-        targetSel.value = currentWorktrees[1].path;
-      } else {
-        targetSel.value = currentWorktrees[0].path;
-      }
+    /* 两个可搜索下拉触发器文本与选择状态同步（交换/程序化设置后调用） */
+    function refreshDiffPickerTriggers() {
+      if (diffBasePicker) diffBasePicker.refresh();
+      if (diffTargetPicker) diffTargetPicker.refresh();
     }
 
     function swapDiffTargets() {
       const baseSel = document.getElementById('diffBaseSelect');
       const targetSel = document.getElementById('diffTargetSelect');
+      // 身份串整体对调（kind 与 value 一起交换）
       const temp = baseSel.value;
       baseSel.value = targetSel.value;
       targetSel.value = temp;
-      fetchAndRenderDiff(null, true);
+      refreshDiffPickerTriggers();
+      fetchAndRenderRefDiff(null, true);
     }
 
     // 落后状态默认隐藏主干独有文件；用户明确查看时，反向对比即可看到这些更新。
@@ -2672,22 +3232,47 @@
       const temp = baseSel.value;
       baseSel.value = targetSel.value;
       targetSel.value = temp;
-      currentDiffType = 'worktree';
+      refreshDiffPickerTriggers();
+      currentDiffType = 'ref';
       currentDiffBase = baseSel.value;
       currentDiffTarget = targetSel.value;
       currentDiffMode = 'committed';
-      fetchAndRenderDiff('committed', true);
+      fetchAndRenderRefDiff('committed', true);
     }
 
     function viewDiffAgainstMain(targetWorktreePath) {
+      // 与主干对比保持 Worktree 类型（包含目标 Worktree 未提交修改），基准固定为主 worktree
+      const mainWt = currentWorktrees.find(w => w.isMain) || currentWorktrees[0];
+      if (!mainWt) return;
       const baseSel = document.getElementById('diffBaseSelect');
       const targetSel = document.getElementById('diffTargetSelect');
-      if (currentWorktrees.length > 0) {
-        baseSel.value = currentWorktrees[0].path;
-        targetSel.value = targetWorktreePath;
-        switchTab('diff');
-        fetchAndRenderDiff(null, false);
+      baseSel.value = `worktree:${mainWt.path}`;
+      targetSel.value = `worktree:${targetWorktreePath}`;
+      refreshDiffPickerTriggers();
+      switchTab('diff', false);
+      fetchAndRenderRefDiff(null, true);
+    }
+
+    /* 分支列表快捷入口：branch↔branch、仅已提交模式对比任意本地分支与主分支（无 Worktree 也可用） */
+    function viewBranchDiffAgainstMain(branchName) {
+      if (!currentMainBranch) {
+        alert('未能识别当前仓库的主分支，无法对比');
+        return;
       }
+      if (currentMainBranch === branchName) {
+        alert('该分支即为主分支，无需对比');
+        return;
+      }
+      switchTab('diff', false); // 先触发 populateDiffSelectors，确保选项基于最新数据
+      const baseIdentity = `branch:${currentMainBranch}`;
+      const targetIdentity = `branch:${branchName}`;
+      if (!applyDiffIdentitiesOrReport(baseIdentity, targetIdentity)) {
+        document.getElementById('diffResultsContainer').innerHTML =
+          `<div class="empty-diff-box" style="color: var(--warning);">分支 ${escapeHtml(branchName)} 或主分支 ${escapeHtml(currentMainBranch)} 已不存在，无法比对。</div>`;
+        return;
+      }
+      refreshDiffPickerTriggers();
+      fetchAndRenderRefDiff('committed', true);
     }
 
     /* 查看指定 Worktree 未提交修改 (Dirty Diff) */
@@ -2697,39 +3282,42 @@
       const targetSel = document.getElementById('diffTargetSelect');
 
       if (targetSel) {
-        targetSel.value = worktreePath;
+        targetSel.value = `worktree:${worktreePath}`;
       }
-      if (baseSel && (!baseSel.value || baseSel.value === worktreePath)) {
+      if (baseSel && (!baseSel.value || baseSel.value === `worktree:${worktreePath}`)) {
         const other = currentWorktrees.find(w => w.path !== worktreePath);
-        if (other) baseSel.value = other.path;
+        if (other) baseSel.value = `worktree:${other.path}`;
       }
+      refreshDiffPickerTriggers();
 
-      currentDiffType = 'worktree';
-      currentDiffTarget = worktreePath;
-      currentDiffBase = baseSel ? baseSel.value : '';
+      currentUncommittedPath = worktreePath;
       currentDiffMode = 'uncommitted';
 
-      switchTab('diff');
-      await fetchAndRenderDiff('uncommitted', false);
+      switchTab('diff', false);
+      await fetchAndRenderRefDiff('uncommitted', false);
     }
 
-    async function fetchAndRenderDiff(requestedMode = null, pushHistory = false) {
-      const base = document.getElementById('diffBaseSelect').value;
-      const target = document.getElementById('diffTargetSelect').value;
+    /* 统一 Diff 比对入口：读取两个选择器的 kind:value 身份串调用 /api/diff-refs，
+       worktree↔worktree 组合也走该接口，与 worktree↔branch 语义一致 */
+    async function fetchAndRenderRefDiff(requestedMode = null, pushHistory = false) {
+      const baseSel = document.getElementById('diffBaseSelect');
+      const targetSel = document.getElementById('diffTargetSelect');
       const container = document.getElementById('diffResultsContainer');
+      const base = baseSel?.value || '';
+      const target = targetSel?.value || '';
 
       if (!base || !target) {
-        alert('请选择两个工作区进行对比');
+        alert('请选择两个 Worktree 或分支进行对比');
         return;
       }
 
-      const isSameWorktree = (base === target);
-      if (isSameWorktree) {
-        // 同工作区自比：自动强制收敛到 uncommitted 模式
+      const isSameRef = base === target;
+      if (isSameRef) {
+        // 同一 Worktree / 同一分支自比：自动锁定 uncommitted 自审模式（现有行为保持）
         currentDiffMode = 'uncommitted';
       }
 
-      currentDiffType = 'worktree';
+      currentDiffType = 'ref';
       currentDiffBase = base;
       currentDiffTarget = target;
       if (requestedMode) {
@@ -2737,16 +3325,28 @@
       }
       syncStateToUrl(pushHistory);
 
-      container.innerHTML = '<div class="loading">正在比对工作区代码差异...</div>';
+      container.innerHTML = '<div class="loading">正在比对代码差异...</div>';
+
+      const seq = ++diffRequestSeq;
+      const baseRef = splitRefIdentity(base);
+      const targetRef = splitRefIdentity(target);
+      const params = new URLSearchParams({
+        path: currentRepo,
+        sourceType: baseRef.kind,
+        source: baseRef.value,
+        targetType: targetRef.kind,
+        target: targetRef.value
+      });
+      if (currentDiffMode) {
+        params.set('mode', currentDiffMode);
+      }
 
       try {
-        let url = `/api/diff-worktrees?path=${encodeURIComponent(currentRepo)}&source=${encodeURIComponent(base)}&target=${encodeURIComponent(target)}`;
-        if (currentDiffMode) {
-          url += `&mode=${encodeURIComponent(currentDiffMode)}`;
-        }
-        const res = await fetch(url);
+        const res = await fetch(`/api/diff-refs?${params}`);
         const data = await res.json();
-        if (!data.ok) throw new Error(data.error);
+        // 防竞态：响应返回时已有更新的比对请求在途，直接丢弃旧结果，避免覆盖新视图
+        if (seq !== diffRequestSeq) return;
+        if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
 
         const diff = data.diff;
         if (diff.effectiveMode) {
@@ -2754,8 +3354,14 @@
         }
         renderDiffView(diff);
       } catch (err) {
+        if (seq !== diffRequestSeq) return;
         container.innerHTML = `<div class="empty-diff-box" style="color: var(--danger);">Diff 计算失败: ${escapeHtml(err.message)}</div>`;
       }
+    }
+
+    /* 兼容旧入口：历史调用点统一转发到 ref 比对流程 */
+    async function fetchAndRenderDiff(requestedMode = null, pushHistory = false) {
+      return fetchAndRenderRefDiff(requestedMode, pushHistory);
     }
 
     /* 拉取最新仓库分析数据并刷新外层列表/徽标。
@@ -2790,14 +3396,14 @@
         // 根据当前 Diff 模式重新比对刷新
         if (currentDiffType === 'uncommitted' && currentUncommittedPath) {
           await viewUncommittedDiff(currentUncommittedPath);
-        } else if (currentDiffType === 'worktree') {
-          await fetchAndRenderDiff();
+        } else if (currentDiffBase && currentDiffTarget) {
+          await fetchAndRenderRefDiff();
         } else {
           // 如果尚未进行比对，触发一次当前所选选择器的比对
           const b = document.getElementById('diffBaseSelect')?.value;
           const t = document.getElementById('diffTargetSelect')?.value;
           if (b && t && b !== t) {
-            await fetchAndRenderDiff();
+            await fetchAndRenderRefDiff();
           }
         }
       } catch (e) {
@@ -2919,6 +3525,17 @@
       return `<pre class="diff-pre"><code>${formattedCode}</code></pre>`;
     }
 
+    /* Diff 摘要里的基准/对比对象徽章：branch 类型无 path，用 kind 图标区分并容错缺字段 */
+    function diffRefBadgeHtml(ref) {
+      const icon = ref.kind === 'branch' ? '🌿' : '🌳';
+      const name = ref.branch || ref.head || '-';
+      const title = ref.path
+        ? ` title="${escapeHtml(ref.path)}"`
+        : (ref.kind === 'branch' ? ' title="本地分支"' : '');
+      const head = ref.head ? `<code>${escapeHtml(String(ref.head).slice(0, 8))}</code>` : '<code>-</code>';
+      return `<span${title}>${icon} <span class="badge">${escapeHtml(name)}</span> ${head}</span>`;
+    }
+
     /* 渲染两个 Worktree 之间的 Diff 视图 */
     function renderDiffView(diff) {
       const container = document.getElementById('diffResultsContainer');
@@ -2931,7 +3548,10 @@
 
       let syncStatusBadge = '';
       if (diff.isSameWorktree) {
-        syncStatusBadge = '<span class="badge badge-success">🌿 本地工作区自审</span>';
+        // branch↔branch 同分支与同 Worktree 自审共用该徽章，按类型区分文案
+        syncStatusBadge = diff.source?.kind === 'branch'
+          ? '<span class="badge badge-success">🌿 同分支自审（内容一致）</span>'
+          : '<span class="badge badge-success">🌿 本地工作区自审</span>';
       } else if (diff.isCommittedContentEqual && (diff.historyAhead > 0 || diff.historyBehind > 0)) {
         syncStatusBadge = '<span class="badge badge-success">文件内容一致（提交历史已 squash 整合）</span>';
       } else if (diff.isCommittedContentEqual) {
@@ -2948,10 +3568,18 @@
       }
 
       let modeTipText = '';
-      const isSelfDiff = !!diff.isSameWorktree;
+      const isSelfDiff = !!diff.isSameWorktree || currentDiffBase === currentDiffTarget;
+      // branch 类型参与比对时后端会通过 modesAvailable 限制可用模式（如无 worktree 则无未提交可看），
+      // 前端据此禁用不可用的模式按钮
+      const modesAvailable = Array.isArray(diff.modesAvailable) ? diff.modesAvailable : null;
+      const isModeDisabled = (m) => (isSelfDiff && m !== 'uncommitted')
+        || (Boolean(modesAvailable) && !modesAvailable.includes(m));
+      const modeDisabledTitle = (m) => (isSelfDiff && m !== 'uncommitted')
+        ? '同分支对比不可用'
+        : (modesAvailable && !modesAvailable.includes(m) ? '当前比对对象不支持该模式' : '');
 
       if (isSelfDiff) {
-        modeTipText = '💡 分支自审模式：Base 与 Target 为同一工作区，已自动锁定为【仅未提交 & 未跟踪】模式';
+        modeTipText = '💡 分支自审模式：Base 与 Target 为同一对象，已自动锁定为【仅未提交 & 未跟踪】模式';
       } else if (effectiveMode === 'uncommitted') {
         modeTipText = '⚡ 仅展示 Target 本地未提交修改及 untracked 新增文件';
       } else if (effectiveMode === 'all') {
@@ -2963,15 +3591,15 @@
       const modeControlHtml = `
         <div class="diff-mode-control-row">
           <div class="diff-mode-segmented">
-            <button class="diff-mode-btn ${effectiveMode === 'uncommitted' ? 'active' : ''}" onclick="selectDiffMode('uncommitted')" title="仅查看当前工作区未提交和未跟踪的代码">
+            <button class="diff-mode-btn ${effectiveMode === 'uncommitted' ? 'active' : ''} ${isModeDisabled('uncommitted') ? 'disabled' : ''}" ${isModeDisabled('uncommitted') ? 'disabled' : ''} onclick="selectDiffMode('uncommitted')" title="${isModeDisabled('uncommitted') ? modeDisabledTitle('uncommitted') : '仅查看当前工作区未提交和未跟踪的代码'}">
               <span>⚡ 仅未提交 & 未跟踪</span>
               <span class="diff-mode-pill">${counts.uncommitted}</span>
             </button>
-            <button class="diff-mode-btn ${effectiveMode === 'all' ? 'active' : ''} ${isSelfDiff ? 'disabled' : ''}" ${isSelfDiff ? 'disabled' : ''} onclick="selectDiffMode('all')" title="${isSelfDiff ? '同分支对比不可用' : '全量对比：已提交分支修改 + 本地未提交改动'}">
+            <button class="diff-mode-btn ${effectiveMode === 'all' ? 'active' : ''} ${isModeDisabled('all') ? 'disabled' : ''}" ${isModeDisabled('all') ? 'disabled' : ''} onclick="selectDiffMode('all')" title="${isModeDisabled('all') ? modeDisabledTitle('all') : '全量对比：已提交分支修改 + 本地未提交改动'}">
               <span>📦 全量变更</span>
               <span class="diff-mode-pill">${counts.all}</span>
             </button>
-            <button class="diff-mode-btn ${effectiveMode === 'committed' ? 'active' : ''} ${isSelfDiff ? 'disabled' : ''}" ${isSelfDiff ? 'disabled' : ''} onclick="selectDiffMode('committed')" title="${isSelfDiff ? '同分支对比不可用' : '仅查看已提交的代码修改，忽略未提交'}">
+            <button class="diff-mode-btn ${effectiveMode === 'committed' ? 'active' : ''} ${isModeDisabled('committed') ? 'disabled' : ''}" ${isModeDisabled('committed') ? 'disabled' : ''} onclick="selectDiffMode('committed')" title="${isModeDisabled('committed') ? modeDisabledTitle('committed') : '仅查看已提交的代码修改，忽略未提交'}">
               <span>📌 仅已提交</span>
               <span class="diff-mode-pill">${counts.committed}</span>
             </button>
@@ -2993,8 +3621,8 @@
         container.innerHTML = `
           <div class="diff-summary-card">
             <div class="stat-bar">
-              <div>基准 (Base): <span class="badge">${escapeHtml(diff.source.branch)}</span> <code>${escapeHtml(diff.source.head ? diff.source.head.slice(0, 8) : '-')}</code></div>
-              <div>对比 (Target): <span class="badge">${escapeHtml(diff.target.branch)}</span> <code>${escapeHtml(diff.target.head ? diff.target.head.slice(0, 8) : '-')}</code></div>
+              <div>基准 (Base): ${diffRefBadgeHtml(diff.source)}</div>
+              <div>对比 (Target): ${diffRefBadgeHtml(diff.target)}</div>
               <div style="margin-left: auto;">${syncStatusBadge}</div>
             </div>
             ${modeControlHtml}
@@ -3015,6 +3643,8 @@
         }
       });
 
+      // 文件内容对比的 revision：worktree 与 branch 类型都优先用 head SHA；
+      // branch 类型缺 head 时退回分支名（/api/raw-file 的 revision 参数可解析分支名）
       const sourceRef = diff.source.head || diff.source.branch || 'HEAD';
       const targetRef = diff.target.head || diff.target.branch || 'HEAD';
 
@@ -3066,8 +3696,8 @@
       container.innerHTML = `
         <div class="diff-summary-card">
           <div class="stat-bar">
-            <div>基准 (Base): <span class="badge">${escapeHtml(diff.source.branch)}</span> <code>${escapeHtml(diff.source.head ? diff.source.head.slice(0, 8) : '-')}</code></div>
-            <div>对比 (Target): <span class="badge">${escapeHtml(diff.target.branch)}</span> <code>${escapeHtml(diff.target.head ? diff.target.head.slice(0, 8) : '-')}</code></div>
+            <div>基准 (Base): ${diffRefBadgeHtml(diff.source)}</div>
+            <div>对比 (Target): ${diffRefBadgeHtml(diff.target)}</div>
             <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
               ${syncStatusBadge}
               <span style="color: var(--text-muted);">|</span>
@@ -3328,7 +3958,9 @@
     let commitsDrawerReqSeq = 0;
     // 领先/落后统计缓存：每次打开抽屉时重置；切换全量/领先视图时复用，避免重复请求
     let commitsDrawerAheadBehind = null;
-    let commitsDrawerPageScrollY = null;
+    // 抽屉滚动锁引用计数：提交抽屉与 MR 详情抽屉可能同时打开（如 URL 恢复），需叠加计数
+    let drawerPageScrollLockCount = 0;
+    let drawerPageScrollLockY = 0;
 
     // 提交详情缓存：同一提交内容不可变，收起再展开不重复请求。
     // 键为 `${worktreePath}::${sha}`，避免不同仓库对同一短 SHA 解析出不同提交的歧义。
@@ -3346,19 +3978,25 @@
     }
 
     // 抽屉打开期间固定主页面，触控板、滚轮和触摸滑动都只能作用于抽屉。
+    // 提交抽屉与 MR 详情抽屉共用该锁，引用计数支持叠加：全部关闭后才恢复页面滚动。
     function setCommitsDrawerPageScrollLocked(locked) {
-      if (locked && commitsDrawerPageScrollY === null) {
-        commitsDrawerPageScrollY = window.scrollY;
-        document.body.style.position = 'fixed';
-        document.body.style.top = `-${commitsDrawerPageScrollY}px`;
-        document.body.style.width = '100%';
-      } else if (!locked && commitsDrawerPageScrollY !== null) {
-        const scrollY = commitsDrawerPageScrollY;
-        commitsDrawerPageScrollY = null;
-        document.body.style.position = '';
-        document.body.style.top = '';
-        document.body.style.width = '';
-        window.scrollTo(0, scrollY);
+      if (locked) {
+        drawerPageScrollLockCount++;
+        if (drawerPageScrollLockCount === 1) {
+          drawerPageScrollLockY = window.scrollY;
+          document.body.style.position = 'fixed';
+          document.body.style.top = `-${drawerPageScrollLockY}px`;
+          document.body.style.width = '100%';
+        }
+      } else if (drawerPageScrollLockCount > 0) {
+        drawerPageScrollLockCount--;
+        if (drawerPageScrollLockCount === 0) {
+          const scrollY = drawerPageScrollLockY;
+          document.body.style.position = '';
+          document.body.style.top = '';
+          document.body.style.width = '';
+          window.scrollTo(0, scrollY);
+        }
       }
     }
 
@@ -4081,6 +4719,540 @@
       fetchAndRenderCommits();
     }
 
+    /* ---- 本地 Merge Request：列表 / 详情抽屉 / 新建弹层 ---- */
+
+    const MR_STATUS_META = {
+      open: { label: '开启', cls: '' }, // 默认蓝色 badge
+      merged: { label: '已合并', cls: 'badge-success' },
+      rejected: { label: '已拒绝', cls: 'badge-muted' },
+      canceled: { label: '已取消', cls: 'badge-muted' }
+    };
+    const MR_ACTION_LABELS = {
+      approve: '审阅通过',
+      changes_requested: '要求修改',
+      rejected: '拒绝',
+      canceled: '取消',
+      merge: '合并'
+    };
+
+    /* 把 ISO 时间转成中文相对时间（MR 面板/抽屉展示用），解析失败回退 '-' */
+    function formatRelativeTimeCn(iso) {
+      if (!iso) return '-';
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return '-';
+      const diffMs = Date.now() - d.getTime();
+      if (diffMs < 0) return '刚刚';
+      const minutes = Math.floor(diffMs / 60000);
+      if (minutes < 1) return '刚刚';
+      if (minutes < 60) return `${minutes} 分钟前`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return `${hours} 小时前`;
+      const days = Math.floor(hours / 24);
+      if (days < 30) return `${days} 天前`;
+      const months = Math.floor(days / 30);
+      if (months < 12) return `${months} 个月前`;
+      return `${Math.floor(months / 12)} 年前`;
+    }
+
+    /* SHA 短码展示：空值兜底为 '-' */
+    function shortSha(sha) {
+      return sha ? String(sha).slice(0, 8) : '-';
+    }
+
+    function mrStatusBadgeHtml(mr) {
+      const meta = MR_STATUS_META[mr.status] || { label: mr.status || '未知', cls: 'badge-muted' };
+      return `<span class="badge ${meta.cls}">${escapeHtml(meta.label)}</span>`;
+    }
+
+    /* 审阅状态小徽章：仅在 MR 仍开启时有意义 */
+    function mrReviewBadgeHtml(mr) {
+      if (mr.status !== 'open') return '';
+      const map = {
+        approved: '<span class="badge badge-success">审阅已通过</span>',
+        changes_requested: '<span class="badge badge-warning">要求修改</span>'
+      };
+      return map[mr.reviewStatus] || '';
+    }
+
+    function setMrStatusFilter(status) {
+      mrStatusFilter = status;
+      document.querySelectorAll('#mrStatusFilterGroup .diff-mode-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.status === status);
+      });
+      refreshMergeRequests();
+    }
+
+    /* 拉取 MR 列表（按当前筛选）并重渲染列表与计数徽章；带请求序列防竞态 */
+    async function refreshMergeRequests() {
+      if (!currentRepo) {
+        mergeRequestsCache = [];
+        renderMrList();
+        return;
+      }
+      const seq = ++mrListReqSeq;
+      try {
+        const params = new URLSearchParams({ repoPath: currentRepo });
+        if (mrStatusFilter !== 'all') params.set('status', mrStatusFilter);
+        const res = await fetch(`/api/merge-requests?${params}`);
+        const data = await res.json();
+        if (seq !== mrListReqSeq) return; // 已有更新的列表请求，丢弃旧响应
+        if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        mergeRequestsCache = data.mergeRequests || [];
+        renderMrList();
+      } catch (err) {
+        if (seq !== mrListReqSeq) return;
+        document.getElementById('mrList').innerHTML =
+          `<div class="loading" style="color: var(--danger);">MR 列表加载失败：${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function renderMrList() {
+      const container = document.getElementById('mrList');
+      const badge = document.getElementById('mrCountBadge');
+      if (!container) return;
+      if (badge) badge.textContent = `${mergeRequestsCache.length} 个`;
+      if (!currentRepo) {
+        container.innerHTML = '<div class="loading">未选择仓库</div>';
+        return;
+      }
+      if (mergeRequestsCache.length === 0) {
+        container.innerHTML = `<div class="loading">${mrStatusFilter === 'all' ? '当前仓库暂无 Merge Request' : '该筛选条件下暂无 Merge Request'}</div>`;
+        return;
+      }
+      container.innerHTML = mergeRequestsCache.map(mr => `
+        <div class="list-item" style="cursor: pointer;" onclick="openMrDetail('${escapeHtml(String(mr.id))}')">
+          <div class="item-main">
+            <div class="item-header-row">
+              <div class="item-name"><span>🔀</span><span>${escapeHtml(mr.title)}</span></div>
+              <div class="item-tags">${mrStatusBadgeHtml(mr)}${mrReviewBadgeHtml(mr)}</div>
+            </div>
+            <div class="item-desc">
+              <span class="mr-branch-flow"><span>🌿 ${escapeHtml(mr.sourceBranch)}</span><span>→</span><span>🌿 ${escapeHtml(mr.targetBranch)}</span></span>
+              · 创建于 ${escapeHtml(formatRelativeTimeCn(mr.createdAt))}
+            </div>
+          </div>
+          <div class="item-actions">
+            <button class="btn-outline" onclick="event.stopPropagation(); openMrDetail('${escapeHtml(String(mr.id))}')">查看详情</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    /* MR 弹层的分支选择器选项：仅本地分支 */
+    function branchPickerItems() {
+      return currentBranches.map(b => ({
+        kind: 'branch',
+        value: b.name,
+        identity: `branch:${b.name}`,
+        label: `🌿 ${b.name}`,
+        searchText: b.name,
+        disabled: false
+      }));
+    }
+
+    /* 用最新分支数据重建弹层内隐藏 select 的选项（触发器列表据此渲染） */
+    function populateMrBranchSelect(sel) {
+      sel.innerHTML = '';
+      branchPickerItems().forEach(o => {
+        const opt = document.createElement('option');
+        opt.value = o.identity;
+        opt.textContent = o.label;
+        sel.appendChild(opt);
+      });
+    }
+
+    /* 打开新建 MR 弹层；prefillSourceBranch 来自分支列表「发起 MR」入口 */
+    function openCreateMrModal(prefillSourceBranch = '') {
+      if (!currentRepo) {
+        alert('请先选择仓库');
+        return;
+      }
+      const sourceSel = document.getElementById('mrSourceSelect');
+      const targetSel = document.getElementById('mrTargetSelect');
+      populateMrBranchSelect(sourceSel);
+      populateMrBranchSelect(targetSel);
+
+      // source 预填优先级：入口传参 > 当前 Diff 对比对象（若为分支）> 主 worktree 分支
+      let source = prefillSourceBranch;
+      if (!source) {
+        const targetRef = splitRefIdentity(document.getElementById('diffTargetSelect')?.value || '');
+        if (targetRef.kind === 'branch') source = targetRef.value;
+      }
+      if (!source) {
+        const mainWt = currentWorktrees.find(w => w.isMain);
+        if (mainWt?.branch) source = mainWt.branch;
+      }
+
+      document.getElementById('mrCreateTitle').value = '';
+      document.getElementById('mrCreateDesc').value = '';
+      document.getElementById('mrCreateError').textContent = '';
+      createMrSourcePicker?.setSelected(source ? `branch:${source}` : '');
+      createMrTargetPicker?.setSelected(currentMainBranch ? `branch:${currentMainBranch}` : '');
+      document.getElementById('createMrModal').style.display = 'flex';
+      setTimeout(() => document.getElementById('mrCreateTitle').focus(), 0);
+    }
+
+    function closeCreateMrModal() {
+      document.getElementById('createMrModal').style.display = 'none';
+    }
+
+    /* 创建 MR：客户端先做基础校验，服务端错误（400/404/409）显示在弹层内且不关闭 */
+    async function submitCreateMr() {
+      const btn = document.getElementById('mrCreateSubmitBtn');
+      const errEl = document.getElementById('mrCreateError');
+      const title = document.getElementById('mrCreateTitle').value.trim();
+      const description = document.getElementById('mrCreateDesc').value.trim();
+      const source = splitRefIdentity(document.getElementById('mrSourceSelect').value).value;
+      const target = splitRefIdentity(document.getElementById('mrTargetSelect').value).value;
+
+      errEl.textContent = '';
+      if (!source) { errEl.textContent = '请选择源分支 (Source)'; return; }
+      if (!target) { errEl.textContent = '请选择目标分支 (Target)'; return; }
+      if (source === target) { errEl.textContent = '源分支与目标分支不能相同'; return; }
+      if (!title) { errEl.textContent = '请填写 MR 标题'; return; }
+
+      btn.disabled = true; // 提交期间禁用防重复
+      btn.textContent = '创建中...';
+      try {
+        const res = await fetch('/api/merge-requests', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            repoPath: currentRepo,
+            sourceBranch: source,
+            targetBranch: target,
+            title,
+            description
+          })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        closeCreateMrModal();
+        refreshMergeRequests(); // 刷新列表与计数徽章
+        if (data.mergeRequest?.id != null) {
+          openMrDetail(data.mergeRequest.id); // 直接打开新 MR 详情
+        }
+      } catch (err) {
+        errEl.textContent = err.message;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '创建 Merge Request';
+      }
+    }
+
+    /* 打开 MR 详情抽屉：先渲染加载态，再由 refreshMergeRequestDetail 拉取详情 */
+    async function openMrDetail(mrId, pushHistory = true) {
+      mrDrawerState = { isOpen: true, id: String(mrId) };
+      currentMrDetail = null;
+      const overlay = document.getElementById('mrDrawerOverlay');
+      const drawer = document.getElementById('mrDrawer');
+      setCommitsDrawerPageScrollLocked(true);
+      document.getElementById('mrDrawerBody').innerHTML = '<div class="loading">正在加载 Merge Request 详情...</div>';
+      overlay.style.display = 'block';
+      drawer.style.display = 'flex';
+      requestAnimationFrame(() => {
+        overlay.classList.add('open');
+        drawer.classList.add('open');
+      });
+      syncStateToUrl(pushHistory);
+      await refreshMergeRequestDetail();
+    }
+
+    function closeMrDrawer(pushHistory = true) {
+      if (!mrDrawerState.isOpen) return;
+      mrDrawerState = { isOpen: false, id: null };
+      mrDetailReqSeq++; // 使在途详情/提交请求失效
+      mrCommitsReqSeq++;
+      syncStateToUrl(pushHistory);
+      setCommitsDrawerPageScrollLocked(false);
+      const overlay = document.getElementById('mrDrawerOverlay');
+      const drawer = document.getElementById('mrDrawer');
+      overlay.classList.remove('open');
+      drawer.classList.remove('open');
+      setTimeout(() => {
+        if (!mrDrawerState.isOpen) {
+          drawer.style.display = 'none';
+          overlay.style.display = 'none';
+        }
+      }, 260);
+    }
+
+    /* 重拉当前 MR 详情并重渲染抽屉内容（保留抽屉打开状态与滚动位置） */
+    async function refreshMergeRequestDetail() {
+      if (!mrDrawerState.isOpen || mrDrawerState.id == null) return;
+      const seq = ++mrDetailReqSeq;
+      try {
+        const res = await fetch(`/api/merge-requests/${encodeURIComponent(mrDrawerState.id)}?repoPath=${encodeURIComponent(currentRepo)}`);
+        const data = await res.json();
+        if (seq !== mrDetailReqSeq) return;
+        if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        currentMrDetail = data.mergeRequest;
+        renderMrDetail(currentMrDetail, null, true);
+        loadMrAheadBehind();
+        loadMrCommits();
+      } catch (err) {
+        if (seq !== mrDetailReqSeq) return;
+        renderMrDetail(null, err.message, true);
+      }
+    }
+
+    /* 渲染 MR 详情抽屉内容；refreshMode 为真时保留滚动位置（操作后局部刷新） */
+    function renderMrDetail(mr, errorMessage, refreshMode = false) {
+      const body = document.getElementById('mrDrawerBody');
+      const prevScrollTop = refreshMode ? body.scrollTop : 0;
+
+      if (errorMessage || !mr) {
+        body.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state-icon">⚠️</div>
+            <div>加载 Merge Request 详情失败</div>
+            <div style="font-size:12px">${escapeHtml(errorMessage || '未知错误')}</div>
+            <button class="btn-outline" style="margin-top:8px" onclick="refreshMergeRequestDetail()">重试</button>
+          </div>`;
+        body.scrollTop = prevScrollTop;
+        return;
+      }
+
+      document.getElementById('mrDrawerTitle').textContent = `🔀 MR #${mr.id} · ${mr.title}`;
+      const updatedAtText = mr.updatedAt && mr.updatedAt !== mr.createdAt
+        ? ` · 更新于 ${escapeHtml(formatRelativeTimeCn(mr.updatedAt))}`
+        : '';
+
+      body.innerHTML = `
+        <div class="mr-detail-section">
+          <div class="item-tags">${mrStatusBadgeHtml(mr)}${mrReviewBadgeHtml(mr)}</div>
+          <div class="item-header-row" style="margin-top: 8px;">
+            <span class="mr-branch-flow">
+              <span>🌿 ${escapeHtml(mr.sourceBranch)}</span>
+              <span>→</span>
+              <span>🌿 ${escapeHtml(mr.targetBranch)}</span>
+            </span>
+            <span style="font-size: 12px; color: var(--text-muted);">
+              创建时 HEAD：<code>${escapeHtml(shortSha(mr.sourceHeadAtCreate))}</code> / <code>${escapeHtml(shortSha(mr.targetHeadAtCreate))}</code>
+            </span>
+          </div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">创建于 ${escapeHtml(formatRelativeTimeCn(mr.createdAt))}${updatedAtText}</div>
+        </div>
+
+        <div class="mr-detail-section">
+          <div class="mr-detail-section-title">描述</div>
+          ${mr.description
+            ? `<div style="font-size: 13px; color: var(--text); white-space: pre-wrap; word-break: break-word;">${escapeHtml(mr.description)}</div>`
+            : '<div style="font-size: 12px; color: var(--text-muted);">（无描述）</div>'}
+        </div>
+
+        <div class="mr-detail-section">${mrStatusExtraHtml(mr)}</div>
+
+        <div class="mr-detail-section" id="mrAheadBehindLine">
+          <span style="font-size: 12px; color: var(--text-muted);">正在统计提交差异...</span>
+        </div>
+
+        <div class="mr-detail-section">
+          <div class="mr-detail-actions" id="mrActionButtons">${buildMrActionButtonsHtml(mr)}</div>
+          <div id="mrDrawerActionError" class="mr-detail-error" role="alert"></div>
+          <div class="mr-detail-hint">📌 source Worktree 的未提交内容不参与合并；合并要求审阅通过，并会实际修改 target 分支绑定的 Worktree。</div>
+        </div>
+
+        <div class="mr-detail-section">
+          <button type="button" class="btn-outline" style="width: 100%;" onclick="openMrBranchDiff()">⚡ 在 Diff 中查看 Branch Diff</button>
+        </div>
+
+        <div class="mr-detail-section">
+          <div class="mr-detail-section-title">提交列表（source 相对 target）</div>
+          <div id="mrCommitsContainer"><div class="loading" style="padding: 12px;">正在加载提交列表...</div></div>
+        </div>
+      `;
+      body.scrollTop = prevScrollTop;
+    }
+
+    /* merged / rejected / canceled 状态的附加信息行 */
+    function mrStatusExtraHtml(mr) {
+      if (mr.status === 'merged') {
+        return `<span class="badge badge-success">已合并</span>
+          <span style="font-size: 12px; color: var(--text-muted);">合并于 ${escapeHtml(formatRelativeTimeCn(mr.mergedAt))} · 合并提交 <code>${escapeHtml(shortSha(mr.mergedCommit))}</code></span>`;
+      }
+      if (mr.status === 'rejected' || mr.status === 'canceled') {
+        const label = mr.status === 'rejected' ? '已拒绝' : '已取消';
+        return `<span class="badge badge-muted">${label}</span>
+          <span style="font-size: 12px; color: var(--text-muted);">原因：${escapeHtml(mr.decisionReason || '（未填写）')}</span>`;
+      }
+      return '';
+    }
+
+    /* 按 MR 状态与审阅状态渲染操作按钮区 */
+    function buildMrActionButtonsHtml(mr) {
+      if (mr.status !== 'open') {
+        return '<span style="font-size: 12px; color: var(--text-muted);">该 MR 已结束，无可用操作。</span>';
+      }
+      const parts = [];
+      if (mr.reviewStatus === 'approved') {
+        parts.push('<button type="button" class="btn-primary" onclick="mrAction(\'merge\', this, true)" title="将执行 --no-ff 合并到 target 分支的 Worktree">✅ 合并 (--no-ff)</button>');
+      } else if (mr.reviewStatus === 'changes_requested') {
+        parts.push('<button type="button" class="btn-outline" onclick="mrAction(\'approve\', this)">重新通过（审阅通过）</button>');
+        parts.push('<button type="button" class="btn-primary" disabled title="审阅通过后才能合并">✅ 合并</button>');
+      } else {
+        parts.push('<button type="button" class="btn-outline" onclick="mrAction(\'approve\', this)">审阅通过</button>');
+      }
+      parts.push('<button type="button" class="btn-outline" onclick="mrAction(\'changes_requested\', this)">要求修改</button>');
+      parts.push('<button type="button" class="btn-danger" onclick="mrAction(\'rejected\', this)">拒绝</button>');
+      parts.push('<button type="button" class="btn-outline" onclick="mrAction(\'canceled\', this)">取消</button>');
+      return parts.join('');
+    }
+
+    /* 操作期间禁用全部操作按钮；恢复时按当前 MR 状态重建（保持「合并」的条件禁用态） */
+    function setMrActionButtonsDisabled(disabled) {
+      const holder = document.getElementById('mrActionButtons');
+      if (!holder) return;
+      if (disabled) {
+        holder.querySelectorAll('button').forEach(b => { b.disabled = true; });
+      } else if (currentMrDetail) {
+        holder.innerHTML = buildMrActionButtonsHtml(currentMrDetail);
+      }
+    }
+
+    /* MR 操作统一入口：中文确认/prompt 收集原因，成功后局部刷新详情与列表；
+       失败（含 Git 冲突 409）在抽屉内展示中文错误，MR 保持原状态，按钮恢复可用 */
+    async function mrAction(action, btn, needConfirm = false) {
+      const mr = currentMrDetail;
+      if (!mr || !MR_ACTION_LABELS[action]) return;
+
+      let reason;
+      if (action === 'changes_requested' || action === 'rejected' || action === 'canceled') {
+        const input = prompt(`请输入${MR_ACTION_LABELS[action]}原因（可留空）：`);
+        if (input === null) return; // 用户取消
+        reason = input.trim();
+      }
+      if (action === 'merge' && needConfirm) {
+        const targetWt = currentWorktrees.find(w => w.branch === mr.targetBranch);
+        const targetHint = targetWt
+          ? `\n目标 Worktree：${targetWt.path}`
+          : '\n（未找到目标分支绑定的 Worktree，合并可能失败）';
+        if (!confirm(`确认合并 MR「${mr.title}」吗？\n将执行 --no-ff 合并到 ${mr.targetBranch} 分支的 Worktree。${targetHint}`)) return;
+      }
+
+      setMrActionButtonsDisabled(true);
+      try {
+        const res = await fetch('/api/merge-requests/action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoPath: currentRepo, id: mr.id, action, reason: reason || undefined })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+        // 成功：重拉详情（保留滚动位置）并刷新列表/计数
+        await refreshMergeRequestDetail();
+        refreshMergeRequests();
+        if (action === 'merge') {
+          // 合并会实际修改 target 分支：联动刷新仓库分析数据与相关视图（均为局部刷新，不做全量 reload）
+          await refreshRepoInspectData();
+          refreshCommitsDrawerIfRelatedToBranches([mr.sourceBranch, mr.targetBranch]);
+          refreshDiffViewIfRelatedToBranches([mr.sourceBranch, mr.targetBranch]);
+        }
+      } catch (err) {
+        const errEl = document.getElementById('mrDrawerActionError');
+        if (errEl) errEl.textContent = `操作失败：${err.message}`;
+        setMrActionButtonsDisabled(false);
+        loadMrAheadBehind(); // 静默刷新一次 ahead/behind，冲突破坏提交关系时能及时反映
+      }
+    }
+
+    /* MR 详情的 ahead/behind 统计：以 target 为基准、source 为 ref；失败时降级为提示文案 */
+    async function loadMrAheadBehind() {
+      const mr = currentMrDetail;
+      const lineEl = document.getElementById('mrAheadBehindLine');
+      if (!mr || !lineEl) return;
+      try {
+        const params = new URLSearchParams({ worktree: currentRepo, base: mr.targetBranch, ref: mr.sourceBranch });
+        const res = await fetch(`/api/worktree-ahead-behind?${params}`);
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        if (!mrDrawerState.isOpen || mrDrawerState.id !== String(mr.id)) return;
+        if (data.baseAvailable === false) throw new Error(`无法解析基准分支 ${mr.targetBranch}`);
+        lineEl.innerHTML = `<span class="badge ${data.behind > 0 ? 'badge-warning' : 'badge-success'}" title="相对目标分支 ${escapeHtml(mr.targetBranch)} 的提交领先/落后统计">⇅ 领先 ${escapeHtml(String(data.ahead))} / 落后 ${escapeHtml(String(data.behind))}</span>`;
+      } catch (err) {
+        if (!mrDrawerState.isOpen || mrDrawerState.id !== String(mr.id)) return;
+        lineEl.innerHTML = `<span style="font-size: 12px; color: var(--text-muted);">提交差异统计不可用：${escapeHtml(err.message)}</span>`;
+      }
+    }
+
+    /* MR 详情的提交列表：以 target 为基准、source 为顶点的 fullHistory 简版渲染 */
+    async function loadMrCommits() {
+      const mr = currentMrDetail;
+      const container = document.getElementById('mrCommitsContainer');
+      if (!mr || !container) return;
+      const seq = ++mrCommitsReqSeq;
+      try {
+        const params = new URLSearchParams({
+          worktree: currentRepo,
+          base: mr.targetBranch,
+          ref: mr.sourceBranch,
+          fullHistory: '1',
+          limit: '50'
+        });
+        const res = await fetch(`/api/worktree-commits?${params}`);
+        const data = await res.json();
+        if (seq !== mrCommitsReqSeq) return;
+        if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        const commits = data.commits || [];
+        if (commits.length === 0) {
+          container.innerHTML = '<div class="commit-diff-empty">source 相对 target 没有可展示的提交。</div>';
+          return;
+        }
+        container.innerHTML = commits.map(c => `
+          <div class="commit-item">
+            <div class="commit-item-header">
+              <span class="commit-hash" title="点击复制完整 SHA" onclick="copyText('${escapeHtml(c.hash)}', this)">${escapeHtml(c.shortHash)}</span>
+              <span class="commit-time">${escapeHtml(c.relativeTime)}</span>
+            </div>
+            <div class="commit-subject" title="${escapeHtml(c.subject)}">${escapeHtml(c.subject)}</div>
+            <div class="commit-author">${escapeHtml(c.author)}</div>
+          </div>
+        `).join('');
+      } catch (err) {
+        if (seq !== mrCommitsReqSeq) return;
+        container.innerHTML = `<div class="commit-detail-error">提交列表加载失败：${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    /* 合并落库后联动刷新：提交抽屉若正查看相关分支的提交，按首屏语义重载。
+       刷新做法与 commitAction 成功后一致：loadedCount 归零重拉首屏，并作废 ahead/behind 缓存 */
+    function refreshCommitsDrawerIfRelatedToBranches(branchNames) {
+      if (!commitsDrawerState.isOpen) return;
+      const related = branchNames.some(name => commitsDrawerState.branch === name
+        || (commitsDrawerState.ref || '') === name
+        || currentWorktrees.some(w => w.branch === name && w.path === commitsDrawerState.worktreePath));
+      if (!related) return;
+      commitsDrawerState.loadedCount = 0;
+      commitsDrawerAheadBehind = null;
+      fetchAndRenderCommits();
+    }
+
+    /* 合并落库后联动刷新：Diff 结果区若正展示相关分支的 branch↔branch 对比，重拉当前 Diff */
+    function refreshDiffViewIfRelatedToBranches(branchNames) {
+      if (currentDiffType !== 'ref') return;
+      const refs = [splitRefIdentity(currentDiffBase), splitRefIdentity(currentDiffTarget)];
+      const related = refs.some(r => r.kind === 'branch' && branchNames.includes(r.value));
+      if (related) refreshCurrentDiff();
+    }
+
+    /* 从 MR 详情跳转 Diff Tab：branch↔branch、仅已提交模式（Base=target，Target=source） */
+    function openMrBranchDiff() {
+      const mr = currentMrDetail;
+      if (!mr) return;
+      closeMrDrawer(false); // 关闭抽屉让出可视区域查看 Diff
+      switchTab('diff', false);
+      const baseIdentity = `branch:${mr.targetBranch}`;
+      const targetIdentity = `branch:${mr.sourceBranch}`;
+      if (!applyDiffIdentitiesOrReport(baseIdentity, targetIdentity)) {
+        document.getElementById('diffResultsContainer').innerHTML =
+          '<div class="empty-diff-box" style="color: var(--warning);">该 MR 的分支已不存在，无法展示 Branch Diff。</div>';
+        return;
+      }
+      refreshDiffPickerTriggers();
+      fetchAndRenderRefDiff('committed', true);
+    }
+
     async function restoreCurrentRepoHistoryState(state) {
       isRestoringHistory = true;
       try {
@@ -4089,16 +5261,30 @@
         renderFilteredLists();
 
         switchTab(state.tab === 'diff' ? 'diff' : 'overview', false);
-        if (state.tab === 'diff' && state.diffType === 'worktree' && state.base && state.target) {
-          document.getElementById('diffBaseSelect').value = state.base;
-          document.getElementById('diffTargetSelect').value = state.target;
+        if (state.tab === 'diff' && (state.diffType === 'ref' || state.diffType === 'worktree') && state.base && state.target) {
+          // diffType=ref 为新格式；旧链接 diffType=worktree 无类型前缀，base/target 按 worktree 兼容解析
+          const baseIdentity = `${state.baseType || 'worktree'}:${state.base}`;
+          const targetIdentity = `${state.targetType || 'worktree'}:${state.target}`;
           currentDiffMode = state.mode || null;
-          await fetchAndRenderDiff(currentDiffMode, false);
+          if (applyDiffIdentitiesOrReport(baseIdentity, targetIdentity)) {
+            refreshDiffPickerTriggers();
+            await fetchAndRenderRefDiff(currentDiffMode, false);
+          } else {
+            currentDiffType = 'ref';
+            currentDiffBase = baseIdentity;
+            currentDiffTarget = targetIdentity;
+            document.getElementById('diffResultsContainer').innerHTML = `
+              <div class="empty-diff-box" style="color: var(--warning);">
+                <div style="font-size: 15px; margin-bottom: 8px;">链接中的 Worktree 或分支已不存在，无法恢复原比对</div>
+                <div style="font-size: 13px;">请重新在上方选择基准与对比对象</div>
+              </div>`;
+          }
         } else if (state.tab === 'diff' && state.diffType === 'uncommitted' && state.uncommitted) {
           currentUncommittedPath = state.uncommitted;
           currentDiffMode = 'uncommitted';
-          document.getElementById('diffTargetSelect').value = state.uncommitted;
-          await fetchAndRenderDiff('uncommitted', false);
+          applyDiffIdentitiesOrReport('', `worktree:${state.uncommitted}`);
+          refreshDiffPickerTriggers();
+          await fetchAndRenderRefDiff('uncommitted', false);
         } else if (state.tab === 'diff') {
           currentDiffType = null;
           currentDiffMode = null;
@@ -4114,6 +5300,15 @@
           }
         } else if (commitsDrawerState.isOpen) {
           closeCommitsDrawer(false);
+        }
+
+        // 恢复/关闭 MR 详情抽屉，保证与浏览器当前 URL 一致
+        if (state.mr) {
+          if (!mrDrawerState.isOpen || mrDrawerState.id !== String(state.mr)) {
+            await openMrDetail(state.mr, false);
+          }
+        } else if (mrDrawerState.isOpen) {
+          closeMrDrawer(false);
         }
       } finally {
         isRestoringHistory = false;
@@ -4201,6 +5396,10 @@
     document.getElementById('worktreeRemoveModal').addEventListener('click', (e) => {
       if (e.target.id === 'worktreeRemoveModal') closeWorktreeRemoveModal(false);
     });
+    // 点击新建 MR 弹层遮罩区域关闭弹层（与扫描目录弹窗一致）
+    document.getElementById('createMrModal').addEventListener('click', (e) => {
+      if (e.target.id === 'createMrModal') closeCreateMrModal();
+    });
     document.addEventListener('DOMContentLoaded', setupCommitsDrawerScrollGuard);
     document.getElementById('refreshBtn').addEventListener('click', () => {
       loadProjects();
@@ -4225,8 +5424,67 @@
       }
     });
 
+    /* 初始化新建 MR 弹层内的两个分支搜索选择器（仅分支模式） */
+    createMrSourcePicker = createSearchablePicker({
+      wrapperId: 'mrSourcePickerWrapper',
+      triggerId: 'mrSourcePickerTrigger',
+      triggerTextId: 'mrSourcePickerText',
+      dropdownId: 'mrSourcePickerDropdown',
+      searchInputId: 'mrSourcePickerSearch',
+      listId: 'mrSourcePickerList',
+      selectId: 'mrSourceSelect',
+      getItems: branchPickerItems,
+      groupTitles: { branch: '🌿 本地分支' },
+      emptyText: '没有匹配的分支',
+      placeholder: '选择源分支'
+    });
+    createMrTargetPicker = createSearchablePicker({
+      wrapperId: 'mrTargetPickerWrapper',
+      triggerId: 'mrTargetPickerTrigger',
+      triggerTextId: 'mrTargetPickerText',
+      dropdownId: 'mrTargetPickerDropdown',
+      searchInputId: 'mrTargetPickerSearch',
+      listId: 'mrTargetPickerList',
+      selectId: 'mrTargetSelect',
+      getItems: branchPickerItems,
+      groupTitles: { branch: '🌿 本地分支' },
+      emptyText: '没有匹配的分支',
+      placeholder: '选择目标分支'
+    });
+
+    /* 初始化 Diff Tab 的两个可搜索选择器：选项来自 Worktree 与本地分支，
+       选中变化后自动触发比对（同时保留「比对 Diff」按钮可手动重拉） */
+    diffBasePicker = createSearchablePicker({
+      wrapperId: 'diffBasePickerWrapper',
+      triggerId: 'diffBasePickerTrigger',
+      triggerTextId: 'diffBasePickerText',
+      dropdownId: 'diffBasePickerDropdown',
+      searchInputId: 'diffBasePickerSearch',
+      listId: 'diffBasePickerList',
+      selectId: 'diffBaseSelect',
+      getItems: buildDiffRefOptions,
+      groupTitles: { worktree: '🌳 Worktree', branch: '🌿 本地分支' },
+      emptyText: '没有匹配的 Worktree 或分支',
+      placeholder: '请选择基准',
+      onSelect: () => fetchAndRenderRefDiff(null, true)
+    });
+    diffTargetPicker = createSearchablePicker({
+      wrapperId: 'diffTargetPickerWrapper',
+      triggerId: 'diffTargetPickerTrigger',
+      triggerTextId: 'diffTargetPickerText',
+      dropdownId: 'diffTargetPickerDropdown',
+      searchInputId: 'diffTargetPickerSearch',
+      listId: 'diffTargetPickerList',
+      selectId: 'diffTargetSelect',
+      getItems: buildDiffRefOptions,
+      groupTitles: { worktree: '🌳 Worktree', branch: '🌿 本地分支' },
+      emptyText: '没有匹配的 Worktree 或分支',
+      placeholder: '请选择对比对象',
+      onSelect: () => fetchAndRenderRefDiff(null, true)
+    });
+
     loadProjects();
-  
+
     // 回到顶部逻辑
     function scrollToTop() {
       window.scrollTo({
@@ -4246,8 +5504,18 @@
     }, { passive: true });
 
     document.addEventListener('keydown', (e) => {
+      // Escape 优先关闭可搜索选择器的下拉面板
+      if (e.key === 'Escape') {
+        searchablePickers.forEach(p => p.closeDropdown());
+      }
       if (e.key === 'Escape' && commitsDrawerState.isOpen) {
         closeCommitsDrawer();
+      }
+      if (e.key === 'Escape' && mrDrawerState.isOpen) {
+        closeMrDrawer();
+      }
+      if (e.key === 'Escape' && document.getElementById('createMrModal').style.display !== 'none') {
+        closeCreateMrModal();
       }
       if (e.key === 'Escape' && document.getElementById('scanDirectoryModal').style.display !== 'none') {
         closeScanDirectoryModal();
