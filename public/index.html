@@ -1485,6 +1485,26 @@
       align-items: center;
       gap: 6px;
     }
+    /* 行内原因输入行：替代 window.prompt（内嵌/受限环境不支持 prompt） */
+    .mr-reason-row {
+      display: flex;
+      gap: 6px;
+      width: 100%;
+    }
+    .mr-reason-input {
+      flex: 1;
+      min-width: 0;
+      padding: 6px 10px;
+      font-size: 13px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .mr-reason-input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
     .mr-detail-error {
       min-height: 18px;
       margin: 8px 0 0;
@@ -4738,11 +4758,14 @@
       rejected: { label: '已拒绝', cls: 'badge-muted' },
       canceled: { label: '已取消', cls: 'badge-muted' }
     };
+    // 键必须与后端 action 白名单一致（approve/request_changes/reject/cancel/merge）。
+    // 此前误把 reviewStatus/status 的取值（changes_requested/rejected/canceled）当作 action
+    // 发给服务端，导致「要求修改/拒绝/取消」按钮一律 400 失效（2026-09-25 用户回归反馈）
     const MR_ACTION_LABELS = {
       approve: '审阅通过',
-      changes_requested: '要求修改',
-      rejected: '拒绝',
-      canceled: '取消',
+      request_changes: '要求修改',
+      reject: '拒绝',
+      cancel: '取消',
       merge: '合并'
     };
 
@@ -5104,9 +5127,9 @@
       } else {
         parts.push('<button type="button" class="btn-outline" onclick="mrAction(\'approve\', this)">审阅通过</button>');
       }
-      parts.push('<button type="button" class="btn-outline" onclick="mrAction(\'changes_requested\', this)">要求修改</button>');
-      parts.push('<button type="button" class="btn-danger" onclick="mrAction(\'rejected\', this)">拒绝</button>');
-      parts.push('<button type="button" class="btn-outline" onclick="mrAction(\'canceled\', this)">取消</button>');
+      parts.push('<button type="button" class="btn-outline" onclick="mrAction(\'request_changes\', this)">要求修改</button>');
+      parts.push('<button type="button" class="btn-danger" onclick="mrAction(\'reject\', this)">拒绝</button>');
+      parts.push('<button type="button" class="btn-outline" onclick="mrAction(\'cancel\', this)">取消</button>');
       return parts.join('');
     }
 
@@ -5121,17 +5144,17 @@
       }
     }
 
-    /* MR 操作统一入口：中文确认/prompt 收集原因，成功后局部刷新详情与列表；
+    /* MR 操作统一入口：需要原因的操作改为抽屉内行内输入（不依赖 window.prompt，
+       内嵌/受限环境不支持 prompt 时依然可用）；合并保留 confirm 二次确认。
+       实际请求统一在 doMrAction 完成，成功后局部刷新详情与列表；
        失败（含 Git 冲突 409）在抽屉内展示中文错误，MR 保持原状态，按钮恢复可用 */
     async function mrAction(action, btn, needConfirm = false) {
       const mr = currentMrDetail;
       if (!mr || !MR_ACTION_LABELS[action]) return;
 
-      let reason;
-      if (action === 'changes_requested' || action === 'rejected' || action === 'canceled') {
-        const input = prompt(`请输入${MR_ACTION_LABELS[action]}原因（可留空）：`);
-        if (input === null) return; // 用户取消
-        reason = input.trim();
+      if (action === 'request_changes' || action === 'reject' || action === 'cancel') {
+        showMrReasonInput(action);
+        return;
       }
       if (action === 'merge' && needConfirm) {
         const targetWt = currentWorktrees.find(w => w.branch === mr.targetBranch);
@@ -5140,7 +5163,33 @@
           : '\n（未找到目标分支绑定的 Worktree，合并可能失败）';
         if (!confirm(`确认合并 MR「${mr.title}」吗？\n将执行 --no-ff 合并到 ${mr.targetBranch} 分支的 Worktree。${targetHint}`)) return;
       }
+      await doMrAction(action, '');
+    }
 
+    /* 在操作按钮区展开行内原因输入行；「返回」按当前 MR 状态重建按钮区 */
+    function showMrReasonInput(action) {
+      const holder = document.getElementById('mrActionButtons');
+      if (!holder) return;
+      const label = MR_ACTION_LABELS[action] || '操作';
+      holder.innerHTML = `
+        <div class="mr-reason-row">
+          <input type="text" id="mrReasonInput" class="mr-reason-input" placeholder="${label}原因（可留空）" onkeydown="if(event.key==='Enter'){event.preventDefault();submitMrReason('${action}');}">
+          <button type="button" class="btn-primary" onclick="submitMrReason('${action}')">确认${label}</button>
+          <button type="button" class="btn-outline" onclick="renderMrDetail(currentMrDetail, null, true)">返回</button>
+        </div>`;
+      const input = document.getElementById('mrReasonInput');
+      if (input) input.focus();
+    }
+
+    /* 读取行内原因输入并提交动作 */
+    async function submitMrReason(action) {
+      const input = document.getElementById('mrReasonInput');
+      await doMrAction(action, input ? input.value.trim() : '');
+    }
+
+    async function doMrAction(action, reason) {
+      const mr = currentMrDetail;
+      if (!mr || !MR_ACTION_LABELS[action]) return;
       setMrActionButtonsDisabled(true);
       try {
         const res = await fetch('/api/merge-requests/action', {
