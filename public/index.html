@@ -2692,17 +2692,16 @@
 
     /* 查看指定 Worktree 未提交修改 (Dirty Diff) */
     async function viewUncommittedDiff(worktreePath) {
-      // 将 target 切换为该 worktree，并将 base 设置为 main/主分支或另一个 worktree
+      // 未提交代码只属于当前工作区；Base 与 Target 必须指向同一个 Worktree，才能进入自审模式。
+      if (!worktreePath || !currentWorktrees.some(w => w.path === worktreePath)) return;
+
+      // 先进入 Diff 标签页，让选择器完成初始化，再写入同一工作区值。
+      switchTab('diff');
       const baseSel = document.getElementById('diffBaseSelect');
       const targetSel = document.getElementById('diffTargetSelect');
 
-      if (targetSel) {
-        targetSel.value = worktreePath;
-      }
-      if (baseSel && (!baseSel.value || baseSel.value === worktreePath)) {
-        const other = currentWorktrees.find(w => w.path !== worktreePath);
-        if (other) baseSel.value = other.path;
-      }
+      if (baseSel) baseSel.value = worktreePath;
+      if (targetSel) targetSel.value = worktreePath;
 
       currentDiffType = 'worktree';
       currentDiffTarget = worktreePath;
