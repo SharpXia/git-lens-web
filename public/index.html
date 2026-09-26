@@ -4396,11 +4396,20 @@
      * @param {HTMLElement} card - 被点击的提交卡片元素
      * @param {string} sha - 提交完整 SHA
      */
+    /* 提交详情/Diff/写操作的上下文 worktree 解析：
+       提交抽屉打开时用其正在查看的 worktree；否则若 MR 详情抽屉打开，退回当前仓库主路径，
+       让 MR 领先提交也能就地展开详情、查看 Diff 与执行 Cherry-pick/Revert */
+    function getCommitDetailContextPath() {
+      if (commitsDrawerState.isOpen && commitsDrawerState.worktreePath) return commitsDrawerState.worktreePath;
+      if (mrDrawerState.isOpen && currentRepo) return currentRepo;
+      return commitsDrawerState.worktreePath || currentRepo || '';
+    }
+
     async function toggleCommitDetail(card, sha) {
       // 内联 onclick 参数只放行十六进制 SHA，杜绝任意字符串进入事件处理
       if (!/^[0-9a-fA-F]{7,40}$/.test(sha || '')) return;
-      // worktreePath 一律从抽屉状态读取，不通过内联字符串传递
-      const worktreePath = commitsDrawerState.worktreePath;
+      // 上下文 worktree 由抽屉状态统一解析，不通过内联字符串传递
+      const worktreePath = getCommitDetailContextPath();
       if (!worktreePath) return;
 
       const existingPanel = card.querySelector('.commit-detail');
@@ -4477,7 +4486,7 @@
       // 见 commitActionWithConfirm）。默认选中主工作区（Cherry-pick 的语义默认目标就是它），
       // 与入口无关——branch 入口与 worktree 入口保持一致；
       // 无主工作区时回退到当前查看的 worktree，再退到列表首项
-      const contextPath = commitsDrawerState.worktreePath || '';
+      const contextPath = getCommitDetailContextPath();
       const targetWts = (currentWorktrees || [])
         .filter(w => w && w.path && w.existsOnDisk !== false)
         .slice()
@@ -4538,9 +4547,9 @@
           const mainWt = (currentWorktrees || []).find(w => w.isMain && w.path && w.existsOnDisk !== false);
           if (mainWt) targetSel.value = mainWt.path;
         }
-        worktreePath = (targetSel && targetSel.value) || commitsDrawerState.worktreePath;
+        worktreePath = (targetSel && targetSel.value) || getCommitDetailContextPath();
       } else {
-        worktreePath = commitsDrawerState.worktreePath;
+        worktreePath = getCommitDetailContextPath();
         // 选择器可能已被用户改动过，回显为实际作用目标，避免界面与行为不一致造成误解
         if (targetSel && [...targetSel.options].some(o => o.value === worktreePath)) {
           targetSel.value = worktreePath;
@@ -4610,8 +4619,8 @@
       if (!panel) return;
       // 内联 onclick 参数只放行十六进制 SHA，杜绝任意字符串进入事件处理
       if (!/^[0-9a-fA-F]{7,40}$/.test(sha || '')) return;
-      // worktreePath 一律从抽屉状态读取，不通过内联字符串传递
-      const worktreePath = commitsDrawerState.worktreePath;
+      // 上下文 worktree 由抽屉状态统一解析，不通过内联字符串传递
+      const worktreePath = getCommitDetailContextPath();
       if (!worktreePath) return;
 
       const toggleBtn = panel.querySelector('.commit-diff-toggle-btn');
@@ -5092,7 +5101,7 @@
         </div>
 
         <div class="mr-detail-section">
-          <div class="mr-detail-section-title">提交列表（source 相对 target）</div>
+          <div class="mr-detail-section-title">领先提交（source 相对 target，点击展开改动）</div>
           <div id="mrCommitsContainer"><div class="loading" style="padding: 12px;">正在加载提交列表...</div></div>
         </div>
       `;
@@ -5236,7 +5245,8 @@
       }
     }
 
-    /* MR 详情的提交列表：以 target 为基准、source 为顶点的 fullHistory 简版渲染 */
+    /* MR 详情的提交列表：仅展示 source 相对 target 的领先提交（base..ref 范围，
+       不传 fullHistory），卡片可点击展开单提交详情与逐文件 Diff，无需跳转 Diff 页 */
     async function loadMrCommits() {
       const mr = currentMrDetail;
       const container = document.getElementById('mrCommitsContainer');
@@ -5247,7 +5257,6 @@
           worktree: currentRepo,
           base: mr.targetBranch,
           ref: mr.sourceBranch,
-          fullHistory: '1',
           limit: '50'
         });
         const res = await fetch(`/api/worktree-commits?${params}`);
@@ -5256,13 +5265,14 @@
         if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
         const commits = data.commits || [];
         if (commits.length === 0) {
-          container.innerHTML = '<div class="commit-diff-empty">source 相对 target 没有可展示的提交。</div>';
+          container.innerHTML = '<div class="commit-diff-empty">source 相对 target 没有领先的提交。</div>';
           return;
         }
+        // 卡片结构与提交抽屉一致：点击展开详情，点击 SHA 复制完整哈希（阻止冒泡）
         container.innerHTML = commits.map(c => `
-          <div class="commit-item">
+          <div class="commit-item clickable" onclick="toggleCommitDetail(this, '${escapeHtml(c.hash)}')">
             <div class="commit-item-header">
-              <span class="commit-hash" title="点击复制完整 SHA" onclick="copyText('${escapeHtml(c.hash)}', this)">${escapeHtml(c.shortHash)}</span>
+              <span class="commit-hash" onclick="event.stopPropagation(); copyText('${escapeHtml(c.hash)}', this)" title="点击复制完整 SHA">${escapeHtml(c.shortHash)}</span>
               <span class="commit-time">${escapeHtml(c.relativeTime)}</span>
             </div>
             <div class="commit-subject" title="${escapeHtml(c.subject)}">${escapeHtml(c.subject)}</div>
