@@ -630,50 +630,162 @@ function splitDiffByFiles(rawDiff) {
 }
 
 /**
- * 获取两个 Worktree 之间或目标工作区的 Diff，支持三种模式：
- * 1. 'uncommitted': 仅未提交以及 untracked
- * 2. 'all': 提交和未提交以及 untracked (全量)
+ * 将路径归一化为真实路径（跟随符号链接）。
+ * macOS 下 /tmp 实际是 /private/tmp 的符号链接，用户传入路径与 git 登记路径可能
+ * 一边是链接形式一边是真实形式，直接 path.resolve 比较会失配；realpath 失败
+ * （目录已被删除）时退回 path.resolve，保证失联 worktree 仍可参与比较。
+ */
+async function toRealPathSafe(targetPath) {
+  try {
+    return await fs.realpath(targetPath);
+  } catch {
+    // 目标自身不存在（如已失联 worktree 的目录被删）：改用真实存在的父目录
+    // realpath 拼出规范形式，保证与 git 登记的真实路径仍在同一命名空间下比较
+    try {
+      return path.join(await fs.realpath(path.dirname(targetPath)), path.basename(targetPath));
+    } catch {
+      return path.resolve(targetPath);
+    }
+  }
+}
+
+/**
+ * 校验通用 ref 选择器参数：kind 必须为 worktree|branch，value 必须为非空字符串。
+ * @param {{kind: string, value: string}} selector - source/target 选择器
+ * @param {'source'|'target'} role - 出错时用于定位是哪一侧参数不合法
+ */
+function validateRefSelector(selector, role) {
+  if (!selector || typeof selector !== 'object' || Array.isArray(selector)) {
+    throw Object.assign(new Error(`${role} 参数不合法：必须为 { kind, value } 对象`), { statusCode: 400 });
+  }
+  if (selector.kind !== 'worktree' && selector.kind !== 'branch') {
+    throw Object.assign(new Error(`${role} 参数不合法：kind 必须为 'worktree' 或 'branch'`), { statusCode: 400 });
+  }
+  if (typeof selector.value !== 'string' || selector.value.trim() === '') {
+    throw Object.assign(new Error(`${role} 参数不合法：value 必须为非空字符串`), { statusCode: 400 });
+  }
+}
+
+/**
+ * 构造返回结构里的 worktree 元数据：保留原有全部字段，仅新增 kind
+ */
+function buildWorktreeMeta(wt) {
+  return {
+    kind: 'worktree',
+    path: wt.path,
+    branch: wt.branch || 'HEAD',
+    head: wt.head,
+    isMain: wt.isMain,
+    isDirty: wt.isDirty,
+    lastCommit: wt.lastCommit
+  };
+}
+
+/**
+ * 构造返回结构里的 branch 元数据：分支没有工作区，isDirty 恒为 false，不返回 path
+ */
+function buildBranchMeta(info) {
+  return {
+    kind: 'branch',
+    branch: info.value,
+    head: info.head,
+    isMain: false,
+    isDirty: false
+  };
+}
+
+/**
+ * 把 ref 选择器解析为统一的描述对象。
+ * - worktree：按 realpath 在 getWorktrees 列表中匹配，并校验磁盘存在性；
+ *   未登记返回 404，已失联（目录被删或 porcelain 标记 prunable）返回 409
+ * - branch：用 rev-parse --verify 校验本地分支存在并取分支头 SHA，不存在返回 404
+ * @returns {Promise<{kind: string, value: string, refName: string,
+ *   realPath?: string, worktree?: object, head?: string}>}
+ */
+async function resolveRefSelector(repoPath, selector, worktrees, worktreeRealPaths) {
+  if (selector.kind === 'worktree') {
+    const requestedRealPath = await toRealPathSafe(selector.value);
+    const index = worktreeRealPaths.indexOf(requestedRealPath);
+    if (index === -1) {
+      throw Object.assign(new Error('指定的 Worktree 路径不存在或未被 Git 登记'), { statusCode: 404 });
+    }
+    const wt = worktrees[index];
+    // 目录被删或 porcelain 标记 prunable 时，工作区状态与未提交内容都不可信，
+    // 直接拒绝而不是带着失联数据继续计算
+    if (!wt.existsOnDisk || wt.isPrunable) {
+      throw Object.assign(
+        new Error(`Worktree 已失联：${wt.path} 不在磁盘上或已被 Git 标记为 prunable，请先清理失效 Worktree 再比较`),
+        { statusCode: 409 }
+      );
+    }
+    return {
+      kind: 'worktree',
+      value: selector.value,
+      refName: wt.branch || wt.head || 'HEAD',
+      realPath: requestedRealPath,
+      worktree: wt
+    };
+  }
+  // branch：--quiet 校验 refs/heads/<name>，避免把 git 的英文报错透传给前端；
+  // 统一加 refs/heads/ 前缀也保证 value 不会被 git 当作选项或其他引用解析
+  try {
+    const head = await runGit(repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${selector.value}`]);
+    return { kind: 'branch', value: selector.value, refName: selector.value, head };
+  } catch {
+    throw Object.assign(new Error(`分支 ${selector.value} 不存在`), { statusCode: 404 });
+  }
+}
+
+/**
+ * 通用 Diff：source/target 均为 { kind: 'worktree'|'branch', value: string }，
+ * 支持（若可用）三种模式：
+ * 1. 'uncommitted': 仅未提交以及 untracked（仅 target 为 worktree 时可用）
+ * 2. 'all': 提交和未提交以及 untracked (全量；target 为 branch 时与 committed 等价)
  * 3. 'committed': 仅已提交 (忽略未提交及 untracked)
  *
- * 智能回退优先级：
- * 默认优先 'uncommitted'（如果有脏代码或新增未跟踪）；
- * 若无，fallback 到 'all'（如果有实际文件差异）；
- * 最低优先级为 'committed'。
+ * 语义矩阵：
+ * - worktree ↔ worktree：完全保持原 getWorktreeDiff 行为（含同 Worktree 自审锁定 uncommitted）
+ * - 同一 Worktree（同路径）：进入本地自审模式
+ * - branch ↔ branch：只比较已提交内容；uncommitted 恒不可用；all 与 committed 等价；
+ *   同名分支返回全零空结果，且绝不读取任何 Worktree 的脏内容
+ * - branch ↔ worktree / worktree ↔ branch：committed 按 target 相对 source 的领先提交计算；
+ *   uncommitted/all 仅当 target 为 worktree 时保留；方向性保持「ahead 指 target 相对
+ *   source 领先的提交数，文件 Diff 只展示 Target 一侧的改动」
+ *
+ * 自动模式（未指定或指定无效时）的回退优先级：
+ * target 为 worktree 时优先 'uncommitted'（如有脏代码或新增未跟踪），
+ * 若无 fallback 到 'all'（如有实际文件差异），最低优先级为 'committed'；
+ * target 为 branch 时只可能有已提交差异，默认即为 'committed'。
+ *
+ * @param {string} repoPath 仓库路径
+ * @param {{kind: 'worktree'|'branch', value: string}} source - 来源 ref 选择器
+ * @param {{kind: 'worktree'|'branch', value: string}} target - 目标 ref 选择器
+ * @param {string|null} [requestedMode] - 请求模式 'uncommitted'|'all'|'committed'
+ * @returns {Promise<object>} 与 getWorktreeDiff 同构的 Diff 结果（source/target 新增 kind 字段）
  */
-export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requestedMode = null) {
-  const worktrees = await getWorktrees(repoPath);
-  const sourceWt = worktrees.find(w => path.resolve(w.path) === path.resolve(sourcePath));
-  const targetWt = worktrees.find(w => path.resolve(w.path) === path.resolve(targetPath));
+export async function getRefDiff(repoPath, source, target, requestedMode = null) {
+  validateRefSelector(source, 'source');
+  validateRefSelector(target, 'target');
 
-  if (!sourceWt || !targetWt) {
-    throw new Error('指定的 Worktree 路径不存在或未被 Git 登记');
+  // 仅任一侧为 worktree 时才拉取 worktree 列表；纯 branch↔branch 不读任何工作区状态
+  let worktrees = null;
+  let worktreeRealPaths = null;
+  if (source.kind === 'worktree' || target.kind === 'worktree') {
+    worktrees = await getWorktrees(repoPath);
+    worktreeRealPaths = await Promise.all(worktrees.map(wt => toRealPathSafe(wt.path)));
   }
+  const sourceInfo = await resolveRefSelector(repoPath, source, worktrees, worktreeRealPaths);
+  const targetInfo = await resolveRefSelector(repoPath, target, worktrees, worktreeRealPaths);
 
-  const isSameWorktree = path.resolve(sourceWt.path) === path.resolve(targetWt.path);
-
-  // 特殊场景：分支自己和自己 diff（工作区自审查模式）
+  // 特殊场景 1：同一 Worktree 自己和自己 diff（工作区自审查模式）。
   // 此时仅允许且锁定【仅未提交以及未跟踪】模式，其它模式不可用
-  if (isSameWorktree) {
-    const uncommittedData = await getUncommittedDiff(targetWt.path);
+  if (sourceInfo.kind === 'worktree' && targetInfo.kind === 'worktree' && sourceInfo.realPath === targetInfo.realPath) {
+    const uncommittedData = await getUncommittedDiff(targetInfo.worktree.path);
     const uncommittedFiles = uncommittedData.files || [];
     return {
       isSameWorktree: true,
-      source: {
-        path: sourceWt.path,
-        branch: sourceWt.branch || 'HEAD',
-        head: sourceWt.head,
-        isMain: sourceWt.isMain,
-        isDirty: sourceWt.isDirty,
-        lastCommit: sourceWt.lastCommit
-      },
-      target: {
-        path: targetWt.path,
-        branch: targetWt.branch || 'HEAD',
-        head: targetWt.head,
-        isMain: targetWt.isMain,
-        isDirty: targetWt.isDirty,
-        lastCommit: targetWt.lastCommit
-      },
+      source: buildWorktreeMeta(sourceInfo.worktree),
+      target: buildWorktreeMeta(targetInfo.worktree),
       ahead: 0,
       behind: 0,
       effectiveMode: 'uncommitted',
@@ -691,8 +803,35 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requeste
     };
   }
 
-  const sourceRef = sourceWt.branch || sourceWt.head || 'HEAD';
-  const targetRef = targetWt.branch || targetWt.head || 'HEAD';
+  // 特殊场景 2：同名 branch↔branch。两者指向同一提交，短路返回全零空结果；
+  // 显式短路也确保这条路径绝不会去读任何 Worktree 的脏内容
+  if (sourceInfo.kind === 'branch' && targetInfo.kind === 'branch' && sourceInfo.value === targetInfo.value) {
+    return {
+      source: buildBranchMeta(sourceInfo),
+      target: buildBranchMeta(targetInfo),
+      ahead: 0,
+      behind: 0,
+      historyAhead: 0,
+      historyBehind: 0,
+      isCommittedContentEqual: true,
+      effectiveMode: 'committed',
+      modesAvailable: {
+        uncommitted: false,
+        all: false,
+        committed: false
+      },
+      counts: {
+        uncommitted: 0,
+        all: 0,
+        committed: 0
+      },
+      files: []
+    };
+  }
+
+  const sourceRef = sourceInfo.refName;
+  const targetRef = targetInfo.refName;
+  const targetIsWorktree = targetInfo.kind === 'worktree';
 
   // 1. 提交计数只描述历史关系；squash 后 SHA 会不同，但最终文件内容可能完全一致。
   let historyAhead = 0;
@@ -743,11 +882,16 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requeste
     }
   }
 
-  // 2. 检查 Target 工作区自身的未提交/未跟踪改动
-  const uncommittedData = await getUncommittedDiff(targetWt.path);
-  const hasUncommitted = (uncommittedData.files && uncommittedData.files.length > 0);
+  // 2. 检查 Target 工作区自身的未提交/未跟踪改动。
+  // target 为分支时没有工作区可比，恒跳过，uncommitted 语义整体不可用
+  let uncommittedData = { files: [] };
+  if (targetIsWorktree) {
+    uncommittedData = await getUncommittedDiff(targetInfo.worktree.path);
+  }
+  const uncommittedFiles = uncommittedData.files || [];
+  const hasUncommitted = uncommittedFiles.length > 0;
 
-  // 3. 计算【仅已提交】(committed) 的 diff
+  // 3. 计算【仅已提交】(committed) 的 diff（ref 级计算，与 worktree/branch 无关）
   let committedDiff = '';
   if (hasTargetCommittedChanges) {
     try {
@@ -782,11 +926,16 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requeste
   const hasCommitted = committedFiles.length > 0;
 
   // 4. 计算【全量：已提交 + 未提交 + untracked】(all)。
-  // 领先分支以共同祖先为基准；落后分支以自身 HEAD 为基准，只保留本地未提交修改。
+  //    - target 为 worktree：保持原行为，在目标 worktree cwd 下执行 `git diff <base>`
+  //      （隐含把工作区算进来，领先分支以共同祖先为基准；落后分支以自身 HEAD 为基准，
+  //      只保留本地未提交修改），并把 untracked 补入；
+  //    - target 为 branch：没有工作区可比，等价于在 repoPath 下执行
+  //      `git diff <base> <targetRef>`，结果与 committed 完全一致，直接复用。
   let allFiles = [];
-  try {
-      const allNumstat = await runGit(targetWt.path, ['diff', targetDiffBase, '--numstat']);
-      const allDiffRaw = await runGit(targetWt.path, ['diff', targetDiffBase, '-p', '-U3']);
+  if (targetIsWorktree) {
+    try {
+      const allNumstat = await runGit(targetInfo.worktree.path, ['diff', targetDiffBase, '--numstat']);
+      const allDiffRaw = await runGit(targetInfo.worktree.path, ['diff', targetDiffBase, '-p', '-U3']);
       const allDiffMap = splitDiffByFiles(allDiffRaw);
       const seenAll = new Set();
 
@@ -808,14 +957,17 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requeste
       }
 
       // 把 untracked 补入 allFiles
-      if (uncommittedData.files) {
-        for (const uf of uncommittedData.files) {
+      if (uncommittedFiles) {
+        for (const uf of uncommittedFiles) {
           if (uf.status === '?' && !seenAll.has(uf.filePath)) {
             allFiles.push(uf);
           }
         }
       }
-  } catch {
+    } catch {
+      allFiles = committedFiles;
+    }
+  } else {
     allFiles = committedFiles;
   }
 
@@ -824,11 +976,15 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requeste
   // 优先级 1: uncommitted (仅未提交以及 untracked，如果有的话)
   // 优先级 2: all (提交和未提交以及 untracked)
   // 优先级 3: committed (仅含已提交)
+  // target 为分支时 'uncommitted' 恒不可用，视同无效模式走自动判定（只会落在 committed）
   let effectiveMode = requestedMode;
-  if (!effectiveMode || !['uncommitted', 'all', 'committed'].includes(effectiveMode)) {
-    if (hasUncommitted) {
+  const modeUsable = Boolean(effectiveMode)
+    && ['uncommitted', 'all', 'committed'].includes(effectiveMode)
+    && (targetIsWorktree || effectiveMode !== 'uncommitted');
+  if (!modeUsable) {
+    if (targetIsWorktree && hasUncommitted) {
       effectiveMode = 'uncommitted';
-    } else if (hasCommitted || allFiles.length > 0) {
+    } else if (targetIsWorktree && (hasCommitted || allFiles.length > 0)) {
       effectiveMode = 'all';
     } else {
       effectiveMode = 'committed';
@@ -838,7 +994,7 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requeste
   // 根据 effectiveMode 选定输出的 files 列表
   let activeFiles = [];
   if (effectiveMode === 'uncommitted') {
-    activeFiles = uncommittedData.files || [];
+    activeFiles = uncommittedFiles;
   } else if (effectiveMode === 'all') {
     activeFiles = allFiles;
   } else {
@@ -846,22 +1002,8 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requeste
   }
 
   return {
-    source: {
-      path: sourceWt.path,
-      branch: sourceWt.branch || 'HEAD',
-      head: sourceWt.head,
-      isMain: sourceWt.isMain,
-      isDirty: sourceWt.isDirty,
-      lastCommit: sourceWt.lastCommit
-    },
-    target: {
-      path: targetWt.path,
-      branch: targetWt.branch || 'HEAD',
-      head: targetWt.head,
-      isMain: targetWt.isMain,
-      isDirty: targetWt.isDirty,
-      lastCommit: targetWt.lastCommit
-    },
+    source: sourceInfo.kind === 'worktree' ? buildWorktreeMeta(sourceInfo.worktree) : buildBranchMeta(sourceInfo),
+    target: targetInfo.kind === 'worktree' ? buildWorktreeMeta(targetInfo.worktree) : buildBranchMeta(targetInfo),
     ahead,
     behind,
     historyAhead,
@@ -874,12 +1016,27 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requeste
       committed: hasCommitted
     },
     counts: {
-      uncommitted: (uncommittedData.files || []).length,
+      uncommitted: uncommittedFiles.length,
       all: allFiles.length,
       committed: committedFiles.length
     },
     files: activeFiles
   };
+}
+
+/**
+ * 获取两个 Worktree 之间或目标工作区的 Diff（兼容入口）。
+ * 三种模式与自动回退语义见 getRefDiff；本函数是 worktree 选择器下的委托包装，
+ * 除 source/target 元数据新增 kind 字段外，公开行为与泛化前完全一致，
+ * 确保 /api/diff-worktrees 与现有前端零改动兼容。
+ */
+export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requestedMode = null) {
+  return getRefDiff(
+    repoPath,
+    { kind: 'worktree', value: sourcePath },
+    { kind: 'worktree', value: targetPath },
+    requestedMode
+  );
 }
 
 export async function getUncommittedDiff(worktreePath) {

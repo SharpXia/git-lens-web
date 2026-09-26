@@ -24,8 +24,15 @@ import {
   getCommitDiff,
   commitAction,
   getStashList,
-  stashAction
+  stashAction,
+  getRefDiff
 } from './git-inspector.js';
+import {
+  listMergeRequests,
+  createMergeRequest,
+  getMergeRequest,
+  mergeRequestAction
+} from './merge-request-service.js';
 
 const PORT = process.env.PORT || 9527;
 const HOME = os.homedir();
@@ -521,6 +528,91 @@ const server = http.createServer(async (req, res) => {
         const result = await stashAction(worktree, action, { message, stashRef });
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         return res.end(JSON.stringify(result));
+      } catch (err) {
+        const status = err.statusCode || 500;
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+    }
+
+    // 11.5 API: 本地 Merge Request 列表（可按 status 过滤）。
+    // 业务校验（仓库路径/状态白名单）收敛在 listMergeRequests 内，err.statusCode 统一捕获。
+    if (pathname === '/api/merge-requests' && req.method === 'GET') {
+      try {
+        const result = await listMergeRequests({
+          configDir: CONFIG_DIR,
+          repoPath: parsed.query.repoPath,
+          status: parsed.query.status
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: true, ...result }));
+      } catch (err) {
+        const status = err.statusCode || 500;
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+    }
+
+    // 11.6 API: 创建本地 Merge Request（重复 open MR 返回 409）
+    if (pathname === '/api/merge-requests' && req.method === 'POST') {
+      const { repoPath, sourceBranch, targetBranch, title, description } = await readJson();
+      try {
+        const result = await createMergeRequest({ configDir: CONFIG_DIR, repoPath, sourceBranch, targetBranch, title, description });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: true, ...result }));
+      } catch (err) {
+        const status = err.statusCode || 500;
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+    }
+
+    // 11.7 API: 获取单条 Merge Request（id 为 UUID，非法格式返回 400，不存在返回 404）
+    if (pathname.startsWith('/api/merge-requests/') && req.method === 'GET') {
+      const mrId = pathname.slice('/api/merge-requests/'.length);
+      try {
+        const result = await getMergeRequest({ configDir: CONFIG_DIR, repoPath: parsed.query.repoPath, id: decodeURIComponent(mrId) });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: true, ...result }));
+      } catch (err) {
+        const status = err.statusCode || 500;
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+    }
+
+    // 11.8 API: Merge Request 审阅/合并操作（approve/request_changes/reject/cancel/merge）。
+    // 合并会真实修改目标分支的 Worktree（--no-ff），冲突时服务端已自动 merge --abort，MR 保持 open。
+    if (pathname === '/api/merge-requests/action' && req.method === 'POST') {
+      const { repoPath, id, action, reason } = await readJson();
+      try {
+        const result = await mergeRequestAction({ configDir: CONFIG_DIR, repoPath, id, action, reason });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: true, ...result }));
+      } catch (err) {
+        const status = err.statusCode || 500;
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+    }
+
+    // 7.5 API: Worktree/Branch 通用 Diff。sourceType/targetType 取 worktree|branch，
+    // source/target 按类型分别为 Worktree 路径或本地分支名；语义见 getRefDiff。
+    if (pathname === '/api/diff-refs' && req.method === 'GET') {
+      const repoPath = parsed.query.path;
+      const sourceType = parsed.query.sourceType;
+      const source = parsed.query.source;
+      const targetType = parsed.query.targetType;
+      const target = parsed.query.target;
+      const mode = parsed.query.mode || null;
+      if (!repoPath || !sourceType || !source || !targetType || !target) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: '缺少 path、sourceType、source、targetType 或 target 参数' }));
+      }
+      try {
+        const diffData = await getRefDiff(repoPath, { kind: sourceType, value: source }, { kind: targetType, value: target }, mode);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: true, diff: diffData }));
       } catch (err) {
         const status = err.statusCode || 500;
         res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
