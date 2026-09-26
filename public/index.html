@@ -1901,6 +1901,9 @@
     let mrListReqSeq = 0;        // MR 列表请求序列防竞态
     let mrDetailReqSeq = 0;      // MR 详情请求序列防竞态
     let mrCommitsReqSeq = 0;     // MR 提交列表请求序列防竞态
+    // 当前 MR 的四方判定结果 Promise（loadMrAheadBehind 产出）：
+    // 提交列表渲染前等待它，用于在内容被目标吸收时附加事实说明
+    let mrAheadBehindReady = Promise.resolve(null);
     let mrDrawerState = { isOpen: false, id: null }; // MR 详情抽屉状态（id 统一为字符串）
     let currentMrDetail = null;  // 抽屉当前展示的 MR 记录
     let createMrSourcePicker = null;
@@ -4205,18 +4208,19 @@
       `;
     }
 
-    // 根据缓存的领先/落后数据生成徽章 HTML；无数据或基准不可解析时返回空串（静默隐藏）
-    function renderAheadBehindBadgeHtml() {
-      const ab = commitsDrawerAheadBehind;
+    // 根据领先/落后数据生成徽章 HTML；无数据或基准不可解析时返回空串（静默隐藏）。
+    // 这是全项目唯一的领先/落后展示出口：提交抽屉与 MR 详情抽屉共用，
+    // 内容等价判定来自 getBranchMergeStatus 四方判定（祖先/树一致/补丁等价/merge-tree），
+    // 任何新场景都不得直接用机械计数渲染「领先 N」，必须经由本函数做事实认定
+    function buildAheadBehindBadgeHtml(ab, idPrefix = 'commitsAheadBehind') {
       if (!ab || ab.baseAvailable === false) return '';
       // 数字统一转字符串后再转义，避免 escapeHtml 对数字入参报错
       const baseLabel = escapeHtml(ab.baseBranch);
       const aheadText = escapeHtml(String(ab.ahead));
       const behindText = escapeHtml(String(ab.behind));
 
-      // 内容等价判定（复用 worktree 列表的祖先/树一致/补丁等价/merge-tree 判定）：
-      // revert 抵消、squash 合入等场景机械计数会显示「领先 N」，但改动已被基准吸收，
-      // 此时以绿色「无差异」徽章为主，原始计数降级为弱色小字供核查
+      // 内容等价判定：revert 抵消、squash/cherry-pick 合入等场景机械计数会显示「领先 N」，
+      // 但改动已被基准吸收，此时以绿色「无差异」徽章为主，原始计数降级为弱色小字供核查
       if (ab.contentEquivalent === true) {
         const mergeTypeNotes = {
           direct: '提交已在基准历史中',
@@ -4228,11 +4232,11 @@
         const rawCounts = `提交计数：领先 ${aheadText} / 落后 ${behindText}`;
         if (ab.behind > 0) {
           // 自身无独有改动但落后于基准：仍提示需要同步主干
-          return `<span id="commitsAheadBehindBadge" class="badge badge-warning" title="${note}">⇅ 落后 ${baseLabel} ${behindText}（无独有改动）</span>` +
-            `<span id="commitsAheadBehindRawCounts" style="font-size: 11px; color: var(--text-muted);" title="机械提交计数，含 revert 等相互抵消的提交">${rawCounts}</span>`;
+          return `<span id="${idPrefix}Badge" class="badge badge-warning" title="${note}">⇅ 落后 ${baseLabel} ${behindText}（无独有改动）</span>` +
+            `<span id="${idPrefix}RawCounts" style="font-size: 11px; color: var(--text-muted);" title="机械提交计数，含 revert 等相互抵消的提交">${rawCounts}</span>`;
         }
-        return `<span id="commitsAheadBehindBadge" class="badge badge-success" title="${note}">✓ 与 ${baseLabel} 无差异</span>` +
-          `<span id="commitsAheadBehindRawCounts" style="font-size: 11px; color: var(--text-muted);" title="机械提交计数，含 revert 等相互抵消的提交">${rawCounts}</span>`;
+        return `<span id="${idPrefix}Badge" class="badge badge-success" title="${note}">✓ 与 ${baseLabel} 无差异</span>` +
+          `<span id="${idPrefix}RawCounts" style="font-size: 11px; color: var(--text-muted);" title="机械提交计数，含 revert 等相互抵消的提交">${rawCounts}</span>`;
       }
 
       const title = `相对基准分支 ${baseLabel} 的提交领先/落后统计`;
@@ -4243,7 +4247,12 @@
       else text = `与 ${baseLabel} 同步`;
       // 有落后时用警示色提醒需要同步主干，纯领先视为正常状态
       const cls = ab.behind > 0 ? 'badge badge-warning' : 'badge badge-success';
-      return `<span id="commitsAheadBehindBadge" class="${cls}" title="${title}">${text}</span>`;
+      return `<span id="${idPrefix}Badge" class="${cls}" title="${title}">${text}</span>`;
+    }
+
+    // 提交抽屉徽章：从抽屉缓存的领先/落后数据渲染（id 前缀保持原值，更新逻辑依赖它）
+    function renderAheadBehindBadgeHtml() {
+      return buildAheadBehindBadgeHtml(commitsDrawerAheadBehind);
     }
 
     // 把领先/落后徽章插入抽屉 meta 行（渲染在"查看全量历史"按钮之前），已存在时原地替换
@@ -5031,7 +5040,8 @@
         if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
         currentMrDetail = data.mergeRequest;
         renderMrDetail(currentMrDetail, null, true);
-        loadMrAheadBehind();
+        // 判定结果同时供徽章渲染与提交列表的吸收说明使用（两者并行请求）
+        mrAheadBehindReady = loadMrAheadBehind();
         loadMrCommits();
       } catch (err) {
         if (seq !== mrDetailReqSeq) return;
@@ -5226,27 +5236,34 @@
       }
     }
 
-    /* MR 详情的 ahead/behind 统计：以 target 为基准、source 为 ref；失败时降级为提示文案 */
+    /* MR 详情的 ahead/behind 统计：以 target 为基准、source 为 ref。
+       事实认定复用 /api/worktree-ahead-behind 的四方判定结论（contentEquivalent/mergeType），
+       徽章渲染复用 buildAheadBehindBadgeHtml——与提交抽屉同一套出口，禁止直接用机械计数；
+       返回接口数据（失败时 null）供提交列表判断是否附加吸收说明 */
     async function loadMrAheadBehind() {
       const mr = currentMrDetail;
       const lineEl = document.getElementById('mrAheadBehindLine');
-      if (!mr || !lineEl) return;
+      if (!mr || !lineEl) return null;
       try {
         const params = new URLSearchParams({ worktree: currentRepo, base: mr.targetBranch, ref: mr.sourceBranch });
         const res = await fetch(`/api/worktree-ahead-behind?${params}`);
         const data = await res.json();
+        if (!mrDrawerState.isOpen || mrDrawerState.id !== String(mr.id)) return null;
         if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
-        if (!mrDrawerState.isOpen || mrDrawerState.id !== String(mr.id)) return;
         if (data.baseAvailable === false) throw new Error(`无法解析基准分支 ${mr.targetBranch}`);
-        lineEl.innerHTML = `<span class="badge ${data.behind > 0 ? 'badge-warning' : 'badge-success'}" title="相对目标分支 ${escapeHtml(mr.targetBranch)} 的提交领先/落后统计">⇅ 领先 ${escapeHtml(String(data.ahead))} / 落后 ${escapeHtml(String(data.behind))}</span>`;
+        lineEl.innerHTML = buildAheadBehindBadgeHtml(data, 'mrAheadBehind');
+        return data;
       } catch (err) {
-        if (!mrDrawerState.isOpen || mrDrawerState.id !== String(mr.id)) return;
+        if (!mrDrawerState.isOpen || mrDrawerState.id !== String(mr.id)) return null;
         lineEl.innerHTML = `<span style="font-size: 12px; color: var(--text-muted);">提交差异统计不可用：${escapeHtml(err.message)}</span>`;
+        return null;
       }
     }
 
     /* MR 详情的提交列表：仅展示 source 相对 target 的领先提交（base..ref 范围，
-       不传 fullHistory），卡片可点击展开单提交详情与逐文件 Diff，无需跳转 Diff 页 */
+       不传 fullHistory），卡片可点击展开单提交详情与逐文件 Diff，无需跳转 Diff 页。
+       渲染前等待 mrAheadBehindReady 的四方判定结果：内容已被目标吸收时附加事实说明，
+       避免用户把「机械领先计数」误解为存在真实差异 */
     async function loadMrCommits() {
       const mr = currentMrDetail;
       const container = document.getElementById('mrCommitsContainer');
@@ -5263,13 +5280,16 @@
         const data = await res.json();
         if (seq !== mrCommitsReqSeq) return;
         if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        // 与 ahead/behind 请求并行，这里等它的四方判定结论（失败不影响列表本身）
+        const abData = await mrAheadBehindReady;
+        if (seq !== mrCommitsReqSeq) return;
         const commits = data.commits || [];
         if (commits.length === 0) {
           container.innerHTML = '<div class="commit-diff-empty">source 相对 target 没有领先的提交。</div>';
           return;
         }
         // 卡片结构与提交抽屉一致：点击展开详情，点击 SHA 复制完整哈希（阻止冒泡）
-        container.innerHTML = commits.map(c => `
+        let html = commits.map(c => `
           <div class="commit-item clickable" onclick="toggleCommitDetail(this, '${escapeHtml(c.hash)}')">
             <div class="commit-item-header">
               <span class="commit-hash" onclick="event.stopPropagation(); copyText('${escapeHtml(c.hash)}', this)" title="点击复制完整 SHA">${escapeHtml(c.shortHash)}</span>
@@ -5279,6 +5299,10 @@
             <div class="commit-author">${escapeHtml(c.author)}</div>
           </div>
         `).join('');
+        if (abData && abData.contentEquivalent === true) {
+          html = `<div class="commit-diff-empty" style="color: var(--warning);">⚠️ 这些提交的内容已被 ${escapeHtml(mr.targetBranch)} 吸收（cherry-pick / squash / revert 抵消等），合并不会产生实际文件变化。</div>` + html;
+        }
+        container.innerHTML = html;
       } catch (err) {
         if (seq !== mrCommitsReqSeq) return;
         container.innerHTML = `<div class="commit-detail-error">提交列表加载失败：${escapeHtml(err.message)}</div>`;
