@@ -1548,6 +1548,9 @@
     <button id="tabOverview" class="tab-btn active" onclick="switchTab('overview')">
       <span>📊 仓库总览与管理</span>
     </button>
+    <button id="tabMr" class="tab-btn" onclick="switchTab('mr')">
+      <span>🔀 Merge Requests</span>
+    </button>
     <button id="tabDiff" class="tab-btn" onclick="switchTab('diff')">
       <span>⚡ Worktree 差异对比 (Branch Diff)</span>
     </button>
@@ -1610,26 +1613,6 @@
     </div>
 
     <div class="panels">
-      <!-- 本地 Merge Requests 面板 -->
-      <div class="panel">
-        <div class="panel-header">
-          <h2>🔀 Merge Requests</h2>
-          <div class="mr-panel-controls">
-            <div class="diff-mode-segmented" id="mrStatusFilterGroup">
-              <button type="button" class="diff-mode-btn active" data-status="all" onclick="setMrStatusFilter('all')">全部</button>
-              <button type="button" class="diff-mode-btn" data-status="open" onclick="setMrStatusFilter('open')">开启</button>
-              <button type="button" class="diff-mode-btn" data-status="merged" onclick="setMrStatusFilter('merged')">已合并</button>
-              <button type="button" class="diff-mode-btn" data-status="rejected" onclick="setMrStatusFilter('rejected')">已拒绝</button>
-              <button type="button" class="diff-mode-btn" data-status="canceled" onclick="setMrStatusFilter('canceled')">已取消</button>
-            </div>
-            <span id="mrCountBadge" class="badge">0 个</span>
-          </div>
-        </div>
-        <div id="mrList">
-          <div class="loading">加载中...</div>
-        </div>
-      </div>
-
       <!-- Worktrees 面板 -->
       <div class="panel">
         <div class="panel-header">
@@ -1650,6 +1633,28 @@
         <div id="brList">
           <div class="loading">加载中...</div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 2: 本地 Merge Request 面板（独立 Tab，不与仓库总览混排） -->
+  <div id="viewMr" style="display: none;">
+    <div class="panel">
+      <div class="panel-header">
+        <h2>🔀 Merge Requests</h2>
+        <div class="mr-panel-controls">
+          <div class="diff-mode-segmented" id="mrStatusFilterGroup">
+            <button type="button" class="diff-mode-btn active" data-status="all" onclick="setMrStatusFilter('all')">全部</button>
+            <button type="button" class="diff-mode-btn" data-status="open" onclick="setMrStatusFilter('open')">开启</button>
+            <button type="button" class="diff-mode-btn" data-status="merged" onclick="setMrStatusFilter('merged')">已合并</button>
+            <button type="button" class="diff-mode-btn" data-status="rejected" onclick="setMrStatusFilter('rejected')">已拒绝</button>
+            <button type="button" class="diff-mode-btn" data-status="canceled" onclick="setMrStatusFilter('canceled')">已取消</button>
+          </div>
+          <span id="mrCountBadge" class="badge">0 个</span>
+        </div>
+      </div>
+      <div id="mrList">
+        <div class="loading">加载中...</div>
       </div>
     </div>
   </div>
@@ -2584,13 +2589,19 @@
     function switchTab(tab, pushHistory = true) {
       activeTab = tab;
       document.getElementById('tabOverview').className = tab === 'overview' ? 'tab-btn active' : 'tab-btn';
+      document.getElementById('tabMr').className = tab === 'mr' ? 'tab-btn active' : 'tab-btn';
       document.getElementById('tabDiff').className = tab === 'diff' ? 'tab-btn active' : 'tab-btn';
 
       document.getElementById('viewOverview').style.display = tab === 'overview' ? 'block' : 'none';
+      document.getElementById('viewMr').style.display = tab === 'mr' ? 'block' : 'none';
       document.getElementById('viewDiff').style.display = tab === 'diff' ? 'block' : 'none';
 
       if (tab === 'diff') {
         populateDiffSelectors();
+      }
+      if (tab === 'mr') {
+        // 进入 MR Tab 时重拉列表，避免仓库在其他 Tab 发生写操作后展示过期数据
+        refreshMergeRequests();
       }
       syncStateToUrl(pushHistory);
     }
@@ -2646,7 +2657,7 @@
 
         // 恢复 Tab 状态与 Diff 比对
         if (pendingRestoreState) {
-          switchTab(pendingRestoreState.tab === 'diff' ? 'diff' : 'overview', false);
+          switchTab(['diff', 'mr'].includes(pendingRestoreState.tab) ? pendingRestoreState.tab : 'overview', false);
           if (pendingRestoreState.tab === 'diff') {
             if (pendingRestoreState.diffType === 'uncommitted' && pendingRestoreState.uncommitted) {
               const baseSel = document.getElementById('diffBaseSelect');
@@ -5260,7 +5271,7 @@
         document.getElementById('searchInput').value = searchKeyword;
         renderFilteredLists();
 
-        switchTab(state.tab === 'diff' ? 'diff' : 'overview', false);
+        switchTab(['diff', 'mr'].includes(state.tab) ? state.tab : 'overview', false);
         if (state.tab === 'diff' && (state.diffType === 'ref' || state.diffType === 'worktree') && state.base && state.target) {
           // diffType=ref 为新格式；旧链接 diffType=worktree 无类型前缀，base/target 按 worktree 兼容解析
           const baseIdentity = `${state.baseType || 'worktree'}:${state.base}`;
