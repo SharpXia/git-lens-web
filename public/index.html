@@ -1670,6 +1670,32 @@
       width: 100%;
     }
 
+    /* ---- 页脚：帮助/关于入口与桌面运行时信息 ---- */
+    .app-footer {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 24px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border-muted);
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .app-footer-link {
+      color: var(--text-muted);
+      text-decoration: none;
+    }
+    .app-footer-link:hover {
+      color: var(--accent);
+      text-decoration: underline;
+    }
+    .app-footer-runtime {
+      margin-left: auto;
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
   </style>
 </head>
 <body>
@@ -2001,6 +2027,12 @@
     <div class="commits-drawer-body" id="mrDrawerBody"></div>
   </div>
 
+  <!-- 页脚：帮助/关于入口；桌面模式由脚本追加运行时版本信息（浏览器模式保持隐藏） -->
+  <footer class="app-footer">
+    <a id="helpAboutLink" class="app-footer-link" href="https://github.com/SharpXia/git-lens-web" target="_blank" rel="noopener noreferrer">帮助 / 关于（GitHub README）</a>
+    <span id="desktopRuntimeInfo" class="app-footer-runtime" style="display:none;"></span>
+  </footer>
+
   <script>
     let allRepos = [];
     let currentRepo = '';
@@ -2026,6 +2058,10 @@
     let scanDirectoryConfig = { customDirectories: [] };
     let scanDirectoryDraft = [];
     let worktreeRemoveRequest = null;
+
+    // 桌面运行时判定：Electron Shell 经 preload 注入 window.gitLens（契约 §6）。
+    // 浏览器模式无该全局，isDesktop 恒为 false，所有桌面分支均不生效、行为保持零变化。
+    const isDesktop = Boolean(window.gitLens && window.gitLens.isDesktop);
 
     const TAB_TITLE_LABELS = {
       overview: '仓库总览',
@@ -6001,6 +6037,35 @@
       placeholder: '请选择对比对象',
       onSelect: () => fetchAndRenderRefDiff(null, true)
     });
+
+    /* ---- 桌面运行时适配层（契约 §6；浏览器模式以下逻辑全部不生效） ---- */
+
+    // 外链统一出口：桌面模式下页面内 http/https 链接一律交系统浏览器打开，
+    // 并阻止窗口内导航（契约 §6 openExternal，仅 http/https 由主进程校验）；
+    // 浏览器模式保持默认跳转行为
+    document.addEventListener('click', (e) => {
+      if (!isDesktop) return;
+      const anchor = e.target instanceof Element ? e.target.closest('a[href]') : null;
+      if (!anchor) return;
+      const url = anchor.getAttribute('href') || '';
+      if (!/^https?:\/\//i.test(url)) return;
+      e.preventDefault();
+      window.gitLens.openExternal(url).catch((err) => console.warn('打开外部链接失败:', err && err.message));
+    });
+
+    // 桌面模式在页脚展示运行时版本信息（appVersion/electronVersion/platform/arch）；
+    // 浏览器模式元素保持隐藏，避免暴露无意义的 Node 运行时细节
+    let desktopRuntimeInfo = null;
+    if (isDesktop && typeof window.gitLens.getRuntimeInfo === 'function') {
+      window.gitLens.getRuntimeInfo().then((info) => {
+        desktopRuntimeInfo = info || null;
+        const el = document.getElementById('desktopRuntimeInfo');
+        if (el) {
+          el.textContent = `v${info.appVersion || '-'} · Electron ${info.electronVersion || '-'} · ${info.platform || '-'} / ${info.arch || '-'}`;
+          el.style.display = '';
+        }
+      }).catch((err) => console.warn('读取桌面运行时信息失败:', err && err.message));
+    }
 
     loadProjects();
 
