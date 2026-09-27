@@ -16,6 +16,10 @@
  * 用法：
  *   npm run test:isolated            # 常规入口
  *   node scripts/qa/run.mjs --keep   # 成功时也保留 qa-root（调试用）
+ *   node scripts/qa/run.mjs --service-url http://127.0.0.1:9530
+ *                                    # 测试专用：跳过 spawn，对显式地址执行握手与冒烟。
+ *                                    # 该地址仍必须通过 base-url 守卫（127.0.0.1 + 非 9527）；
+ *                                    # 外部服务生命周期不受本启动器管理，故跳过停止与端口验证。
  *
  * 退出码：0=全部通过；1=存在失败或 Runtime 契约未就绪（正向用例跳过）。
  */
@@ -433,7 +437,29 @@ function buildReport({ runId, qaRoot, outcome, service, handshake, startedAt, gu
 }
 
 async function main() {
-  const keepQaRoot = process.argv.includes('--keep');
+  // 参数解析：--keep 与测试专用的 --service-url（显式外部服务地址覆盖）
+  const args = process.argv.slice(2);
+  const keepQaRoot = args.includes('--keep');
+  const serviceUrlFlag = args.indexOf('--service-url');
+  const serviceUrlInput = serviceUrlFlag >= 0 ? args[serviceUrlFlag + 1] : undefined;
+  if (serviceUrlFlag >= 0 && (!serviceUrlInput || serviceUrlInput.startsWith('--'))) {
+    console.error('[qa] --service-url 需要显式的服务地址，例如: --service-url http://127.0.0.1:9530');
+    process.exitCode = 1;
+    return;
+  }
+  // fail-closed：外部服务地址在创建 qa-root、发起任何请求之前先过白名单守卫
+  let externalService = null;
+  if (serviceUrlInput) {
+    try {
+      externalService = parseAndValidateBaseUrl(serviceUrlInput);
+    } catch (err) {
+      console.error(`[qa] --service-url 校验失败：${err.message}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`[qa] --service-url 生效：跳过 spawn，使用外部服务 ${externalService.baseUrl}`);
+  }
+
   const runId = makeRunId();
   const startedAt = new Date();
   let qaRoot = null;
@@ -462,32 +488,41 @@ async function main() {
     const fixture = await buildFixtures(qaRoot);
     console.log('[qa] fixture 构建完成（干净/脏/失联/stash/吸收/冲突对/特殊字符/恶意提交信息）');
 
-    child = spawnService(qaRoot, runId);
-    const discovery = await discoverPort(child);
-    serviceMeta = { command: `node ${SERVER_ENTRY}`, pid: child.pid, port: discovery.port > 0 ? discovery.port : null, stdoutTail: tail(discovery.stdout, 400) };
-    record(
-      'runtime-port-report',
-      '服务从 stdout 报告实际监听端口（PORT=0 场景）',
-      discovery.port > 0 ? 'pass' : 'skip',
-      discovery.port > 0 ? discovery.line : `仅回显占位端口: ${discovery.line}`
-    );
-    knownPort = discovery.port > 0 ? discovery.port : null;
+    let baseUrl;
+    if (externalService) {
+      // 外部服务模式：地址来自显式参数（已过守卫），生命周期由调用方管理
+      baseUrl = externalService.baseUrl;
+      knownPort = externalService.port;
+      serviceMeta = { command: `外部服务 (--service-url ${baseUrl})`, pid: null, port: externalService.port, stdoutTail: '' };
+      record('runtime-port-report', '服务从 stdout 报告实际监听端口（PORT=0 场景）', 'skip', '外部托管服务经 --service-url 注入，端口来自显式参数');
+    } else {
+      child = spawnService(qaRoot, runId);
+      const discovery = await discoverPort(child);
+      serviceMeta = { command: `node ${SERVER_ENTRY}`, pid: child.pid, port: discovery.port > 0 ? discovery.port : null, stdoutTail: tail(discovery.stdout, 400) };
+      record(
+        'runtime-port-report',
+        '服务从 stdout 报告实际监听端口（PORT=0 场景）',
+        discovery.port > 0 ? 'pass' : 'skip',
+        discovery.port > 0 ? discovery.line : `仅回显占位端口: ${discovery.line}`
+      );
+      knownPort = discovery.port > 0 ? discovery.port : null;
 
-    if (discovery.port === 0) {
-      outcome = 'runtime-contract-not-ready';
-      guidance = [
-        'Runtime 契约未就绪，正向用例跳过：服务未按契约从 stdout 报告实际监听端口（PORT=0 时必须回填真实端口），',
-        '或尚未实现 /api/test-handshake（契约 §2/§3）。请合入 codex/electron-runtime 的 G1 交付后重试：npm run test:isolated。',
-        `守卫负向用例不依赖服务，可直接运行: node --test test/qa-guard.test.mjs test/verify-guard.test.mjs`
-      ].join('\n  ');
-      for (const check of smokeChecks({ baseUrl: '', fixture, qaRoot })) {
-        record(check.id, check.name, 'skip', 'RUNTIME 契约未就绪，正向用例跳过');
+      if (discovery.port === 0) {
+        outcome = 'runtime-contract-not-ready';
+        guidance = [
+          'Runtime 契约未就绪，正向用例跳过：服务未按契约从 stdout 报告实际监听端口（PORT=0 时必须回填真实端口），',
+          '或尚未实现 /api/test-handshake（契约 §2/§3）。请合入 codex/electron-runtime 的 G1 交付后重试：npm run test:isolated。',
+          `守卫负向用例不依赖服务，可直接运行: node --test test/qa-guard.test.mjs test/verify-guard.test.mjs`
+        ].join('\n  ');
+        for (const check of smokeChecks({ baseUrl: '', fixture, qaRoot })) {
+          record(check.id, check.name, 'skip', 'RUNTIME 契约未就绪，正向用例跳过');
+        }
+        return;
       }
-      return;
-    }
 
-    // base-url 来自 stdout 的端口，仍须过白名单守卫（防服务被诱导输出恶意形态）
-    const { baseUrl } = parseAndValidateBaseUrl(`http://127.0.0.1:${discovery.port}`);
+      // base-url 来自 stdout 的端口，仍须过白名单守卫（防服务被诱导输出恶意形态）
+      baseUrl = parseAndValidateBaseUrl(`http://127.0.0.1:${discovery.port}`).baseUrl;
+    }
 
     let handshake;
     try {
@@ -556,7 +591,10 @@ async function main() {
     } catch {
       // stopService 不抛；此处兜底
     }
-    if (knownPort !== null) {
+    if (externalService) {
+      // 外部服务由调用方管理生命周期，启动器不停止也不验证端口释放
+      record('service-port-released', '测试结束服务已退出且端口已释放', 'skip', '外部托管服务生命周期不受本启动器管理，跳过停止与端口验证');
+    } else if (knownPort !== null) {
       const closed = await isPortClosed(knownPort);
       record(
         'service-port-released',
