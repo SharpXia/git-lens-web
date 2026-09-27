@@ -2335,7 +2335,7 @@
           }
         }
       } catch (err) {
-        error.textContent = err.message;
+        error.textContent = toDisplayErrorMessage(err, '无法连接本地服务，打开目录选择器失败');
       } finally {
         button.disabled = false;
         button.textContent = '选择文件夹…';
@@ -2396,7 +2396,7 @@
         closeScanDirectoryModal();
         await loadProjects();
       } catch (err) {
-        error.textContent = err.message;
+        error.textContent = toDisplayErrorMessage(err, '无法连接本地服务，保存扫描目录失败');
       } finally {
         saveButton.disabled = false;
         saveButton.textContent = '保存并扫描';
@@ -2501,7 +2501,7 @@
           alert(`已删除 ${successCount} 个分支${failed.length ? `，${failed.length} 个因状态变化未处理` : ''}。`);
         }
       } catch (err) {
-        alert(`清理失败：${err.message}`);
+        alert(`清理失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`);
       } finally {
         button.disabled = false;
         button.textContent = originalText;
@@ -3138,6 +3138,27 @@
       syncStateToUrl(pushHistory);
     }
 
+    /**
+     * 仓库列表加载失败的错误态渲染：下拉列表、触发器与两个概览面板统一给出
+     * 中文提示与重试入口，避免服务不可达时页面停留在“加载中”假死。
+     * @param {string} message - 可展示的中文错误文案
+     */
+    function renderProjectsLoadError(message) {
+      currentRepo = '';
+      allRepos = [];
+      const escaped = escapeHtml(message);
+      const retryButton = '<button class="btn-outline" type="button" onclick="loadProjects()">重试</button>';
+      const dropdown = document.getElementById('repoDropdownList');
+      if (dropdown) {
+        dropdown.innerHTML = `<div class="loading" style="color: var(--danger);">仓库列表加载失败：${escaped}</div>${retryButton}`;
+      }
+      document.getElementById('repoTriggerText').textContent = '仓库列表加载失败';
+      document.getElementById('headerPath').textContent = '';
+      document.getElementById('wtList').innerHTML = `<div class="loading" style="color: var(--danger);">仓库列表加载失败：${escaped}</div>${retryButton}`;
+      document.getElementById('brList').innerHTML = `<div class="loading" style="color: var(--danger);">仓库列表加载失败：${escaped}</div>${retryButton}`;
+      updateMetrics();
+    }
+
     async function loadProjects(useStoredState = true) {
       // 提取保存的状态（URL 参数优先，其次 sessionStorage）
       pendingRestoreState = useStoredState ? getStoredState() : getUrlState();
@@ -3151,8 +3172,17 @@
         if (searchInputDom) searchInputDom.value = searchKeyword;
       }
 
-      const res = await fetch('/api/projects');
-      const data = await res.json();
+      let data;
+      try {
+        const res = await fetch('/api/projects');
+        data = await res.json();
+        if (!data.ok) throw new Error(data.error || '读取仓库列表失败');
+      } catch (err) {
+        // 服务不可达或响应异常：渲染中文错误态并提供重试，不中断后续交互
+        renderProjectsLoadError(toDisplayErrorMessage(err, '无法连接本地服务，请确认服务已启动'));
+        isRestoringHistory = false;
+        return;
+      }
       allRepos = data.repos || [];
 
       const sel = document.getElementById('repoSelect');
@@ -3297,7 +3327,7 @@
         populateDiffSelectors();
         refreshMergeRequests();
       } catch (err) {
-        alert('分析失败: ' + err.message);
+        alert('分析失败: ' + toDisplayErrorMessage(err, '无法连接本地服务'));
       }
     }
 
@@ -3593,7 +3623,7 @@
           }
         }
       } catch (err) {
-        alert('移除失败: ' + err.message);
+        alert('移除失败: ' + toDisplayErrorMessage(err, '无法连接本地服务'));
         if (btn) {
           btn.disabled = false;
           btn.textContent = '移除';
@@ -3647,7 +3677,7 @@
           }
         }
       } catch (err) {
-        alert('删除失败: ' + err.message);
+        alert('删除失败: ' + toDisplayErrorMessage(err, '无法连接本地服务'));
         if (btn) {
           btn.disabled = false;
           btn.textContent = '删除';
@@ -3916,7 +3946,7 @@
         renderDiffView(diff, preserveShell);
       } catch (err) {
         if (seq !== diffRequestSeq) return;
-        const errorHtml = `<div class="empty-diff-box" style="color: var(--danger);">Diff 计算失败: ${escapeHtml(err.message)}</div>`;
+        const errorHtml = `<div class="empty-diff-box" style="color: var(--danger);">Diff 计算失败: ${escapeHtml(toDisplayErrorMessage(err, '无法连接本地服务'))}</div>`;
         if (preserveShell) container.querySelector('#diffFileListContent').innerHTML = errorHtml;
         else container.innerHTML = errorHtml;
       }
@@ -4003,6 +4033,19 @@
         .replace(/\r/g, '\\r')
         .replace(/\n/g, '\\n');
       return escapeHtml(js);
+    }
+
+    /**
+     * 把 fetch 异常转成可展示的中文错误文案。
+     * 网络层失败（服务未启动、连接被拒等）抛出的 TypeError 其 message 是浏览器英文原文，
+     * 统一替换为中文兜底；API 业务错误沿用服务端返回的 message。
+     * @param {unknown} err - catch 到的异常
+     * @param {string} fallback - 网络层失败或异常无 message 时展示的中文文案
+     * @returns {string}
+     */
+    function toDisplayErrorMessage(err, fallback) {
+      if (err instanceof TypeError) return fallback; // fetch 网络层失败
+      return (err && err.message) || fallback;
     }
 
     /* 格式化代码块 */
@@ -4420,7 +4463,7 @@
           ${rows}
         `;
       } catch (err) {
-        el.innerHTML = `<div class="stash-item" style="color: var(--danger);">历史暂存加载失败：${escapeHtml(err.message)}</div>`;
+        el.innerHTML = `<div class="stash-item" style="color: var(--danger);">历史暂存加载失败：${escapeHtml(toDisplayErrorMessage(err, '无法连接本地服务'))}</div>`;
       }
     }
 
@@ -4486,7 +4529,7 @@
         if (!data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
         await refreshCurrentDiff();
       } catch (err) {
-        alert(`操作失败：${err.message}`);
+        alert(`操作失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`);
         if (btn && btn.isConnected) btn.disabled = false;
       }
     }
@@ -4729,7 +4772,7 @@
           btn.textContent = '加载失败，点击重试';
           btn.disabled = false;
         } else {
-          renderCommitsError(err.message);
+          renderCommitsError(toDisplayErrorMessage(err, '无法连接本地服务'));
         }
       }
     }
@@ -4997,7 +5040,7 @@
         }
       } catch (err) {
         if (panel.isConnected) {
-          renderCommitDetail(panel, null, err.message);
+          renderCommitDetail(panel, null, toDisplayErrorMessage(err, '无法连接本地服务'));
         }
       }
     }
@@ -5144,7 +5187,7 @@
         // 外层 worktree 列表的领先/同步徽标同样受写操作影响，同步刷新保持两处一致
         await refreshRepoInspectData();
       } catch (err) {
-        alert(`${actionLabel} 失败：${err.message}`);
+        alert(`${actionLabel} 失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`);
       } finally {
         // 重载会整体重建列表 DOM，旧按钮多已离线；仅在按钮仍连着文档时恢复可点
         if (btn && btn.isConnected) btn.disabled = false;
@@ -5220,7 +5263,7 @@
       } catch (err) {
         if (!section.isConnected) return;
         section.innerHTML = `
-          <div class="commit-detail-error">加载 Diff 失败：${escapeHtml(err.message)}</div>
+          <div class="commit-detail-error">加载 Diff 失败：${escapeHtml(toDisplayErrorMessage(err, '无法连接本地服务'))}</div>
           <button type="button" class="btn-outline commit-diff-toggle-btn" onclick="retryCommitDiff(this, '${sha}')">重试</button>`;
       }
     }
@@ -5401,7 +5444,7 @@
       } catch (err) {
         if (seq !== mrListReqSeq) return;
         document.getElementById('mrList').innerHTML =
-          `<div class="loading" style="color: var(--danger);">MR 列表加载失败：${escapeHtml(err.message)}</div>`;
+          `<div class="loading" style="color: var(--danger);">MR 列表加载失败：${escapeHtml(toDisplayErrorMessage(err, '无法连接本地服务'))}</div>`;
       }
     }
 
@@ -5533,7 +5576,7 @@
           openMrDetail(data.mergeRequest.id); // 直接打开新 MR 详情
         }
       } catch (err) {
-        errEl.textContent = err.message;
+        errEl.textContent = toDisplayErrorMessage(err, '无法连接本地服务，创建 MR 失败');
       } finally {
         btn.disabled = false;
         btn.textContent = '创建 Merge Request';
@@ -5593,7 +5636,7 @@
         loadMrCommits();
       } catch (err) {
         if (seq !== mrDetailReqSeq) return;
-        renderMrDetail(null, err.message, true);
+        renderMrDetail(null, toDisplayErrorMessage(err, '无法连接本地服务'), true);
       }
     }
 
@@ -5778,7 +5821,7 @@
         }
       } catch (err) {
         const errEl = document.getElementById('mrDrawerActionError');
-        if (errEl) errEl.textContent = `操作失败：${err.message}`;
+        if (errEl) errEl.textContent = `操作失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`;
         setMrActionButtonsDisabled(false);
         loadMrAheadBehind(); // 静默刷新一次 ahead/behind，冲突破坏提交关系时能及时反映
       }
@@ -5803,7 +5846,7 @@
         return data;
       } catch (err) {
         if (!mrDrawerState.isOpen || mrDrawerState.id !== String(mr.id)) return null;
-        lineEl.innerHTML = `<span style="font-size: 12px; color: var(--text-muted);">提交差异统计不可用：${escapeHtml(err.message)}</span>`;
+        lineEl.innerHTML = `<span style="font-size: 12px; color: var(--text-muted);">提交差异统计不可用：${escapeHtml(toDisplayErrorMessage(err, '无法连接本地服务'))}</span>`;
         return null;
       }
     }
@@ -5853,7 +5896,7 @@
         container.innerHTML = html;
       } catch (err) {
         if (seq !== mrCommitsReqSeq) return;
-        container.innerHTML = `<div class="commit-detail-error">提交列表加载失败：${escapeHtml(err.message)}</div>`;
+        container.innerHTML = `<div class="commit-detail-error">提交列表加载失败：${escapeHtml(toDisplayErrorMessage(err, '无法连接本地服务'))}</div>`;
       }
     }
 
@@ -6080,17 +6123,22 @@
       syncStateToUrl();
     });
     document.getElementById('pruneBtn').addEventListener('click', async () => {
-      const res = await fetch('/api/prune-worktrees', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repoPath: currentRepo })
-      });
-      const data = await res.json();
-      if (data.ok) {
-        alert('Worktrees prune 执行成功！');
-        inspectRepo(currentRepo);
-      } else {
-        alert('Prune 失败: ' + data.error);
+      try {
+        const res = await fetch('/api/prune-worktrees', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoPath: currentRepo })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          alert('Worktrees prune 执行成功！');
+          inspectRepo(currentRepo);
+        } else {
+          alert('Prune 失败: ' + data.error);
+        }
+      } catch (err) {
+        // 网络层失败（服务不可达）同样给出中文提示，避免按钮点击后无任何反馈
+        alert('Prune 失败: ' + toDisplayErrorMessage(err, '无法连接本地服务'));
       }
     });
 
