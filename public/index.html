@@ -28,17 +28,17 @@
 
   <!-- 顶部功能切换 TAB -->
   <div class="tab-bar">
-    <button id="tabOverview" class="tab-btn active" onclick="switchTab('overview')">
+    <button id="tabOverview" class="tab-btn active" data-action="tab-overview">
       <span>📊 仓库总览与管理</span>
     </button>
-    <button id="tabDiff" class="tab-btn" onclick="switchTab('diff')">
+    <button id="tabDiff" class="tab-btn" data-action="tab-diff">
       <span>⚡ Worktree 差异对比 (Branch Diff)</span>
     </button>
-    <button id="tabMr" class="tab-btn" onclick="switchTab('mr')">
+    <button id="tabMr" class="tab-btn" data-action="tab-mr">
       <span>🔀 Merge Requests</span>
     </button>
     <div class="tab-bar-actions">
-      <button id="newMrBtn" class="btn-primary" onclick="openCreateMrModal()" title="基于当前仓库的两个本地分支发起 Merge Request">新建 MR</button>
+      <button id="newMrBtn" class="btn-primary" data-action="open-create-mr" title="基于当前仓库的两个本地分支发起 Merge Request">新建 MR</button>
     </div>
   </div>
 
@@ -47,7 +47,7 @@
     
     <!-- 智能搜索与星标收藏的仓库下拉选择器 -->
     <div class="repo-picker-wrapper" id="repoPickerWrapper">
-      <div class="repo-trigger" id="repoTrigger" onclick="toggleRepoDropdown()">
+      <div class="repo-trigger" id="repoTrigger" data-action="toggle-repo-dropdown">
         <div class="repo-trigger-text" id="repoTriggerText">
           <span>加载中...</span>
         </div>
@@ -60,7 +60,7 @@
             <input type="text" id="repoFilterInput" class="repo-search-input" placeholder="模糊搜索仓库名或路径..." autocomplete="off">
             <button type="button" class="search-clear-btn" id="repoFilterClearBtn" aria-label="清除仓库搜索" title="清除搜索">×</button>
           </div>
-          <button type="button" id="starredFilterBtn" class="btn-outline filter-starred-btn" onclick="toggleStarredOnlyFilter()">
+          <button type="button" id="starredFilterBtn" class="btn-outline filter-starred-btn" data-action="toggle-starred-filter">
             <span>⭐ 只看星标</span>
           </button>
         </div>
@@ -75,15 +75,15 @@
 
     <input id="searchInput" type="search" placeholder="搜索分支或 Worktree..." autocomplete="off" aria-label="搜索分支或 Worktree">
     <button id="refreshBtn" class="btn-outline">全量刷新</button>
-    <button id="scanDirectoryBtn" class="btn-outline" type="button" onclick="openScanDirectoryModal()">扫描目录</button>
+    <button id="scanDirectoryBtn" class="btn-outline" type="button" data-action="open-scan-modal">扫描目录</button>
   </div>
 
   <!-- TAB 1: 仓库透视与管理面板 -->
   <div id="viewOverview">
     <div class="cleanup-toolbar" aria-label="仓库清理操作">
       <button id="pruneBtn" class="btn-outline" type="button" title="清理已经失联的 Worktree 引用">Prune 无效引用</button>
-      <button id="cleanupWorktreesBtn" class="btn-outline" type="button" onclick="runBulkCleanup('worktrees')">移除已同步 Worktree</button>
-      <button id="cleanupBranchesBtn" class="btn-outline" type="button" onclick="runBulkCleanup('branches')">删除无效分支</button>
+      <button id="cleanupWorktreesBtn" class="btn-outline" type="button" data-action="cleanup-worktrees">移除已同步 Worktree</button>
+      <button id="cleanupBranchesBtn" class="btn-outline" type="button" data-action="cleanup-branches">删除无效分支</button>
     </div>
     <div class="metrics-grid">
       <div class="metric-card">
@@ -136,11 +136,11 @@
         <h2>🔀 Merge Requests</h2>
         <div class="mr-panel-controls">
           <div class="diff-mode-segmented" id="mrStatusFilterGroup">
-            <button type="button" class="diff-mode-btn active" data-status="all" onclick="setMrStatusFilter('all')">全部</button>
-            <button type="button" class="diff-mode-btn" data-status="open" onclick="setMrStatusFilter('open')">开启</button>
-            <button type="button" class="diff-mode-btn" data-status="merged" onclick="setMrStatusFilter('merged')">已合并</button>
-            <button type="button" class="diff-mode-btn" data-status="rejected" onclick="setMrStatusFilter('rejected')">已拒绝</button>
-            <button type="button" class="diff-mode-btn" data-status="canceled" onclick="setMrStatusFilter('canceled')">已取消</button>
+            <button type="button" class="diff-mode-btn active" data-status="all" data-action="mr-filter">全部</button>
+            <button type="button" class="diff-mode-btn" data-status="open" data-action="mr-filter">开启</button>
+            <button type="button" class="diff-mode-btn" data-status="merged" data-action="mr-filter">已合并</button>
+            <button type="button" class="diff-mode-btn" data-status="rejected" data-action="mr-filter">已拒绝</button>
+            <button type="button" class="diff-mode-btn" data-status="canceled" data-action="mr-filter">已取消</button>
           </div>
           <span id="mrCountBadge" class="badge">0 个</span>
         </div>
@@ -178,7 +178,7 @@
           <select id="diffBaseSelect" class="picker-select" style="display: none;"></select>
         </div>
 
-        <button class="swap-btn btn-outline" onclick="swapDiffTargets()" title="对调两边的 Worktree/分支">⇄ 对调</button>
+        <button class="swap-btn btn-outline" data-action="swap-diff-targets" title="对调两边的 Worktree/分支">⇄ 对调</button>
 
         <div class="picker-col">
           <label class="picker-label">
@@ -203,8 +203,8 @@
         </div>
 
         <div style="display: flex; gap: 8px; align-self: flex-end; margin-bottom: 2px;">
-          <button class="btn-primary" onclick="fetchAndRenderRefDiff(null, true)" title="使用当前选择的对象重新比对">比对 Diff</button>
-          <button id="diffRefreshBtn" class="btn-outline" onclick="refreshCurrentDiff()" title="重新扫描仓库状态并刷新当前 Diff">刷新状态</button>
+          <button class="btn-primary" data-action="run-ref-diff" title="使用当前选择的对象重新比对">比对 Diff</button>
+          <button id="diffRefreshBtn" class="btn-outline" data-action="refresh-current-diff" title="重新扫描仓库状态并刷新当前 Diff">刷新状态</button>
         </div>
       </div>
 
@@ -224,7 +224,7 @@
     <div class="scan-directory-card">
       <div class="scan-directory-header">
         <h2 id="scanDirectoryModalTitle">配置扫描目录</h2>
-        <button class="drawer-close" type="button" onclick="closeScanDirectoryModal()" aria-label="关闭">×</button>
+        <button class="drawer-close" type="button" data-action="close-scan-modal" aria-label="关闭">×</button>
       </div>
       <div class="scan-directory-body">
         <div id="scanDirectoryFirstRun" class="scan-directory-first-run" style="display: none;">
@@ -236,21 +236,21 @@
         <div class="scan-directory-section-title">已添加的 Workspace 目录</div>
         <div id="scanDirectoryList" class="scan-directory-list"></div>
         <div class="scan-directory-choose-row">
-          <button id="chooseScanDirectoryBtn" class="btn-primary" type="button" onclick="chooseScanDirectory()">选择文件夹…</button>
+          <button id="chooseScanDirectoryBtn" class="btn-primary" type="button" data-action="choose-scan-directory">选择文件夹…</button>
           <span>可重复选择多个目录</span>
         </div>
         <details class="scan-directory-manual">
           <summary>或手动输入目录路径</summary>
           <div class="scan-directory-add-row">
             <input id="scanDirectoryInput" type="text" placeholder="~/Projects" autocomplete="off" aria-label="自定义扫描目录">
-            <button class="btn-outline" type="button" onclick="addScanDirectory()">添加路径</button>
+            <button class="btn-outline" type="button" data-action="add-scan-directory">添加路径</button>
           </div>
         </details>
         <div id="scanDirectoryError" class="scan-directory-error" role="alert"></div>
       </div>
       <div class="scan-directory-footer">
-        <button class="btn-outline" type="button" onclick="closeScanDirectoryModal()">稍后设置</button>
-        <button id="saveScanDirectoryBtn" class="btn-primary" type="button" onclick="saveScanDirectories()">保存并扫描</button>
+        <button class="btn-outline" type="button" data-action="close-scan-modal">稍后设置</button>
+        <button id="saveScanDirectoryBtn" class="btn-primary" type="button" data-action="save-scan-directories">保存并扫描</button>
       </div>
     </div>
   </div>
@@ -269,8 +269,8 @@
         </label>
       </div>
       <div class="worktree-remove-footer">
-        <button class="btn-outline" type="button" onclick="closeWorktreeRemoveModal(false)">取消</button>
-        <button class="btn-danger" type="button" onclick="closeWorktreeRemoveModal(true)">确认移除</button>
+        <button class="btn-outline" type="button" data-action="remove-modal-cancel">取消</button>
+        <button class="btn-danger" type="button" data-action="remove-modal-confirm">确认移除</button>
       </div>
     </div>
   </div>
@@ -280,7 +280,7 @@
     <div class="scan-directory-card">
       <div class="scan-directory-header">
         <h2 id="createMrModalTitle">新建 Merge Request</h2>
-        <button class="drawer-close" type="button" onclick="closeCreateMrModal()" aria-label="关闭">×</button>
+        <button class="drawer-close" type="button" data-action="close-create-mr" aria-label="关闭">×</button>
       </div>
       <div class="scan-directory-body">
         <div class="mr-form-group">
@@ -333,18 +333,18 @@
         <div id="mrCreateError" class="mr-detail-error" role="alert"></div>
       </div>
       <div class="scan-directory-footer">
-        <button class="btn-outline" type="button" onclick="closeCreateMrModal()">取消</button>
-        <button id="mrCreateSubmitBtn" class="btn-primary" type="button" onclick="submitCreateMr()">创建 Merge Request</button>
+        <button class="btn-outline" type="button" data-action="close-create-mr">取消</button>
+        <button id="mrCreateSubmitBtn" class="btn-primary" type="button" data-action="submit-create-mr">创建 Merge Request</button>
       </div>
     </div>
   </div>
 
   <!-- MR 详情抽屉：复用提交抽屉的抽屉 DOM/CSS 模式 -->
-  <div id="mrDrawerOverlay" class="drawer-overlay" style="display:none" onclick="closeMrDrawer()"></div>
+  <div id="mrDrawerOverlay" class="drawer-overlay" style="display:none" data-action="close-mr-drawer"></div>
   <div id="mrDrawer" class="commits-drawer" style="display:none" role="dialog" aria-label="Merge Request 详情">
     <div class="commits-drawer-header">
       <h3 id="mrDrawerTitle">🔀 Merge Request 详情</h3>
-      <button class="drawer-close" onclick="closeMrDrawer()" aria-label="关闭">×</button>
+      <button class="drawer-close" data-action="close-mr-drawer" aria-label="关闭">×</button>
     </div>
     <div class="commits-drawer-body" id="mrDrawerBody"></div>
   </div>
@@ -358,17 +358,17 @@
   <script src="./app.js"></script>
 
   <!-- 回到顶部浮动按钮 -->
-  <button id="backToTopBtn" class="back-to-top-btn" onclick="scrollToTop()" title="回到顶部" aria-label="回到顶部">
+  <button id="backToTopBtn" class="back-to-top-btn" data-action="scroll-to-top" title="回到顶部" aria-label="回到顶部">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
       <path d="M18 15l-6-6-6 6"/>
     </svg>
   </button>
   <!-- 提交记录抽屉 -->
-  <div id="commitsDrawerOverlay" class="drawer-overlay" style="display:none" onclick="closeCommitsDrawer()"></div>
+  <div id="commitsDrawerOverlay" class="drawer-overlay" style="display:none" data-action="close-commits-drawer"></div>
   <div id="commitsDrawer" class="commits-drawer" style="display:none" role="dialog" aria-label="提交记录">
     <div class="commits-drawer-header">
       <h3>📋 提交记录</h3>
-      <button class="drawer-close" onclick="closeCommitsDrawer()" aria-label="关闭">×</button>
+      <button class="drawer-close" data-action="close-commits-drawer" aria-label="关闭">×</button>
     </div>
     <div class="commits-drawer-meta" id="commitsDrawerMeta"></div>
     <div class="commits-drawer-filters" id="commitsDrawerFilters">
@@ -376,12 +376,12 @@
       <input type="text" id="commitFilterGrep" class="commit-filter-text" placeholder="关键词" title="按提交说明关键词过滤（字面匹配）" autocomplete="off">
       <input type="date" id="commitFilterSince" class="commit-filter-date" title="起始日期（含当天）">
       <input type="date" id="commitFilterUntil" class="commit-filter-date" title="结束日期（含当天）">
-      <button type="button" class="btn-outline commit-filter-btn" onclick="applyCommitsFilters()" title="应用过滤条件">应用</button>
-      <button type="button" class="btn-outline commit-filter-btn" onclick="clearCommitsFilters()" title="清空过滤条件">清空</button>
+      <button type="button" class="btn-outline commit-filter-btn" data-action="apply-commits-filters" title="应用过滤条件">应用</button>
+      <button type="button" class="btn-outline commit-filter-btn" data-action="clear-commits-filters" title="清空过滤条件">清空</button>
     </div>
     <div class="commits-drawer-body" id="commitsDrawerBody"></div>
     <div class="commits-drawer-footer" id="commitsDrawerFooter" style="display:none">
-      <button id="loadMoreCommitsBtn" class="btn-outline" onclick="loadMoreCommits()">加载更多</button>
+      <button id="loadMoreCommitsBtn" class="btn-outline" data-action="load-more-commits">加载更多</button>
     </div>
   </div>
 </body>

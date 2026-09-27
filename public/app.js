@@ -167,9 +167,13 @@
         <div class="scan-directory-item">
           <span class="scan-directory-item-path" title="${escapeHtml(directory)}">${escapeHtml(directory)}</span>
           <span class="scan-directory-item-tag">自定义</span>
-          <button class="btn-outline scan-directory-remove" type="button" onclick="removeScanDirectory(${index})">移除</button>
+          <button class="btn-outline scan-directory-remove" type="button" data-action="scan-remove" data-index="${index}">移除</button>
         </div>
       `).join('');
+      bindActions(container, {
+        // index 是数字，直接经 data-index 传递
+        'scan-remove': (el) => removeScanDirectory(Number(el.dataset.index))
+      });
     }
 
     function openScanDirectoryModal(firstRun = false) {
@@ -964,10 +968,14 @@
           <span class="repo-item-name">${escapeHtml(repo.name)}</span>
           <span class="repo-item-group">${escapeHtml(repo.group || '')}</span>
         </div>
-        <span class="star-icon ${isStarred ? 'starred' : ''}" title="${isStarred ? '取消收藏' : '加入星标'}" onclick="toggleStarRepo('${escapeJsAttr(repo.path)}', event)">
+        <span class="star-icon ${isStarred ? 'starred' : ''}" title="${isStarred ? '取消收藏' : '加入星标'}" data-action="repo-star">
           ${isStarred ? '★' : '☆'}
         </span>
       `;
+      // 星标按钮闭包直引 repo 对象；toggleStarRepo 内部自行 stopPropagation 防触发行选中
+      bindActions(item, {
+        'repo-star': (el, e) => toggleStarRepo(repo.path, e)
+      });
       return item;
     }
 
@@ -1032,15 +1040,23 @@
       currentRepo = '';
       allRepos = [];
       const escaped = escapeHtml(message);
-      const retryButton = '<button class="btn-outline" type="button" onclick="loadProjects()">重试</button>';
+      const retryButton = '<button class="btn-outline" type="button" data-action="projects-retry">重试</button>';
+      const bindRetry = (el) => {
+        if (el) bindActions(el, { 'projects-retry': () => loadProjects() });
+      };
       const dropdown = document.getElementById('repoDropdownList');
       if (dropdown) {
         dropdown.innerHTML = `<div class="loading" style="color: var(--danger);">仓库列表加载失败：${escaped}</div>${retryButton}`;
+        bindRetry(dropdown);
       }
       document.getElementById('repoTriggerText').textContent = '仓库列表加载失败';
       document.getElementById('headerPath').textContent = '';
-      document.getElementById('wtList').innerHTML = `<div class="loading" style="color: var(--danger);">仓库列表加载失败：${escaped}</div>${retryButton}`;
-      document.getElementById('brList').innerHTML = `<div class="loading" style="color: var(--danger);">仓库列表加载失败：${escaped}</div>${retryButton}`;
+      const wtList = document.getElementById('wtList');
+      wtList.innerHTML = `<div class="loading" style="color: var(--danger);">仓库列表加载失败：${escaped}</div>${retryButton}`;
+      bindRetry(wtList);
+      const brList = document.getElementById('brList');
+      brList.innerHTML = `<div class="loading" style="color: var(--danger);">仓库列表加载失败：${escaped}</div>${retryButton}`;
+      bindRetry(brList);
       updateMetrics();
     }
 
@@ -1329,20 +1345,28 @@
             </div>
             <div class="item-path-box">
               <span class="item-path-text">${escapeHtml(wt.path)}</span>
-              <button class="copy-path-btn" onclick="copyText('${escapeJsAttr(wt.path)}', this)" title="复制完整路径">复制</button>
+              <button class="copy-path-btn" data-action="wt-copy-path" title="复制完整路径">复制</button>
             </div>
             ${lastInfo ? `<div class="item-desc">${lastInfo}</div>` : ''}
             ${!wt.existsOnDisk || wt.isPrunable ? '<div class="item-alert">⚠️ 该 Worktree 已损坏或可被安全 prune 清理</div>' : ''}
           </div>
           <div class="item-actions">
             <div class="item-actions-diff-group">
-              ${wt.isDirty ? `<button class="btn-outline" onclick="viewUncommittedDiff('${escapeJsAttr(wt.path)}')" style="color: var(--warning); border-color: rgba(210, 153, 34, 0.4);">未提交 Diff (${wt.dirtyCount})</button>` : ''}
-              ${wt.existsOnDisk ? `<button class="btn-outline" onclick="openCommitsDrawer('${escapeJsAttr(wt.path)}')" title="${wt.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>` : ''}
-              <button class="btn-outline" onclick="viewDiffAgainstMain('${escapeJsAttr(wt.path)}')">与主干对比</button>
+              ${wt.isDirty ? `<button class="btn-outline" data-action="wt-uncommitted-diff" style="color: var(--warning); border-color: rgba(210, 153, 34, 0.4);">未提交 Diff (${wt.dirtyCount})</button>` : ''}
+              ${wt.existsOnDisk ? `<button class="btn-outline" data-action="wt-open-commits" title="${wt.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>` : ''}
+              <button class="btn-outline" data-action="wt-diff-vs-main">与主干对比</button>
             </div>
-            ${!isSafeMain ? `<button class="btn-danger btn-remove-wt" id="btn-rm-wt-${encodeURIComponent(wt.path).replace(/%/g, '_')}" onclick="removeWt('${escapeJsAttr(wt.path)}')">移除</button>` : ''}
+            ${!isSafeMain ? `<button class="btn-danger btn-remove-wt" id="btn-rm-wt-${encodeURIComponent(wt.path).replace(/%/g, '_')}" data-action="wt-remove">移除</button>` : ''}
           </div>
         `;
+        // 事件闭包直引 wt 对象，路径等含特殊字符的实参不再经内联字符串往返（CSP 迁移）
+        bindActions(div, {
+          'wt-copy-path': (el) => copyText(wt.path, el),
+          'wt-uncommitted-diff': () => viewUncommittedDiff(wt.path),
+          'wt-open-commits': () => openCommitsDrawer(wt.path),
+          'wt-diff-vs-main': () => viewDiffAgainstMain(wt.path),
+          'wt-remove': () => removeWt(wt.path)
+        });
         container.appendChild(div);
       });
     }
@@ -1382,11 +1406,17 @@
             : ''}
         </div>
         <div class="item-actions">
-          <button class="btn-outline" onclick="openBranchCommitsDrawer('${escapeJsAttr(b.name)}')" title="${b.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>
-          ${!b.isMain ? `<button class="btn-outline" onclick="viewBranchDiffAgainstMain('${escapeJsAttr(b.name)}')" title="以「仅已提交」模式对比该分支与主分支（仅比较已提交内容，无 Worktree 的分支也可用）">与主分支对比</button>` : ''}
-          ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${escapeJsAttr(b.name)}', ${!(b.isMerged || b.deliveredViaBranch)})">删除</button>` : ''}
+          <button class="btn-outline" data-action="br-open-commits" title="${b.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>
+          ${!b.isMain ? `<button class="btn-outline" data-action="br-diff-vs-main" title="以「仅已提交」模式对比该分支与主分支（仅比较已提交内容，无 Worktree 的分支也可用）">与主分支对比</button>` : ''}
+          ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" data-action="br-del">删除</button>` : ''}
         </div>
       `;
+      // 事件闭包直引 b 对象，分支名不再经内联字符串往返（CSP 迁移）
+      bindActions(div, {
+        'br-open-commits': () => openBranchCommitsDrawer(b.name),
+        'br-diff-vs-main': () => viewBranchDiffAgainstMain(b.name),
+        'br-del': () => delBranch(b.name, !(b.isMerged || b.deliveredViaBranch))
+      });
       return div;
     }
 
@@ -1904,23 +1934,6 @@
     }
 
     /**
-     * 把字符串安全嵌入「内联 onclick 等属性内的 JS 单引号字符串」：
-     * 仅 escapeHtml 不够——浏览器解码属性后 &#039; 会还原成单引号，可打断 JS 字符串造成注入
-     * （Worktree 路径中的撇号即真实触发样本）。这里先做 JS 字符串层转义
-     * （反斜杠/单引号/换行），再叠加 HTML 属性转义，形成双上下文防护。
-     * @param {string} value - 任意 Git 元数据（Worktree 路径、分支名、MR id 等）
-     * @returns {string} 可安全放入 onclick="fn('...')" 的文本
-     */
-    function escapeJsAttr(value) {
-      const js = String(value ?? '')
-        .replace(/\\/g, '\\\\')
-        .replace(/'/g, "\\'")
-        .replace(/\r/g, '\\r')
-        .replace(/\n/g, '\\n');
-      return escapeHtml(js);
-    }
-
-    /**
      * 把 fetch 异常转成可展示的中文错误文案。
      * 网络层失败（服务未启动、连接被拒等）抛出的 TypeError 其 message 是浏览器英文原文，
      * 统一替换为中文兜底；API 业务错误沿用服务端返回的 message。
@@ -1931,6 +1944,46 @@
     function toDisplayErrorMessage(err, fallback) {
       if (err instanceof TypeError) return fallback; // fetch 网络层失败
       return (err && err.message) || fallback;
+    }
+
+    /**
+     * CSP 迁移基础设施：在容器内为带 data-action 标记的元素绑定监听器。
+     * CSP script-src 'self' 禁止内联事件处理器（契约 §14），动态 HTML 模板统一改为
+     * data-action 标记 + innerHTML 写入后经本函数逐元素 addEventListener；
+     * 处理器实参是元素与事件，闭包可直接引用外层数据对象，避免经字符串再解析。
+     * @param {HTMLElement|Document} root - 查找范围（容器或 document）
+     * @param {Record<string, (el: HTMLElement, event: Event) => void>} handlers - action 名到处理器的映射
+     */
+    function bindActions(root, handlers) {
+      root.querySelectorAll('[data-action]').forEach((el) => {
+        const handler = handlers[el.dataset.action];
+        if (handler) el.addEventListener('click', (event) => handler(el, event));
+      });
+    }
+
+    /**
+     * 为一批提交卡片绑定事件（提交抽屉与 MR 提交列表共用同一卡片结构）：
+     * 卡片点击展开详情、SHA 点击复制完整哈希（阻止冒泡防止同时展开详情）。
+     * 卡片经 data-c-idx 携带本批次内的索引，与 commits 一一对齐；已绑定的
+     * 元素以 data-bound 标记跳过，「加载更多」追加渲染时不重复绑定旧卡片。
+     * @param {HTMLElement} rootEl - 卡片所在容器
+     * @param {Array<{hash: string}>} commits - 本次渲染批次的提交数据
+     */
+    function bindCommitCards(rootEl, commits) {
+      rootEl.querySelectorAll('[data-action="commit-toggle"]').forEach((card) => {
+        if (card.dataset.bound) return;
+        card.dataset.bound = '1';
+        const commit = commits[Number(card.dataset.cIdx)];
+        if (!commit) return;
+        card.addEventListener('click', () => toggleCommitDetail(card, commit.hash));
+        const hashEl = card.querySelector('[data-action="commit-copy-hash"]');
+        if (hashEl) {
+          hashEl.addEventListener('click', (event) => {
+            event.stopPropagation();
+            copyText(commit.hash, hashEl);
+          });
+        }
+      });
     }
 
     /* 格式化代码块 */
@@ -2011,7 +2064,7 @@
                 <span>◀ 基准旧图 (Base / HEAD)</span>
               </div>
               <div class="image-diff-preview-wrapper">
-                <img class="image-diff-preview-img" src="${baseImgUrl}" alt="原图 (若新增则无)" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                <img class="image-diff-preview-img" src="${baseImgUrl}" alt="原图 (若新增则无)">
                 <span class="image-diff-empty" style="display: none;">（旧版本中无此图片 / 已新增）</span>
               </div>
             </div>
@@ -2021,7 +2074,7 @@
                 <span>▶ 对比新图 (Target / 当前)</span>
               </div>
               <div class="image-diff-preview-wrapper">
-                <img class="image-diff-preview-img" src="${targetImgUrl}" alt="新图 (若删除则无)" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                <img class="image-diff-preview-img" src="${targetImgUrl}" alt="新图 (若删除则无)">
                 <span class="image-diff-empty" style="display: none;">（当前版本中无此图片 / 已删除）</span>
               </div>
             </div>
@@ -2089,7 +2142,7 @@
       } else if (ahead === 0 && behind === 0) {
         syncStatusBadge = '<span class="badge badge-success">两分支提交完全同步</span>';
       } else if (isBehindOnly) {
-        syncStatusBadge = `<button type="button" class="badge badge-warning diff-sync-action" onclick="showBehindChanges()" title="点击反向查看基准分支引入的文件变更">落后 ${behind} 个提交 · 点击查看主干变更</button>`;
+        syncStatusBadge = `<button type="button" class="badge badge-warning diff-sync-action" data-action="diff-show-behind" title="点击反向查看基准分支引入的文件变更">落后 ${behind} 个提交 · 点击查看主干变更</button>`;
       } else {
         const parts = [];
         if (ahead > 0) parts.push(`<span class="badge badge-success">领先 ${ahead} 个提交</span>`);
@@ -2125,13 +2178,13 @@
       const stashActionsHtml = stashWorktreePath ? `
         <div class="diff-stash-actions">
           ${counts.uncommitted > 0 ? `
-            <button class="btn-outline stash-action-button" title="将全部未提交修改（含未跟踪文件）存入暂存记录" onclick="stashActionWithConfirm('push', '', this)">暂存</button>
+            <button class="btn-outline stash-action-button" title="将全部未提交修改（含未跟踪文件）存入暂存记录" data-action="stash-act" data-stash-action="push">暂存</button>
             <details class="stash-menu">
               <summary class="btn-outline stash-action-button">处理未提交</summary>
               <div class="stash-popover stash-cleanup-menu">
-                <button class="btn-outline stash-action-button" onclick="stashActionWithConfirm('restore', '', this)">还原已跟踪</button>
-                <button class="btn-outline stash-action-button" onclick="stashActionWithConfirm('clean', '', this)">删除未跟踪</button>
-                <button class="btn-danger stash-action-button" onclick="stashActionWithConfirm('discard', '', this)">全部丢弃</button>
+                <button class="btn-outline stash-action-button" data-action="stash-act" data-stash-action="restore">还原已跟踪</button>
+                <button class="btn-outline stash-action-button" data-action="stash-act" data-stash-action="clean">删除未跟踪</button>
+                <button class="btn-danger stash-action-button" data-action="stash-act" data-stash-action="discard">全部丢弃</button>
               </div>
             </details>` : ''}
           <details class="stash-menu">
@@ -2143,21 +2196,21 @@
       const modeControlHtml = `
         <div id="diffModeControl" class="diff-mode-control-row">
           <div class="diff-mode-segmented">
-            <button class="diff-mode-btn ${effectiveMode === 'uncommitted' ? 'active' : ''} ${isModeDisabled('uncommitted') ? 'disabled' : ''}" ${isModeDisabled('uncommitted') ? 'disabled' : ''} onclick="selectDiffMode('uncommitted')" title="${isModeDisabled('uncommitted') ? modeDisabledTitle('uncommitted') : '仅查看当前工作区未提交和未跟踪的代码'}">
+            <button class="diff-mode-btn ${effectiveMode === 'uncommitted' ? 'active' : ''} ${isModeDisabled('uncommitted') ? 'disabled' : ''}" ${isModeDisabled('uncommitted') ? 'disabled' : ''} data-action="diff-mode" data-mode="uncommitted" title="${isModeDisabled('uncommitted') ? modeDisabledTitle('uncommitted') : '仅查看当前工作区未提交和未跟踪的代码'}">
               <span>⚡ 仅未提交 & 未跟踪</span>
               <span class="diff-mode-pill">${counts.uncommitted}</span>
             </button>
-            <button class="diff-mode-btn ${effectiveMode === 'all' ? 'active' : ''} ${isModeDisabled('all') ? 'disabled' : ''}" ${isModeDisabled('all') ? 'disabled' : ''} onclick="selectDiffMode('all')" title="${isModeDisabled('all') ? modeDisabledTitle('all') : '全量对比：已提交分支修改 + 本地未提交改动'}">
+            <button class="diff-mode-btn ${effectiveMode === 'all' ? 'active' : ''} ${isModeDisabled('all') ? 'disabled' : ''}" ${isModeDisabled('all') ? 'disabled' : ''} data-action="diff-mode" data-mode="all" title="${isModeDisabled('all') ? modeDisabledTitle('all') : '全量对比：已提交分支修改 + 本地未提交改动'}">
               <span>📦 全量变更</span>
               <span class="diff-mode-pill">${counts.all}</span>
             </button>
-            <button class="diff-mode-btn ${effectiveMode === 'committed' ? 'active' : ''} ${isModeDisabled('committed') ? 'disabled' : ''}" ${isModeDisabled('committed') ? 'disabled' : ''} onclick="selectDiffMode('committed')" title="${isModeDisabled('committed') ? modeDisabledTitle('committed') : '仅查看已提交的代码修改，忽略未提交'}">
+            <button class="diff-mode-btn ${effectiveMode === 'committed' ? 'active' : ''} ${isModeDisabled('committed') ? 'disabled' : ''}" ${isModeDisabled('committed') ? 'disabled' : ''} data-action="diff-mode" data-mode="committed" title="${isModeDisabled('committed') ? modeDisabledTitle('committed') : '仅查看已提交的代码修改，忽略未提交'}">
               <span>📌 仅已提交</span>
               <span class="diff-mode-pill">${counts.committed}</span>
             </button>
           </div>
           <div class="diff-mode-tip">${modeTipText}</div>
-          ${!diff.isSameWorktree ? '<button class="btn-outline" onclick="openDiffCommitsDrawer()" title="查看目标相对基准的差异提交">差异提交</button>' : ''}
+          ${!diff.isSameWorktree ? '<button class="btn-outline" data-action="open-diff-commits" title="查看目标相对基准的差异提交">差异提交</button>' : ''}
           ${stashActionsHtml}
         </div>
       `;
@@ -2224,7 +2277,7 @@
 
         return `
           <div id="${cardId}" class="file-diff-card">
-            <div class="file-header" onclick="toggleFileDiff('${cardId}')">
+            <div class="file-header" data-action="toggle-file-diff">
               <div class="file-title-left">
                 <span class="file-arrow">▶</span>
                 ${statusTag}
@@ -2260,8 +2313,8 @@
             <span style="font-size: 12px; color: var(--text-muted); font-weight: normal;">单击单个文件展开/收起详情</span>
           </div>
           <div class="diff-tools-right">
-            <button class="btn-outline" onclick="toggleAllDiffs(true)" style="font-size: 12px; padding: 4px 10px;">展开全部</button>
-            <button class="btn-outline" onclick="toggleAllDiffs(false)" style="font-size: 12px; padding: 4px 10px;">收起全部</button>
+            <button class="btn-outline" data-action="toggle-all-diffs" data-expand="1" style="font-size: 12px; padding: 4px 10px;">展开全部</button>
+            <button class="btn-outline" data-action="toggle-all-diffs" data-expand="0" style="font-size: 12px; padding: 4px 10px;">收起全部</button>
           </div>
         </div>
 
@@ -2292,7 +2345,29 @@
       container.dataset.renderedRepo = currentRepo;
       container.dataset.renderedBase = currentDiffBase;
       container.dataset.renderedTarget = currentDiffTarget;
+      bindDiffViewActions(container);
       if (stashWorktreePath) fetchAndRenderStashList(stashWorktreePath);
+    }
+
+    /* 绑定 Diff 视图内全部动态动作（模式切换、stash 快捷操作、文件卡片、图片占位）。
+       每次渲染（全量重建或 preserveShell 局部替换）涉及的元素均为新建，无重复绑定风险 */
+    function bindDiffViewActions(container) {
+      bindActions(container, {
+        'diff-show-behind': () => showBehindChanges(),
+        'diff-mode': (el) => selectDiffMode(el.dataset.mode),
+        'open-diff-commits': () => openDiffCommitsDrawer(),
+        'stash-act': (el) => stashActionWithConfirm(el.dataset.stashAction, '', el),
+        'toggle-file-diff': (el) => toggleFileDiff(el.closest('.file-diff-card').id),
+        'toggle-all-diffs': (el) => toggleAllDiffs(el.dataset.expand === '1')
+      });
+      // 图片加载失败时隐藏预览并显示占位说明（原内联 onerror 的等价迁移；
+      // 绑定在同一同步任务内完成，早于任何 error 事件派发，无遗漏窗口）
+      container.querySelectorAll('.image-diff-preview-img').forEach((img) => {
+        img.addEventListener('error', () => {
+          img.style.display = 'none';
+          if (img.nextElementSibling) img.nextElementSibling.style.display = 'block';
+        });
+      });
     }
 
     /**
@@ -2325,10 +2400,11 @@
           return;
         }
         const rows = stashes.map(s => {
+          // ref 只有匹配 stash@{n} 白名单格式才渲染操作按钮，杜绝任意字符串进入动作链路
           const refOk = /^stash@\{\d+\}$/.test(s.ref || '');
           const actions = refOk
-            ? `<button class="btn-outline" onclick="stashActionWithConfirm('pop', '${s.ref}', this)">还原</button>` +
-              `<button class="btn-danger" onclick="stashActionWithConfirm('drop', '${s.ref}', this)">删除</button>`
+            ? `<button class="btn-outline" data-action="stash-pop">还原</button>` +
+              `<button class="btn-danger" data-action="stash-drop">删除</button>`
             : '';
           return `<div class="stash-item">
             <span class="stash-ref">${escapeHtml(s.ref)}</span>
@@ -2347,6 +2423,15 @@
           </div>
           ${rows}
         `;
+        // 按行对齐 stash 记录绑定闭包，ref 不经字符串往返；按钮仅 refOk 行渲染，缺失时跳过
+        el.querySelectorAll('.stash-item').forEach((row, index) => {
+          const stash = stashes[index];
+          if (!stash) return;
+          const popBtn = row.querySelector('[data-action="stash-pop"]');
+          const dropBtn = row.querySelector('[data-action="stash-drop"]');
+          if (popBtn) popBtn.addEventListener('click', () => stashActionWithConfirm('pop', stash.ref, popBtn));
+          if (dropBtn) dropBtn.addEventListener('click', () => stashActionWithConfirm('drop', stash.ref, dropBtn));
+        });
       } catch (err) {
         el.innerHTML = `<div class="stash-item" style="color: var(--danger);">历史暂存加载失败：${escapeHtml(toDisplayErrorMessage(err, '无法连接本地服务'))}</div>`;
       }
@@ -2671,15 +2756,19 @@
       const fullHistoryButton = data.isMainHistory
         ? ''
         : data.isFullHistory
-          ? '<button type="button" class="btn-outline" style="padding: 3px 8px; font-size: 12px;" onclick="switchCommitsHistory(false)">返回领先提交</button>'
-          : '<button type="button" class="btn-outline" style="padding: 3px 8px; font-size: 12px;" onclick="switchCommitsHistory(true)">查看全量历史</button>';
-      document.getElementById('commitsDrawerMeta').innerHTML = `
+          ? '<button type="button" class="btn-outline" style="padding: 3px 8px; font-size: 12px;" data-action="commits-history" data-full="0">返回领先提交</button>'
+          : '<button type="button" class="btn-outline" style="padding: 3px 8px; font-size: 12px;" data-action="commits-history" data-full="1">查看全量历史</button>';
+      const metaEl = document.getElementById('commitsDrawerMeta');
+      metaEl.innerHTML = `
         <span class="badge" title="基准: ${escapeHtml(data.base)}">🌿 ${escapeHtml(data.branch)}</span>
         <code style="color: var(--accent);">${escapeHtml((data.head || '').slice(0, 7))}</code>
         <span>${scopeText}</span>
         ${renderAheadBehindBadgeHtml()}
         ${fullHistoryButton}
       `;
+      bindActions(metaEl, {
+        'commits-history': (el) => switchCommitsHistory(el.dataset.full === '1')
+      });
     }
 
     // 根据领先/落后数据生成徽章 HTML；无数据或基准不可解析时返回空串（静默隐藏）。
@@ -2820,8 +2909,11 @@
               <div class="empty-state-icon">🔍</div>
               <div>没有符合过滤条件的提交</div>
               <div style="font-size:12px">可调整过滤条件，或清空后查看全部提交</div>
-              <button class="btn-outline" style="margin-top:8px" onclick="clearCommitsFilters()">清空过滤</button>
+              <button class="btn-outline" style="margin-top:8px" data-action="commits-clear-filters">清空过滤</button>
             </div>`;
+          bindActions(body, {
+            'commits-clear-filters': () => clearCommitsFilters()
+          });
           return;
         }
         const emptyText = commitsDrawerState.isFullHistory
@@ -2846,16 +2938,16 @@
       // 按遇到顺序分组：标签与上一条不同时插入组头（git log 新到旧有序，正常场景组头单调递减；
       // 若出现乱序输入，重复的标签会再次插入组头，仅影响观感不影响功能）
       const chunks = [];
-      commits.forEach(c => {
+      commits.forEach((c, batchIdx) => {
         const groupLabel = getCommitDateGroupLabel(c.date);
         if (groupLabel !== commitsDrawerState.lastGroupLabel) {
           commitsDrawerState.lastGroupLabel = groupLabel;
           chunks.push(`<div class="commit-date-group">${escapeHtml(groupLabel)}</div>`);
         }
         chunks.push(`
-        <div class="commit-item clickable" onclick="toggleCommitDetail(this, '${escapeHtml(c.hash)}')">
+        <div class="commit-item clickable" data-action="commit-toggle" data-c-idx="${batchIdx}">
           <div class="commit-item-header">
-            <span class="commit-hash" onclick="event.stopPropagation(); copyText('${escapeHtml(c.hash)}', this)" title="点击复制完整 SHA">${escapeHtml(c.shortHash)}</span>
+            <span class="commit-hash" data-action="commit-copy-hash" title="点击复制完整 SHA">${escapeHtml(c.shortHash)}</span>
             <span class="commit-time">${escapeHtml(c.relativeTime)}</span>
           </div>
           <div class="commit-subject" title="${escapeHtml(c.subject)}">${escapeHtml(c.subject)}</div>
@@ -2872,6 +2964,8 @@
       } else {
         body.insertAdjacentHTML('beforeend', html);
       }
+      // 写入后按批次绑定闭包（hash 不经内联字符串往返）；追加加载时旧卡片已被 data-bound 跳过
+      bindCommitCards(body, commits);
     }
 
     /**
@@ -2945,11 +3039,11 @@
       const filesChanged = Number(data.filesChanged) || 0;
       const insertions = Number(data.insertions) || 0;
       const deletions = Number(data.deletions) || 0;
-      // 父提交只放行十六进制 SHA 才会进入 onclick，展示时取短哈希、复制时给完整值
+      // 父提交只放行十六进制 SHA 才会进入复制动作，展示时取短哈希、复制时给完整值
       const parents = (data.parents || []).filter(p => /^[0-9a-fA-F]{7,40}$/.test(p));
       const parentsHtml = parents.length === 0
         ? '<span>无（根提交）</span>'
-        : parents.map(p => `<span class="commit-detail-parent" title="点击复制完整 SHA" onclick="event.stopPropagation(); copyText('${p}', this)">${escapeHtml(p.slice(0, 7))}</span>`).join('');
+        : parents.map(p => `<span class="commit-detail-parent" data-action="copy-parent" title="点击复制完整 SHA">${escapeHtml(p.slice(0, 7))}</span>`).join('');
       const filesHtml = (data.files || []).map(f => {
         const filePath = escapeHtml(f.filePath || '');
         if (f.isBinary) {
@@ -2959,10 +3053,10 @@
         const deleted = Number(f.deleted) || 0;
         return `<div class="commit-detail-file"><span class="commit-detail-file-path" title="${filePath}">${filePath}</span><span class="commit-detail-file-stats"><span class="add-count">+${added}</span> / <span class="del-count">-${deleted}</span></span></div>`;
       }).join('');
-      // 「查看 Diff」按钮：确有文件变更且响应里是合法十六进制 SHA 时才展示，onclick 只传 SHA
+      // 「查看 Diff」按钮：确有文件变更且响应里是合法十六进制 SHA 时才展示，动作只传 SHA
       const detailSha = /^[0-9a-fA-F]{7,40}$/.test(data.hash || '') ? data.hash : '';
       const diffToggleHtml = filesChanged > 0 && detailSha
-        ? `<button type="button" class="btn-outline commit-diff-toggle-btn" onclick="event.stopPropagation(); toggleCommitDiff(this.closest('.commit-detail'), '${detailSha}')">查看 Diff</button>`
+        ? `<button type="button" class="btn-outline commit-diff-toggle-btn" data-action="commit-view-diff">查看 Diff</button>`
         : '';
       // Cherry-pick / Revert 按钮：仅在详情面板已拿到合法 SHA 时渲染，onclick 只传 action 名与 SHA
       // 目标工作区选择器：选项来自当前仓库的 worktree 列表，主工作区置顶；
@@ -2978,7 +3072,7 @@
       const hasMain = targetWts.some(w => w.isMain);
       const hasContext = targetWts.some(w => w.path === contextPath);
       const targetSelectHtml = detailSha && targetWts.length > 0
-        ? `<select class="commit-action-target" title="Cherry-pick 作用的目标工作区（Revert 固定作用于当前查看的 worktree，不受此选项影响）" onclick="event.stopPropagation()" onchange="this.dataset.touched='1'">` +
+        ? `<select class="commit-action-target" title="Cherry-pick 作用的目标工作区（Revert 固定作用于当前查看的 worktree，不受此选项影响）">` +
           targetWts.map((w, idx) => {
             const selected = hasMain ? w.isMain : (hasContext ? w.path === contextPath : idx === 0);
             const label = `${w.isMain ? '主工作区' : 'Worktree'} (${w.branch || 'detached'})`;
@@ -2987,8 +3081,8 @@
         : '';
       const actionButtonsHtml = detailSha
         ? targetSelectHtml +
-          `<button type="button" class="btn-outline commit-action-btn" onclick="event.stopPropagation(); commitActionWithConfirm('cherry-pick', '${detailSha}', this)">🍒 Cherry-pick</button>` +
-          `<button type="button" class="btn-outline commit-action-btn" onclick="event.stopPropagation(); commitActionWithConfirm('revert', '${detailSha}', this)">↩️ Revert</button>`
+          `<button type="button" class="btn-outline commit-action-btn" data-action="commit-act" data-commit-action="cherry-pick">🍒 Cherry-pick</button>` +
+          `<button type="button" class="btn-outline commit-action-btn" data-action="commit-act" data-commit-action="revert">↩️ Revert</button>`
         : '';
       // 「查看 Diff」与写操作按钮统一放进一行操作区，两者皆空时不渲染容器
       const actionsHtml = (diffToggleHtml || actionButtonsHtml)
@@ -3001,6 +3095,37 @@
         ${filesHtml}
         ${actionsHtml}
       `;
+      bindCommitDetailActions(panel, parents, detailSha);
+    }
+
+    /* 绑定提交详情面板内的动态动作：父提交复制、查看 Diff、目标选择器、Cherry-pick/Revert。
+       SHA 经白名单校验后由闭包直引，不再经内联字符串往返（CSP 迁移） */
+    function bindCommitDetailActions(panel, parents, detailSha) {
+      // 父提交复制：按渲染顺序与 parents 对齐取完整 SHA；阻止冒泡避免同时展开/收起详情
+      panel.querySelectorAll('.commit-detail-parent').forEach((el, index) => {
+        el.addEventListener('click', (event) => {
+          event.stopPropagation();
+          copyText(parents[index], el);
+        });
+      });
+      const viewDiffBtn = panel.querySelector('[data-action="commit-view-diff"]');
+      if (viewDiffBtn) {
+        viewDiffBtn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          toggleCommitDiff(panel, detailSha);
+        });
+      }
+      panel.querySelectorAll('[data-action="commit-act"]').forEach((btn) => {
+        btn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          commitActionWithConfirm(btn.dataset.commitAction, detailSha, btn);
+        });
+      });
+      // 选择器点击不冒泡到提交卡片（防止误触发展开/收起）；手动改动后标记 touched
+      panel.querySelectorAll('.commit-action-target').forEach((sel) => {
+        sel.addEventListener('click', (event) => event.stopPropagation());
+        sel.addEventListener('change', () => { sel.dataset.touched = '1'; });
+      });
     }
 
     /**
@@ -3149,7 +3274,8 @@
         if (!section.isConnected) return;
         section.innerHTML = `
           <div class="commit-detail-error">加载 Diff 失败：${escapeHtml(toDisplayErrorMessage(err, '无法连接本地服务'))}</div>
-          <button type="button" class="btn-outline commit-diff-toggle-btn" onclick="retryCommitDiff(this, '${sha}')">重试</button>`;
+          <button type="button" class="btn-outline commit-diff-toggle-btn" data-action="diff-retry">重试</button>`;
+        section.querySelector('[data-action="diff-retry"]')?.addEventListener('click', () => retryCommitDiff(section, sha));
       }
     }
 
@@ -3219,13 +3345,15 @@
     }
 
     function renderCommitsError(message) {
-      document.getElementById('commitsDrawerBody').innerHTML = `
+      const body = document.getElementById('commitsDrawerBody');
+      body.innerHTML = `
         <div class="empty-state">
           <div class="empty-state-icon">⚠️</div>
           <div>加载提交记录失败</div>
           <div style="font-size:12px">${escapeHtml(message)}</div>
-          <button class="btn-outline" style="margin-top:8px" onclick="retryCommitsDrawer()">重试</button>
+          <button class="btn-outline" style="margin-top:8px" data-action="commits-retry">重试</button>
         </div>`;
+      body.querySelector('[data-action="commits-retry"]')?.addEventListener('click', () => retryCommitsDrawer());
       document.getElementById('commitsDrawerFooter').style.display = 'none';
     }
 
@@ -3347,7 +3475,7 @@
         return;
       }
       container.innerHTML = mergeRequestsCache.map(mr => `
-        <div class="list-item" style="cursor: pointer;" onclick="openMrDetail('${escapeJsAttr(String(mr.id))}')">
+        <div class="list-item" style="cursor: pointer;" data-action="mr-row-open">
           <div class="item-main">
             <div class="item-header-row">
               <div class="item-name"><span>🔀</span><span>${escapeHtml(mr.title)}</span></div>
@@ -3359,10 +3487,20 @@
             </div>
           </div>
           <div class="item-actions">
-            <button class="btn-outline" onclick="event.stopPropagation(); openMrDetail('${escapeJsAttr(String(mr.id))}')">查看详情</button>
+            <button class="btn-outline" data-action="mr-open-detail">查看详情</button>
           </div>
         </div>
       `).join('');
+      // 行与按钮闭包直引 mr 记录，id 不经内联字符串往返（CSP 迁移）；行序与缓存严格对齐
+      container.querySelectorAll('.list-item').forEach((row, index) => {
+        const mr = mergeRequestsCache[index];
+        if (!mr) return;
+        row.addEventListener('click', () => openMrDetail(String(mr.id)));
+        row.querySelector('[data-action="mr-open-detail"]')?.addEventListener('click', (event) => {
+          event.stopPropagation(); // 与原内联一致：按钮点击不触发行点击
+          openMrDetail(String(mr.id));
+        });
+      });
     }
 
     /* MR 弹层的分支选择器选项：仅本地分支 */
@@ -3536,8 +3674,9 @@
             <div class="empty-state-icon">⚠️</div>
             <div>加载 Merge Request 详情失败</div>
             <div style="font-size:12px">${escapeHtml(errorMessage || '未知错误')}</div>
-            <button class="btn-outline" style="margin-top:8px" onclick="refreshMergeRequestDetail()">重试</button>
+            <button class="btn-outline" style="margin-top:8px" data-action="mr-retry">重试</button>
           </div>`;
+        body.querySelector('[data-action="mr-retry"]')?.addEventListener('click', () => refreshMergeRequestDetail());
         body.scrollTop = prevScrollTop;
         return;
       }
@@ -3583,7 +3722,7 @@
         </div>
 
         <div class="mr-detail-section">
-          <button type="button" class="btn-outline" style="width: 100%;" onclick="openMrBranchDiff()">⚡ 在 Diff 中查看 Branch Diff</button>
+          <button type="button" class="btn-outline" style="width: 100%;" data-action="mr-open-diff">⚡ 在 Diff 中查看 Branch Diff</button>
         </div>
 
         <div class="mr-detail-section">
@@ -3591,6 +3730,10 @@
           <div id="mrCommitsContainer"><div class="loading" style="padding: 12px;">正在加载提交列表...</div></div>
         </div>
       `;
+      bindActions(body, {
+        'mr-open-diff': () => openMrBranchDiff()
+      });
+      bindMrActionButtons();
       body.scrollTop = prevScrollTop;
     }
 
@@ -3615,17 +3758,26 @@
       }
       const parts = [];
       if (mr.reviewStatus === 'approved') {
-        parts.push('<button type="button" class="btn-primary" onclick="mrAction(\'merge\', this, true)" title="将执行 --no-ff 合并到 target 分支的 Worktree">✅ 合并 (--no-ff)</button>');
+        parts.push('<button type="button" class="btn-primary" data-action="mr-act" data-mr-action="merge" data-need-confirm="1" title="将执行 --no-ff 合并到 target 分支的 Worktree">✅ 合并 (--no-ff)</button>');
       } else if (mr.reviewStatus === 'changes_requested') {
-        parts.push('<button type="button" class="btn-outline" onclick="mrAction(\'approve\', this)">重新通过（审阅通过）</button>');
+        parts.push('<button type="button" class="btn-outline" data-action="mr-act" data-mr-action="approve">重新通过（审阅通过）</button>');
         parts.push('<button type="button" class="btn-primary" disabled title="审阅通过后才能合并">✅ 合并</button>');
       } else {
-        parts.push('<button type="button" class="btn-outline" onclick="mrAction(\'approve\', this)">审阅通过</button>');
+        parts.push('<button type="button" class="btn-outline" data-action="mr-act" data-mr-action="approve">审阅通过</button>');
       }
-      parts.push('<button type="button" class="btn-outline" onclick="mrAction(\'request_changes\', this)">要求修改</button>');
-      parts.push('<button type="button" class="btn-danger" onclick="mrAction(\'reject\', this)">拒绝</button>');
-      parts.push('<button type="button" class="btn-outline" onclick="mrAction(\'cancel\', this)">取消</button>');
+      parts.push('<button type="button" class="btn-outline" data-action="mr-act" data-mr-action="request_changes">要求修改</button>');
+      parts.push('<button type="button" class="btn-danger" data-action="mr-act" data-mr-action="reject">拒绝</button>');
+      parts.push('<button type="button" class="btn-outline" data-action="mr-act" data-mr-action="cancel">取消</button>');
       return parts.join('');
+    }
+
+    /* 绑定 MR 操作按钮：action 名经 data-mr-action 白名单式标记传递，needConfirm 仅合并需要 */
+    function bindMrActionButtons() {
+      const holder = document.getElementById('mrActionButtons');
+      if (!holder) return;
+      bindActions(holder, {
+        'mr-act': (el) => mrAction(el.dataset.mrAction, el, el.dataset.needConfirm === '1')
+      });
     }
 
     /* 操作期间禁用全部操作按钮；恢复时按当前 MR 状态重建（保持「合并」的条件禁用态） */
@@ -3636,6 +3788,7 @@
         holder.querySelectorAll('button').forEach(b => { b.disabled = true; });
       } else if (currentMrDetail) {
         holder.innerHTML = buildMrActionButtonsHtml(currentMrDetail);
+        bindMrActionButtons();
       }
     }
 
@@ -3668,11 +3821,20 @@
       const label = MR_ACTION_LABELS[action] || '操作';
       holder.innerHTML = `
         <div class="mr-reason-row">
-          <input type="text" id="mrReasonInput" class="mr-reason-input" placeholder="${label}原因（可留空）" onkeydown="if(event.key==='Enter'){event.preventDefault();submitMrReason('${action}');}">
-          <button type="button" class="btn-primary" onclick="submitMrReason('${action}')">确认${label}</button>
-          <button type="button" class="btn-outline" onclick="renderMrDetail(currentMrDetail, null, true)">返回</button>
+          <input type="text" id="mrReasonInput" class="mr-reason-input" placeholder="${label}原因（可留空）">
+          <button type="button" class="btn-primary" data-action="mr-reason-submit">确认${label}</button>
+          <button type="button" class="btn-outline" data-action="mr-reason-back">返回</button>
         </div>`;
+      // action 与 label 均来自页面内白名单常量，闭包直引不再拼进事件属性（CSP 迁移）
       const input = document.getElementById('mrReasonInput');
+      holder.querySelector('[data-action="mr-reason-submit"]')?.addEventListener('click', () => submitMrReason(action));
+      holder.querySelector('[data-action="mr-reason-back"]')?.addEventListener('click', () => renderMrDetail(currentMrDetail, null, true));
+      input?.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          submitMrReason(action);
+        }
+      });
       if (input) input.focus();
     }
 
@@ -3765,10 +3927,10 @@
           return;
         }
         // 卡片结构与提交抽屉一致：点击展开详情，点击 SHA 复制完整哈希（阻止冒泡）
-        let html = commits.map(c => `
-          <div class="commit-item clickable" onclick="toggleCommitDetail(this, '${escapeHtml(c.hash)}')">
+        let html = commits.map((c, batchIdx) => `
+          <div class="commit-item clickable" data-action="commit-toggle" data-c-idx="${batchIdx}">
             <div class="commit-item-header">
-              <span class="commit-hash" onclick="event.stopPropagation(); copyText('${escapeHtml(c.hash)}', this)" title="点击复制完整 SHA">${escapeHtml(c.shortHash)}</span>
+              <span class="commit-hash" data-action="commit-copy-hash" title="点击复制完整 SHA">${escapeHtml(c.shortHash)}</span>
               <span class="commit-time">${escapeHtml(c.relativeTime)}</span>
             </div>
             <div class="commit-subject" title="${escapeHtml(c.subject)}">${escapeHtml(c.subject)}</div>
@@ -3779,6 +3941,8 @@
           html = `<div class="commit-diff-empty" style="color: var(--warning);">⚠️ 这些提交的内容已被 ${escapeHtml(mr.targetBranch)} 吸收（cherry-pick / squash / revert 抵消等），合并不会产生实际文件变化。</div>` + html;
         }
         container.innerHTML = html;
+        // 与提交抽屉同一批次绑定逻辑（闭包直引 commits，hash 不经字符串往返）
+        bindCommitCards(container, commits);
       } catch (err) {
         if (seq !== mrCommitsReqSeq) return;
         container.innerHTML = `<div class="commit-detail-error">提交列表加载失败：${escapeHtml(toDisplayErrorMessage(err, '无法连接本地服务'))}</div>`;
@@ -3934,6 +4098,49 @@
           return loadProjects(false);
         })
         .catch((err) => console.warn('恢复页面历史状态失败:', err.message));
+    });
+
+    /* 静态 DOM 的内联事件迁移（CSP script-src 'self' 禁止 onclick 等内联处理器）：
+       原 HTML 内联 onclick 统一改为 data-action 标记，由 document 级 click 委托按下表分发。
+       采用委托的原因：脚本位于 body 末尾时部分静态元素（回到顶部按钮、提交抽屉等）尚未解析，
+       逐点绑定会漏绑，而委托与原 onclick 同处冒泡阶段、天然与解析时序无关，语义逐点等价。
+       静态区不存在嵌套 data-action 元素，closest 命中最内层标记即原事件目标；
+       分发表内硬编码原内联处理器的固定实参。动态渲染元素虽有同名标记机制（bindActions），
+       但 action 命名与本表不重叠，不会被误分发 */
+    const STATIC_CLICK_ACTIONS = {
+      'tab-overview': () => switchTab('overview'),
+      'tab-diff': () => switchTab('diff'),
+      'tab-mr': () => switchTab('mr'),
+      'open-create-mr': () => openCreateMrModal(),
+      'toggle-repo-dropdown': () => toggleRepoDropdown(),
+      'toggle-starred-filter': () => toggleStarredOnlyFilter(),
+      'open-scan-modal': () => openScanDirectoryModal(),
+      'cleanup-worktrees': () => runBulkCleanup('worktrees'),
+      'cleanup-branches': () => runBulkCleanup('branches'),
+      'mr-filter': (el) => setMrStatusFilter(el.dataset.status),
+      'swap-diff-targets': () => swapDiffTargets(),
+      'run-ref-diff': () => fetchAndRenderRefDiff(null, true),
+      'refresh-current-diff': () => refreshCurrentDiff(),
+      'close-scan-modal': () => closeScanDirectoryModal(),
+      'choose-scan-directory': () => chooseScanDirectory(),
+      'add-scan-directory': () => addScanDirectory(),
+      'save-scan-directories': () => saveScanDirectories(),
+      'remove-modal-cancel': () => closeWorktreeRemoveModal(false),
+      'remove-modal-confirm': () => closeWorktreeRemoveModal(true),
+      'close-create-mr': () => closeCreateMrModal(),
+      'submit-create-mr': () => submitCreateMr(),
+      'close-mr-drawer': () => closeMrDrawer(),
+      'close-commits-drawer': () => closeCommitsDrawer(),
+      'apply-commits-filters': () => applyCommitsFilters(),
+      'clear-commits-filters': () => clearCommitsFilters(),
+      'load-more-commits': () => loadMoreCommits(),
+      'scroll-to-top': () => scrollToTop()
+    };
+    document.addEventListener('click', (e) => {
+      const el = e.target instanceof Element ? e.target.closest('[data-action]') : null;
+      if (!el) return;
+      const handler = STATIC_CLICK_ACTIONS[el.dataset.action];
+      if (handler) handler(el, e);
     });
 
     /* 页面事件监听 */
@@ -4156,7 +4363,7 @@
 
     /* crashed 态「复制诊断信息」：写入运行时信息与时间戳，便于用户粘贴反馈；
        剪贴板 API 不可用时回退到隐藏 textarea 方案（与 copyText 一致） */
-    async function copyServiceDiagnostics() {
+    async function copyServiceDiagnostics(btn) {
       const payload = JSON.stringify({
         state: 'crashed',
         time: new Date().toISOString(),
@@ -4164,7 +4371,6 @@
         userAgent: navigator.userAgent,
         runtime: desktopRuntimeInfo || null
       }, null, 2);
-      const btn = document.getElementById('copyServiceDiagnosticsBtn');
       try {
         await navigator.clipboard.writeText(payload);
       } catch (err) {
@@ -4208,10 +4414,14 @@
             '本地服务意外退出',
             '后台服务进程已退出，通常会由桌面端自动重启；稍候可点击「重试」重新加载页面。',
             false,
-            '<button type="button" class="btn-primary" onclick="location.reload()">重试</button>' +
-            '<button type="button" id="copyServiceDiagnosticsBtn" class="btn-outline" onclick="copyServiceDiagnostics()">复制诊断信息</button>'
+            '<button type="button" class="btn-primary" data-action="service-retry">重试</button>' +
+            '<button type="button" class="btn-outline" data-action="service-copy-diagnostics">复制诊断信息</button>'
           );
           setServiceOverlay(true);
+          bindActions(document.getElementById('serviceStateActions'), {
+            'service-retry': () => location.reload(),
+            'service-copy-diagnostics': (el) => copyServiceDiagnostics(el)
+          });
           break;
         case 'stopped':
           stopServiceRestartTimer();
