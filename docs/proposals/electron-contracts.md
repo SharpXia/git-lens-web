@@ -168,3 +168,16 @@ QA 提供单一入口（G0 起为 `npm run test:isolated`；G4 前扩展 `npm ru
 
 - **Electron 44.4.5**（2026-09-27 锁定，latest stable；升级需协调 Agent 修订本条）；electron-builder 待 Release 开工时锁定。
 - 本机 npm 启用了 install-scripts 审批，`npm ci`/`npm install` 可能跳过 electron 的 postinstall 导致二进制缺失。各 worktree 安装依赖后必须验证：`ls node_modules/electron/dist/Electron.app`（macOS）；缺失时执行 `node node_modules/electron/install.js` 手动补齐，禁止提交 node_modules。
+
+## 13. Electron E2E 钩子契约（Shell 实现，QA 消费，G2 起）
+
+主进程识别以下环境变量（全部可选，生产用户不设置时零影响）：
+
+| 环境变量 | 语义 |
+| --- | --- |
+| `GIT_LENS_USER_DATA` | 存在时 `app.setPath('userData', <该目录>)`，且必须先于任何 userData 读写生效；目录不存在由 QA 创建 |
+| `GIT_LENS_TEST_RUN_ID` | 原样透传给服务子进程环境（供 /api/test-handshake 启用与核验） |
+| `GIT_LENS_E2E_READY_FILE` | 存在时：服务就绪且窗口完成首次加载后，向该路径原子写 JSON `{"port":<实际端口>,"servicePid":<服务进程 pid>,"mainPid":<主进程 pid>,"runId":"<透传值或 null>"}`；服务重启成功后重写；服务退出时把 `"state":"crashed"` 并入后重写 |
+
+- E2E 启动器只从 ready 文件获取端口，**禁止猜测端口**（契约 §8.3）；文件写入用临时文件 + rename 原子替换。
+- `app.quit()` 必须请求服务正常关闭并等待（超时才 SIGKILL），保证 QA 进程组退出后无孤儿服务、端口释放。
