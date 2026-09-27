@@ -7,7 +7,7 @@ Git Lens Web 是一个运行在浏览器里的本地 Git 工作台：扫描你�
 [快速开始](#快速开始) · [功能概览](#功能概览) · [界面预览](#界面预览) · [使用指南](#使用指南) · [配置与数据](#配置与数据) · [项目结构](#项目结构)
 
 > [!NOTE]
-> 文档中的界面图片和动图由当前版本在临时虚构仓库中实际运行生成。图片里的仓库名、路径、提交、分支和用户均为演示数据，不对应任何真实项目。
+> 文档中的动图由当前版本在临时虚构仓库中实际运行生成。动图里的仓库名、路径、提交、分支和用户均为演示数据，不对应任何真实项目。
 
 ## 为什么使用它
 
@@ -37,41 +37,13 @@ Git Lens Web 把这些信息放进一个本地页面，先展示事实和 Diff�
 
 ## 界面预览
 
-### 仓库总览
-
-总览页把 Worktree 和本地分支放在一起，先看清 Dirty、主分支、Worktree 绑定和可清理状态，再进入 Diff 或提交记录。
-
-![Git Lens Web 虚构 fixture 的仓库总览](./docs/images/readme-overview.png)
-
-### Branch Diff
-
-Base 和 Target 可以分别选择 Worktree 或本地分支。分支 ↔ 分支比较只读取引用内容，不受任意 Worktree 的未提交改动影响。
-
-![Git Lens Web 虚构 fixture 的 Branch Diff](./docs/images/readme-branch-diff.png)
-
-### 未提交自审
-
-将 Base 和 Target 选择为同一个 Worktree 后，页面会切换到未提交自审模式，只显示工作区和未跟踪文件，并保留 Stash 相关操作入口。
-
-![Git Lens Web 虚构 fixture 的未提交自审](./docs/images/readme-uncommitted-diff.png)
-
-### 提交记录抽屉
-
-提交抽屉支持过滤、日期分组、详情展开和单提交 Diff，适合在执行 Cherry-pick 或 Revert 前确认提交内容。
-
-![Git Lens Web 虚构 fixture 的提交记录抽屉](./docs/images/readme-commits.png)
-
-### 本地 MR
-
-本地 MR 面板记录源分支、目标分支、审阅状态和合并状态；合并前会检查目标 Worktree 是否干净。
-
-![Git Lens Web 虚构 fixture 的本地 Merge Request](./docs/images/readme-local-mr.png)
-
 ### 一段动图看完整流程
 
-下面的动图来自同一组虚构 fixture，依次展示仓库总览、Branch Diff、未提交自审和本地 MR。它不是设计稿，而是当前页面的实际渲染结果。
+下面的动图来自一组虚构 fixture，依次展示仓库总览、Branch Diff、未提交自审和本地 MR。它是当前页面的实际渲染结果，用来快速了解主要操作路径。
 
-![Git Lens Web 从总览到 Diff 和本地 MR 的实际界面流程](./docs/images/readme-workflow.gif)
+<p align="center">
+  <img src="./docs/images/readme-workflow.gif" alt="Git Lens Web 从总览到 Diff 和本地 MR 的实际界面流程" width="760">
+</p>
 
 ## 快速开始
 
@@ -245,7 +217,7 @@ src/merge-request-store.js
                         本地 MR 持久化
 scripts/                fixture 构建与 HTTP 验证脚本
 test/                   Git 状态、Diff、MR、Stash 和清理测试
-docs/images/            README 和设计文档配图
+docs/images/            README 界面流程动图
 ```
 
 当前前端使用原生 HTML、CSS 和 JavaScript，服务通过 `npm start` 直接运行，无需先生成前端构建产物。Node 服务通过 Git CLI 读取和修改本地仓库。
