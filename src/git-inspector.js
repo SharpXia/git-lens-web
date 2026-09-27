@@ -349,6 +349,116 @@ export async function getBranchMergeStatus(repoPath, mainBranch, branchName) {
 }
 
 /**
+ * 传递吸收判定：识别「成果已经由其他分支进入主干」的过时快照分支。
+ *
+ * 背景：squash/汇总合并（如 PR 流程）只把载体分支的最终内容合入主干，
+ * 各开发分支的原始提交既不是主干祖先，树/补丁也不再与主干等价，
+ * 四方判定会如实输出「领先」——但这些分支的成果实际已经交付。
+ * 这里对未吸收分支 B 探测是否存在已吸收载体 C 满足 B ⊂ C：
+ * 命中即说明 B 的全部提交都已包含在 C 中并随 C 进入主干，标记
+ * deliveredViaBranch 供前端展示「成果已交付、可直接删除」，
+ * 避免把「过时快照」误解为仍有独有改动。
+ *
+ * 与 absorbed（四方判定）的语义区别：absorbed 表示「合并该分支不会改变主干」，
+ * deliveredVia 只表示「成果已交付」——合并过时快照反而会把旧内容带回主干，
+ * 因此命中后不应引导用户合并，而应引导删除。
+ *
+ * 性能：merge-base --is-ancestor 是纯拓扑判定（毫秒级，不读取任何树/内容对象），
+ * 且带两重剪枝：只探测未吸收分支；载体 tip 提交时间必须不早于被载体
+ * （B ⊂ C 时 C 至少包含到 B 的最后提交，时间上不可能更早）。命中即停。
+ *
+ * 原地更新分支对象：deliveredViaBranch；命中且无 Worktree 引用时同步
+ * isSafeToDelete=true、isStaleOnly=false 并改写 redundancyReason（删除不会
+ * 丢失任何已交付提交，语义与内容合入的安全可删一致）。
+ * @param {string} repoPath 仓库路径
+ * @param {Array<object>} branchList getBranches 输出的分支数组（每项含 name/isMain/isMerged/inUseByWorktree/committerTs）
+ * @returns {Promise<void>}
+ */
+export async function annotateDeliveredViaBranches(repoPath, branchList) {
+  const carriers = branchList.filter(b => !b.isMain && b.isMerged);
+  const candidates = branchList.filter(b => !b.isMain && !b.isMerged && !b.deliveredViaBranch);
+  if (carriers.length === 0 || candidates.length === 0) return;
+
+  for (const branch of candidates) {
+    const branchTs = branch.committerTs || 0;
+    const carrierCandidates = carriers.filter(c => (c.committerTs || 0) >= branchTs);
+    for (const carrier of carrierCandidates) {
+      try {
+        await runGit(repoPath, ['merge-base', '--is-ancestor', branch.name, carrier.name]);
+        branch.deliveredViaBranch = carrier.name;
+        if (!branch.inUseByWorktree) {
+          branch.isSafeToDelete = true;
+          branch.isStaleOnly = false;
+          branch.redundancyReason = `成果已经由分支 ${carrier.name} 合入主分支，本分支为过时快照且无 Worktree 引用 (安全可删)`;
+        }
+        break;
+      } catch {
+        // 非祖先关系，继续尝试下一个候选载体
+      }
+    }
+  }
+}
+
+/**
+ * 把分支层面的传递吸收结论同步到 worktree 条目（按分支名匹配，原地更新）。
+ * /api/inspect 中 getWorktrees 与 getBranches 并行执行，worktree 自身的
+ * 四方判定没有全局分支视图，需要在组装阶段用分支侧结论补标。
+ * @param {Array<object>} worktrees getWorktrees 输出
+ * @param {Array<object>} branches getBranches 输出（已经过 annotateDeliveredViaBranches）
+ */
+export function annotateWorktreesFromBranches(worktrees, branches) {
+  const byName = new Map(
+    branches.filter(b => b.deliveredViaBranch).map(b => [b.name, b.deliveredViaBranch])
+  );
+  for (const wt of worktrees) {
+    if (wt.branch && byName.has(wt.branch)) {
+      wt.deliveredViaBranch = byName.get(wt.branch);
+    }
+  }
+}
+
+/**
+ * worktree 侧的传递吸收兜底探测。
+ *
+ * worktree 列表的「领先 N 提交」来自 getWorktrees 内部的四方判定，而分支列表
+ * 还有历史整合推断（findHistoricalIntegration）这层兜底——squash/PR 合并后的
+ * 开发分支常常在分支面板已显示「内容已合入主干」，worktree 面板却仍显示领先。
+ * 这里对 hasCommittedDiff=true 的 worktree 分支直接探测载体：
+ * 若存在已吸收分支 C 使 branch ⊂ C，则该分支的成果已随 C 进入主干，
+ * 标记 deliveredViaBranch 供前端替换「领先」徽章。
+ *
+ * 性能与 annotateDeliveredViaBranches 相同：merge-base --is-ancestor 纯拓扑判定
+ * + 载体时间剪枝 + 命中即停。
+ * @param {string} repoPath 仓库路径
+ * @param {Array<object>} worktrees getWorktrees 输出
+ * @param {Array<object>} branches getBranches 输出（提供载体候选与 tip 时间戳）
+ * @returns {Promise<void>}
+ */
+export async function annotateDeliveredViaWorktrees(repoPath, worktrees, branches) {
+  const carrierPool = branches.filter(b => !b.isMain && b.isMerged);
+  if (carrierPool.length === 0) return;
+  const tsByName = new Map(branches.map(b => [b.name, b.committerTs || 0]));
+
+  for (const wt of worktrees) {
+    if (!wt.branch || !wt.hasCommittedDiff || wt.deliveredViaBranch) continue;
+    const branchTs = tsByName.get(wt.branch) || 0;
+    for (const carrier of carrierPool) {
+      // 排除自身：分支面板与 worktree 面板判定口径不同（前者含历史整合推断），
+      // worktree 分支可能自身已在载体池，而 X ⊂ X 恒真会造成「自己交付自己」的荒谬标记
+      if (carrier.name === wt.branch) continue;
+      if ((carrier.committerTs || 0) < branchTs) continue;
+      try {
+        await runGit(repoPath, ['merge-base', '--is-ancestor', wt.branch, carrier.name]);
+        wt.deliveredViaBranch = carrier.name;
+        break;
+      } catch {
+        // 非祖先关系，继续尝试下一个候选载体
+      }
+    }
+  }
+}
+
+/**
  * 比较分支相对共同基线改过的文件，给未合入分支提供可核查的内容证据。
  * @param {string} repoPath 仓库路径
  * @param {string} mainBranch 当前主工作区分支
@@ -485,10 +595,11 @@ export async function getBranches(repoPath) {
     const [name, relativeTime, author, subject, isoDate] = line.split('|');
 
     const isMain = name === mainBranch || name === 'master' || name === 'dev';
-    branchRecords.push({ name, relativeTime, author, subject, isoDate, isMain });
+    // committerTs 供传递吸收判定做载体时间剪枝（载体 tip 必然不早于被载体）
+    branchRecords.push({ name, relativeTime, author, subject, isoDate, isMain, committerTs: new Date(isoDate).getTime() || 0 });
   }
 
-  const branchList = await Promise.all(branchRecords.map(async ({ name, relativeTime, author, subject, isoDate, isMain }) => {
+  const branchList = await Promise.all(branchRecords.map(async ({ name, relativeTime, author, subject, isoDate, isMain, committerTs }) => {
     const directMergedByGit = mergedBranches.includes(name);
     const mergeStatus = isMain
       ? {
@@ -556,12 +667,16 @@ export async function getBranches(repoPath) {
       contentComparison,
       historicalIntegration,
       inUseByWorktree,
+      committerTs,
       isStale,
       isSafeToDelete,
       isStaleOnly,
       redundancyReason
     };
   }));
+
+  // 传递吸收判定：在四方判定之外识别「成果已经由载体分支进入主干」的过时快照
+  await annotateDeliveredViaBranches(repoPath, branchList);
 
   return { mainBranch, branches: branchList };
 }
@@ -1948,15 +2063,20 @@ export async function getStashList(worktreePath) {
  * - pop：git stash pop [stash@{n}]；冲突时 git 会保留该 stash，返回 409 并说明
  * - drop：git stash drop stash@{n}，stashRef 必须匹配 stash@{数字}
  * - discard：restore --staged + restore + clean -fd，丢弃全部未提交修改（含未跟踪文件），不可恢复
+ * - restore：只还原已跟踪文件的暂存与工作区修改，保留未跟踪文件
+ * - clean：只删除未跟踪文件，保留已跟踪文件的修改
  * @param {string} worktreePath - worktree 绝对路径
- * @param {string} action - 仅允许 'push' | 'pop' | 'drop' | 'discard'
+ * @param {string} action - 仅允许 'push' | 'pop' | 'drop' | 'discard' | 'restore' | 'clean'
  * @param {object} [extra]
  * @param {string} [extra.message] - push 的可选备注（禁换行/NUL、禁 '-' 开头、≤200 字符）
  * @param {string} [extra.stashRef] - pop/drop 的目标 stash 引用（格式 stash@{n}）
+ * @param {string} [extra.targetWorktree] - pop 的目标 Worktree 路径
+ * @param {string} [extra.targetBranch] - pop 的目标本地分支
+ * @param {string} [extra.newWorktreePath] - 目标分支尚无 Worktree 时新建目录的绝对路径
  * @returns {Promise<object>} { ok, action, ... }
  */
 export async function stashAction(worktreePath, action, extra = {}) {
-  if (!['push', 'pop', 'drop', 'discard'].includes(action)) {
+  if (!['push', 'pop', 'drop', 'discard', 'restore', 'clean'].includes(action)) {
     throw Object.assign(new Error('action 参数不合法'), { statusCode: 400 });
   }
   if (!worktreePath || !path.isAbsolute(worktreePath)) {
@@ -2003,18 +2123,66 @@ export async function stashAction(worktreePath, action, extra = {}) {
   }
 
   if (action === 'pop') {
+    if (extra.targetWorktree && extra.targetBranch) {
+      throw Object.assign(new Error('只能选择一个恢复目标'), { statusCode: 400 });
+    }
+    const sourceRoot = await runGit(worktreePath, ['rev-parse', '--show-toplevel']);
+    const worktrees = await getWorktrees(worktreePath);
+    let targetPath = worktreePath;
+    let createdWorktree = false;
+    if (extra.targetWorktree) {
+      if (typeof extra.targetWorktree !== 'string' || !path.isAbsolute(extra.targetWorktree)) {
+        throw Object.assign(new Error('目标 Worktree 路径必须为绝对路径'), { statusCode: 400 });
+      }
+      const targetRealPath = await toRealPathSafe(extra.targetWorktree);
+      const target = await Promise.all(worktrees.map(async wt => ({ wt, realPath: await toRealPathSafe(wt.path) })))
+        .then(entries => entries.find(entry => entry.realPath === targetRealPath)?.wt);
+      if (!target || !target.existsOnDisk || target.isPrunable) {
+        throw Object.assign(new Error('目标 Worktree 不属于当前仓库或已失联'), { statusCode: 404 });
+      }
+      targetPath = target.path;
+    } else if (extra.targetBranch) {
+      if (typeof extra.targetBranch !== 'string' || extra.targetBranch.startsWith('-') || /[\r\n\0]/.test(extra.targetBranch)) {
+        throw Object.assign(new Error('目标分支参数不合法'), { statusCode: 400 });
+      }
+      const exists = await runGitResult(worktreePath, ['show-ref', '--verify', '--quiet', `refs/heads/${extra.targetBranch}`]);
+      if (!exists.ok) throw Object.assign(new Error('目标本地分支不存在'), { statusCode: 404 });
+      const bound = worktrees.find(wt => wt.branch === extra.targetBranch && wt.existsOnDisk && !wt.isPrunable);
+      if (bound) {
+        if (extra.newWorktreePath) throw Object.assign(new Error('目标分支已有 Worktree，无需指定新目录'), { statusCode: 400 });
+        targetPath = bound.path;
+      } else {
+        const newPath = extra.newWorktreePath;
+        if (typeof newPath !== 'string' || !path.isAbsolute(newPath) || newPath === path.parse(newPath).root) {
+          throw Object.assign(new Error('未绑定的分支需要指定新 Worktree 的绝对目录'), { statusCode: 400 });
+        }
+        const existing = await fs.stat(newPath).then(() => true, () => false);
+        if (existing) throw Object.assign(new Error('新 Worktree 目录已存在，请选择不存在的目录'), { statusCode: 409 });
+        try {
+          await runGit(sourceRoot, ['worktree', 'add', newPath, extra.targetBranch]);
+        } catch (err) {
+          throw Object.assign(new Error(`创建目标 Worktree 失败：${summarizeGitFailure(err.message)}`), { statusCode: 409 });
+        }
+        targetPath = newPath;
+        createdWorktree = true;
+      }
+    }
+    if (!createdWorktree) {
+      const dirty = await runGit(targetPath, ['status', '--porcelain']);
+      if (dirty) throw Object.assign(new Error('目标 Worktree 存在未提交修改，请先处理后再恢复 Stash'), { statusCode: 409 });
+    }
     const args = ['stash', 'pop'];
     if (extra.stashRef) args.push(extra.stashRef);
     try {
-      await runGit(worktreePath, args);
+      await runGit(targetPath, args);
     } catch (err) {
       // pop 冲突时 git 不会删除该 stash，现场保留在冲突状态由用户解决
       throw Object.assign(
-        new Error(`Stash pop 失败（发生冲突时该 stash 仍会保留在列表中，可手工解决后再 drop）：${summarizeGitFailure(err.message)}`),
+        new Error(`Stash pop 失败，目标 Worktree：${targetPath}。该 stash 仍会保留；若发生冲突，请在目标 Worktree 解决：${summarizeGitFailure(err.message)}`),
         { statusCode: 409 }
       );
     }
-    return { ok: true, action };
+    return { ok: true, action, targetWorktree: targetPath, createdWorktree };
   }
 
   if (action === 'drop') {
@@ -2029,9 +2197,11 @@ export async function stashAction(worktreePath, action, extra = {}) {
     return { ok: true, action };
   }
 
-  // discard：不可恢复，前端必须二次确认后才允许触发
-  await runGit(worktreePath, ['restore', '--staged', '.']);
-  await runGit(worktreePath, ['restore', '.']);
-  await runGit(worktreePath, ['clean', '-fd']);
+  // 三种清理范围分开执行，避免仅想还原已跟踪修改时误删未跟踪文件。
+  if (action === 'discard' || action === 'restore') {
+    await runGit(worktreePath, ['restore', '--staged', '.']);
+    await runGit(worktreePath, ['restore', '.']);
+  }
+  if (action === 'discard' || action === 'clean') await runGit(worktreePath, ['clean', '-fd']);
   return { ok: true, action };
 }
