@@ -95,20 +95,51 @@ export function getMimeType(filePath) {
 }
 
 /**
+ * 校验路径已归一到 base 目录内（base 自身放行，供目录流式场景使用）。
+ * @param {string} targetPath - realpath 归一后的待检路径
+ * @param {string} baseReal - realpath 归一后的基座目录
+ * @returns {boolean} 位于 base 内（含 base 自身）时返回 true
+ */
+function isPathInsideBase(targetPath, baseReal) {
+  return targetPath === baseReal || targetPath.startsWith(baseReal + path.sep);
+}
+
+/**
  * 获取 Git 提交或工作区中的文件二进制 Buffer
  */
 export async function getFileContentBuffer(repoPath, revision, filePath, worktreePath = null) {
-  // 如果指定了 worktreePath 且 revision 是 'WORKTREE'，直接从磁盘读取工作区最新文件
+  // 如果指定了 worktreePath 且 revision 是 'WORKTREE'，直接从磁盘读取工作区最新文件。
+  // DEF-001（P1，越界任意文件读取）：此分支曾用 path.resolve(worktreePath, filePath)
+  // 直接读盘，`../../etc/passwd` 这类相对路径与绝对路径都能越出 Worktree。
+  // 现在做两道包含性校验，均以 realpath 归一后的 Worktree 为基座：
+  // 1) 粗筛——用归一基座重解 filePath 后必须在基座内，拒绝 `../` 回溯与绝对路径注入；
+  // 2) 符号链接防逃逸——目标存在时对其实际路径 realpath 归一再比对，
+  //    拒绝指向 Worktree 之外的链接（readFile 会跟随链接读到外部内容）。
   if (revision === 'WORKTREE' && worktreePath) {
-    const full = path.resolve(worktreePath, filePath);
+    const baseReal = await toRealPathSafe(worktreePath);
+    const candidate = path.resolve(baseReal, filePath);
+    if (!isPathInsideBase(candidate, baseReal)) {
+      throw Object.assign(new Error('filePath 解析后越出 Worktree 边界，拒绝读取'), { statusCode: 400 });
+    }
+    let realFull;
     try {
-      return await fs.readFile(full);
+      realFull = await fs.realpath(candidate);
+    } catch {
+      // 目标不存在：保持既有“读取失败返回 null → 404”的行为
+      return null;
+    }
+    if (!isPathInsideBase(realFull, baseReal)) {
+      throw Object.assign(new Error('filePath 经符号链接指向 Worktree 之外的路径，拒绝读取'), { statusCode: 400 });
+    }
+    try {
+      return await fs.readFile(realFull);
     } catch {
       return null;
     }
   }
 
-  // 否则通过 git show 从对应版本获取
+  // 否则通过 git show 从对应版本获取；git 自身拒绝越界的相对/绝对路径引用，
+  // show 失败时返回 null（由路由返回 404），无需额外越界校验
   try {
     const targetCwd = worktreePath || repoPath;
     const buf = await runGitRaw(targetCwd, ['show', `${revision}:${filePath}`]);
