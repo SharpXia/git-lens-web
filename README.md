@@ -1,50 +1,82 @@
 # 🔍 Git Lens Web
 
-**看清本地仓库的 Worktree、分支与代码差异。**
+**看清本地 Git 仓库的 Worktree、分支和代码差异。**
 
-一个在浏览器中运行的本地 Git 工作台：发现闲置工作区，审查变更，再决定是否清理。
+Git Lens Web 是一个运行在浏览器里的本地 Git 工作台：扫描你指定的 Workspace，集中查看仓库状态、Worktree、分支、提交和 Diff，再决定是否清理或执行本地 Git 操作。
 
-[快速开始](#快速开始) · [功能概览](#功能概览) · [界面预览](#界面预览) · [使用指南](#使用指南) · [仓库发现范围](#仓库发现范围)
+[快速开始](#快速开始) · [功能概览](#功能概览) · [界面预览](#界面预览) · [使用指南](#使用指南) · [配置与数据](#配置与数据) · [项目结构](#项目结构)
 
----
+> [!NOTE]
+> 文档中的界面图片和动图由当前版本在临时虚构仓库中实际运行生成。图片里的仓库名、路径、提交、分支和用户均为演示数据，不对应任何真实项目。
 
 ## 为什么使用它
 
-多个分支和 Worktree 并行开发时，容易忘记哪些目录还有未提交改动、哪些分支已合并、哪些 Worktree 只剩 Git 元数据。Git Lens Web 将这些信息集中展示，并提供提交记录和 Diff 视图，帮助你在清理前先确认状态。
+多个分支和 Worktree 并行开发时，状态通常分散在不同目录和命令行窗口里：
+
+- 不容易快速判断哪个 Worktree 还有未提交改动；
+- 分支已经被合并、被 Cherry-pick 吸收或只剩无效引用时，单看提交数量容易误判；
+- 对比两个分支前，常常需要先创建 Worktree；
+- 清理 Worktree、分支或未提交修改时，需要在多个 Git 命令之间切换。
+
+Git Lens Web 把这些信息放进一个本地页面，先展示事实和 Diff，再提供有确认步骤的清理、Stash、Cherry-pick、Revert 和本地 MR 操作。
 
 ## 功能概览
 
-| 模块 | 你可以做什么 |
+| 模块 | 当前能力 |
 | --- | --- |
-| 📁 扫描目录 | 使用系统文件夹选择器添加多个 Workspace 并持久化；首次打开时引导设置，按目录本身或直接子目录发现 Git 仓库。 |
-| 📊 仓库总览 | 查看 Worktree 与本地分支数量、失联工作区和冗余分支提示；搜索仓库、分支和 Worktree，并收藏常用仓库。 |
-| 🌳 Worktree 管理 | 区分主工作区与派生 Worktree，查看目录是否存在、未提交文件数及领先提交数；清理无效引用或移除指定 Worktree。 |
-| 🌿 分支透视 | 识别主分支、被 Worktree 占用的分支、已合并分支，以及超过 30 天未活动的分支；按情况执行普通或强制删除。 |
-| ⚡ 代码审查 | 对比两个 Worktree 的已提交、未提交或全量变更；选择同一个 Worktree 时审查本地未提交与未跟踪文件，并支持图片前后对比。 |
-| ↔️ Branch Diff | 对比源与目标可自由切换为 Worktree 或分支，任意组合两两对比（含分支 ↔ 分支的纯引用比较），不必先为分支建 Worktree；支持仅未提交 / 全量 / 仅已提交三种模式。 |
-| 🔀 本地 MR | 对同一仓库的两个本地分支发起合并请求，走「审阅（通过 / 要求修改 / 拒绝）→ 合并（或取消）」流程；合并使用 `--no-ff` 实际更新目标分支，冲突时自动中止并保持 MR 打开。 |
-| 📋 提交记录 | 从 Worktree 条目打开提交记录抽屉：一眼看到相对主干的领先/落后，逐页加载提交列表，支持按作者、日期范围与关键词过滤，另有按日期分组的时间线视图和图形化分支历史。 |
-| 🍒 提交洞察与操作 | 点击提交展开详情（完整正文、父提交、文件级增删统计）并查看单提交逐文件 Diff；可对当前分支执行 Cherry-pick / Revert，失败时自动恢复仓库现场。 |
+| 📁 扫描目录 | 添加多个 Workspace 并持久化；检查目录本身和直接子目录中的 Git 仓库；支持系统目录选择器和手动输入路径。 |
+| 📊 仓库总览 | 展示 Worktree、分支、失联引用和可清理项；支持仓库搜索、收藏和星标筛选。 |
+| 🌳 Worktree 管理 | 区分主工作区和派生 Worktree，显示目录状态、未提交文件、领先提交和绑定分支；支持移除 Worktree、Prune 无效引用和批量清理。 |
+| 🌿 分支透视 | 展示主分支、Worktree 占用、已合入、内容已被吸收和过期分支；支持普通删除或强制删除。 |
+| ⚡ Branch Diff | Base 和 Target 可分别选择 Worktree 或本地分支，支持 Worktree ↔ Worktree、分支 ↔ 分支以及混合比较。 |
+| 🧹 未提交自审 | 选择同一个 Worktree 时进入自审模式，查看未提交和未跟踪文件；支持 Stash、Pop、Drop 和丢弃全部修改。 |
+| 🔀 本地 MR | 对两个本地分支创建 Merge Request，经过通过、要求修改或拒绝后再执行 `git merge --no-ff`；冲突会自动中止并保留 MR。 |
+| 📋 提交记录 | 查看分支相对主干的领先/落后，按作者、关键词和日期过滤，按日期分组浏览，并展开提交详情和单提交 Diff。 |
+| 🍒 提交操作 | 对当前分支执行 Cherry-pick 或 Revert；冲突、空提交和不合法目标会返回中文错误，并自动恢复现场。 |
+| 🏷️ 浏览器标签识别 | 标签标题包含当前仓库和功能页；同名仓库会补充上级目录；favicon 使用项目首字母和稳定颜色区分多个浏览器标签。 |
 
 ## 界面预览
 
-从仓库总览开始，先快速确认 Worktree、分支和可清理引用的整体状态，再进入差异视图检查具体变更。
+### 仓库总览
 
-### 仓库总览与管理
+总览页把 Worktree 和本地分支放在一起，先看清 Dirty、主分支、Worktree 绑定和可清理状态，再进入 Diff 或提交记录。
 
-仓库总览集中展示 Worktree、分支和失效引用，并提供搜索、刷新、Prune 和逐项清理入口。
+![Git Lens Web 虚构 fixture 的仓库总览](./docs/images/readme-overview.png)
 
-![Git Lens Web 仓库总览与管理界面](./docs/images/repository-overview.png)
+### Branch Diff
 
-### Worktree 差异对比
+Base 和 Target 可以分别选择 Worktree 或本地分支。分支 ↔ 分支比较只读取引用内容，不受任意 Worktree 的未提交改动影响。
 
-选择 Base 和 Target Worktree 后，可以按文件展开 Diff，查看新增、删除及提交领先情况。
+![Git Lens Web 虚构 fixture 的 Branch Diff](./docs/images/readme-branch-diff.png)
 
-![Git Lens Web Worktree 差异对比界面](./docs/images/worktree-diff.png)
+### 提交记录抽屉
+
+提交抽屉支持过滤、日期分组、详情展开和单提交 Diff，适合在执行 Cherry-pick 或 Revert 前确认提交内容。
+
+![Git Lens Web 虚构 fixture 的提交记录抽屉](./docs/images/readme-commits.png)
+
+### 本地 MR
+
+本地 MR 面板记录源分支、目标分支、审阅状态和合并状态；合并前会检查目标 Worktree 是否干净。
+
+![Git Lens Web 虚构 fixture 的本地 Merge Request](./docs/images/readme-local-mr.png)
+
+### 一段动图看完整流程
+
+下面的动图来自同一组虚构 fixture，依次展示仓库总览、Branch Diff、未提交自审和本地 MR。它不是设计稿，而是当前页面的实际渲染结果。
+
+![Git Lens Web 从总览到 Diff 和本地 MR 的实际界面流程](./docs/images/readme-workflow.gif)
 
 ## 快速开始
 
-**环境要求：**已安装 Git、npm，以及符合 `^20.19.0 || >=22.12.0` 的 Node.js（与仓库锁定依赖的版本要求一致）。
+### 环境要求
+
+- 已安装 Git，并且 `git` 可以在终端直接调用；
+- 已安装 npm；
+- Node.js 版本满足 `^20.19.0 || >=22.12.0`；
+- 当前机器可以访问本机浏览器。
+
+### 启动服务
 
 ```bash
 git clone YOUR_REPOSITORY_URL
@@ -53,51 +85,178 @@ npm ci
 npm start
 ```
 
-将 `YOUR_REPOSITORY_URL` 换成 GitHub 页面「Code」菜单中的克隆地址。启动后打开 [http://127.0.0.1:9527](http://127.0.0.1:9527)。
+启动后打开 [http://127.0.0.1:9527](http://127.0.0.1:9527)。
 
-如果 `9527` 已被占用，可指定端口：
+如果端口已占用，可以换一个端口：
 
 ```bash
 PORT=8080 npm start
 ```
 
-在 Windows PowerShell 中可使用 `$env:PORT=8080; npm start`。
+Windows PowerShell：
 
-服务只监听本机 `127.0.0.1`。从主目录或任意 Worktree 启动均可；**启动位置不影响仓库扫描范围**。
+```powershell
+$env:PORT=8080
+npm start
+```
+
+服务只监听本机 `127.0.0.1`。不要直接双击打开 `public/index.html`，页面需要通过本地服务访问 Git API 和系统目录选择器。
+
+### 隔离开发或测试实例
+
+测试实例必须使用独立端口和独立配置目录，避免覆盖日常使用的配置：
+
+```bash
+PORT=9528 \\
+GIT_LENS_CONFIG_DIR=/tmp/git-lens-web-dev-9528 \\
+node src/server.js
+```
+
+浏览器打开 [http://127.0.0.1:9528](http://127.0.0.1:9528)。
 
 ## 使用指南
 
-1. **配置扫描目录**：首次打开时按引导使用系统文件夹选择器添加一个或多个 Workspace，也可以随时点击顶部的「📁 扫描目录」修改。Git Lens 会检查目录本身以及其中的直接子目录，找到可用的 Git 仓库。
-2. **选择仓库**：在顶部下拉框中搜索仓库名或路径；当前项目会置顶，常用仓库可加入星标并用「只看星标」筛选。
-3. **检查状态**：在「仓库总览与管理」查看 Worktree 的 Dirty、失联和领先提交状态，以及分支的合并与占用情况。
-4. **审查变更**：点击 Worktree 的「未提交 Diff」「提交记录」或「与主干对比」，也可进入「Worktree 差异对比」自行选择 Base 和 Target。Diff 支持「仅未提交」「全量变更」「仅已提交」三种模式；Base 与 Target 相同时进入本地自审模式。对比源与目标也可以切换为分支：分支 ↔ 分支为纯引用比较，不受任何工作区未提交内容影响。
-5. **发起本地 MR**：对同一仓库的两个本地分支创建合并请求，先审阅（通过 / 要求修改 / 拒绝），通过后执行合并。合并会以 `--no-ff` 实际更新目标分支并生成合并提交；存在冲突或目标 Worktree 不干净时合并会被拒绝，MR 保持打开。
-6. **按需清理**：确认内容后，再使用「一键 Prune 无效引用」、Worktree「移除」或分支「删除」。移除 Worktree 时可以选择是否同步删除与它绑定的分支，默认保留分支。
+### 1. 配置扫描目录
+
+首次打开页面时，点击「扫描目录」，使用系统目录选择器或手动输入添加一个或多个 Workspace。
+
+每个扫描目录按以下规则处理：
+
+1. 如果目录本身是 Git 仓库，直接加入仓库列表；
+2. 如果目录本身不是 Git 仓库，只检查它的直接子目录；
+3. 不会递归扫描更深层级；
+4. 不存在、不可读或不是目录的路径会被拒绝保存。
+
+### 2. 选择仓库
+
+顶部仓库选择器支持：
+
+- 按仓库名或路径模糊搜索；
+- 将常用仓库加入星标；
+- 只看星标仓库；
+- 使用方向键和 Enter 选择；
+- 在 URL 和当前浏览器标签页中恢复仓库、功能页和 Diff 状态。
+
+### 3. 查看仓库状态
+
+在「仓库总览与管理」中重点关注：
+
+- Worktree 是否存在于磁盘；
+- Worktree 是否有未提交或未跟踪文件；
+- 分支是否被 Worktree 占用；
+- 分支是否已经合入、被内容吸收或长期未活动；
+- 是否存在失联 Worktree 引用和可安全清理项。
+
+领先徽章会结合祖先关系、树一致、补丁等价和 `merge-tree` 判定，避免把已经通过 Cherry-pick、Revert 或 squash 吸收的内容继续当成独有改动。
+
+### 4. 审查 Diff
+
+可以从 Worktree 或分支行进入 Diff，也可以直接打开「Worktree 差异对比 (Branch Diff)」：
+
+- **仅未提交 & 未跟踪**：只看工作区当前修改；
+- **全量变更**：同时看提交内容和未提交修改；
+- **仅已提交**：只比较引用中的已提交内容；
+- **同一 Worktree**：自动进入未提交自审模式；
+- **分支 ↔ 分支**：不读取任何 Worktree 的脏数据；
+- **图片和二进制文件**：按文件类型展示，不把二进制内容当作普通文本 Diff。
+
+### 5. 使用本地 MR
+
+创建本地 MR 后按以下流程操作：
+
+1. 选择源分支和目标分支；
+2. 填写标题和描述；
+3. 审阅通过、要求修改或拒绝；
+4. 只有审阅通过后才能合并；
+5. 合并使用 `git merge --no-ff`，成功后记录合并提交；
+6. 目标 Worktree 不干净或发生冲突时，服务会自动中止合并并保留 MR。
+
+### 6. 管理提交和未提交修改
+
+从 Worktree 或分支行打开「提交记录」：
+
+- 按作者、关键词、开始日期和结束日期过滤；
+- 按日期分组查看提交；
+- 展开完整提交正文、父提交和文件统计；
+- 查看单提交逐文件 Diff；
+- 将提交 Cherry-pick 到指定目标 Worktree；
+- Revert 当前分支上的提交；
+- 对未提交修改执行 Stash、Pop、Drop 或丢弃全部修改。
+
+所有会修改 Git 仓库的操作都有二次确认。操作失败时会返回明确错误；Cherry-pick、Revert 和 MR 合并会尽量自动中止，避免仓库残留冲突状态。
+
+### 7. 清理 Worktree 和分支
+
+确认 Diff 和提交内容后，再执行清理：
+
+- 「Prune 无效引用」对应 `git worktree prune`；
+- Worktree「移除」对应 `git worktree remove`；
+- 可选择同步删除仍与 Worktree 强绑定的分支；
+- 分支删除前会再次校验绑定关系和当前状态；
+- 批量清理只处理符合安全条件的候选项。
 
 > [!CAUTION]
-> 清理操作会修改本地 Git 仓库。Worktree「移除」使用 `git worktree remove --force`；未合并分支的「删除」使用 `git branch -D`。提交抽屉内的 Cherry-pick / Revert 同样会修改当前分支，操作前有二次确认；执行失败（含冲突）时服务端会自动中止并恢复仓库原状。**合并 MR 会实际修改目标分支的 Worktree**（`git merge --no-ff`），合并前请确认目标 Worktree 干净且无未推送的依赖。操作前请核对目标路径、未提交改动和需要保留的提交。`Prune` 对应 `git worktree prune`，清理的是失效的 Worktree 元数据引用。
+> 清理、Stash、丢弃修改、Cherry-pick、Revert 和本地 MR 合并都会修改本地 Git 仓库。执行前请核对目标路径、分支和需要保留的提交。未合并分支的删除可能使用强制删除。
 
-## 仓库发现范围
+## 配置与数据
 
-当前版本不再假设任何固定的目录结构。首次打开页面时需要添加一个或多个自定义扫描目录，也可以通过顶部的「📁 扫描目录」按钮随时调整。目录可以使用系统文件夹选择器添加，也可以手动输入路径。
+默认配置文件：
 
-每个扫描目录会按以下规则处理：
+```text
+~/.config/git-lens-web/config.json
+```
 
-- 如果目录本身是 Git 仓库，直接将它加入仓库列表。
-- 如果目录本身不是 Git 仓库，只检查其中的直接子目录，不递归深入更深层级。
-- 目录配置保存在当前用户主目录下的 `~/.config/git-lens-web/config.json`，不会写入项目仓库。
+可以用环境变量覆盖配置目录：
 
-「选择文件夹」会调用运行服务所在电脑的系统目录选择器：macOS 使用 `osascript`，Windows 使用 PowerShell，Linux 优先使用 `zenity`，也支持回退到 `kdialog`。如果 Linux 环境没有图形目录选择器，可以展开手动输入区域填写路径。
+```bash
+GIT_LENS_CONFIG_DIR=/tmp/git-lens-web-dev-9528
+```
 
-如果页面没有显示仓库，请检查目录路径是否存在、当前用户是否有读取权限，以及仓库是否位于扫描目录的直接子目录中。
+配置文件只保存扫描目录列表。仓库状态、提交、分支和 Diff 都在请求时直接从本地 Git 仓库读取。
+
+本地 MR 的记录也保存于配置目录下，按仓库路径归一化后分开存储。应用不会把仓库内容上传到远程服务。
+
+## 浏览器标签识别
+
+每个浏览器标签会根据当前状态更新：
+
+- 标题格式：`仓库名 · 功能页 | Git Lens`；
+- 同名仓库标题补充扫描分组，例如 `workspace/atlas-notes`；
+- favicon 使用项目首字母、稳定颜色和放大镜标记；
+- 切换仓库、切换 Overview/Diff/MR、刷新或通过 URL 恢复时都会同步更新。
+
+因此同时打开多个项目时，可以通过标签文字和颜色快速定位，而不必逐个点开确认。
 
 ## 项目结构
 
 ```text
-public/index.html       浏览器界面与交互
-src/server.js           本地 HTTP 服务、仓库发现与 API
-src/git-inspector.js    Git 状态分析、Diff 与清理操作
-scripts/                验证脚本（fixture 仓库构建与本地 MR/Branch Diff 集成断言）
+public/index.html       浏览器界面、样式与交互
+src/server.js           本地 HTTP 服务、仓库发现与 API 路由
+src/git-inspector.js    Git 状态分析、Diff、提交和清理操作
+src/merge-request-service.js
+                        本地 MR 状态机和 Git 合并流程
+src/merge-request-store.js
+                        本地 MR 持久化
+scripts/                fixture 构建与 HTTP 验证脚本
+test/                   Git 状态、Diff、MR、Stash 和清理测试
+docs/images/            README 和设计文档配图
 ```
 
-前端使用原生 HTML、CSS 和 JavaScript，服务通过 `npm start` 启动，无需额外构建步骤。
+当前前端使用原生 HTML、CSS 和 JavaScript，服务通过 `npm start` 直接运行，无需先生成前端构建产物。Node 服务通过 Git CLI 读取和修改本地仓库。
+
+## 验证
+
+运行仓库测试：
+
+```bash
+node --test
+```
+
+集成验证脚本需要先启动隔离服务，并将测试配置目录指向同一份 `GIT_LENS_CONFIG_DIR`。具体命令和 fixture 构建方式见：
+
+- [本地 MR 与 Branch Diff 验证说明](./docs/local-mr-branch-diff.md)
+- [Worktree 提交记录入口方案](./docs/proposals/worktree-commits-entry.md)
+
+## 许可证
+
+本项目使用仓库中的 [LICENSE](./LICENSE)。
