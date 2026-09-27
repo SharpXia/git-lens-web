@@ -261,6 +261,17 @@ async function buildRepoMain(qaRoot) {
   await writeAndCommit(qaRoot, wtLost, 'lost.txt', '失联分支的独有提交。\n', 'lost: 独有提交');
   await fs.rm(wtLost, { recursive: true, force: true });
 
+  // 恶意提交信息 worktree：HEAD 提交主题即恶意负载，inspect 视图的 worktree 行会
+  // 直接展示（经 escapeHtml），供 G3「恶意 Git 元数据渲染为纯文本」断言使用。
+  // 两个 worktree 分别以 XSS 与路径逃逸负载作 HEAD（inspect 仅展示各 worktree 最新提交）
+  const wtMalicious = path.join(qaRoot, 'repos', 'wt-malicious');
+  await git(qaRoot, repo, 'worktree', 'add', '-q', '-b', 'feature/malicious-wt', wtMalicious);
+  await writeAndCommit(qaRoot, wtMalicious, 'malicious-1.txt', 'XSS 负载。\n', '<img src=x onerror=alert(1)>');
+  const wtMalicious2 = path.join(qaRoot, 'repos', 'wt-malicious-2');
+  await git(qaRoot, repo, 'worktree', 'add', '-q', '-b', 'feature/malicious-wt-2', wtMalicious2);
+  await writeAndCommit(qaRoot, wtMalicious2, 'malicious-2.txt', '路径逃逸与 script 注入负载。\n',
+    '../../escape <script>alert(2)</script> 伪注入行');
+
   // stash worktree：两条 stash，第 2 条内容含冲突标记
   const wtStash = path.join(qaRoot, 'repos', 'wt-stash');
   await git(qaRoot, repo, 'worktree', 'add', '-q', '-b', 'feature/stash-wt', wtStash);
@@ -278,9 +289,11 @@ async function buildRepoMain(qaRoot) {
       lost: 'feature/lost',
       cleanWt: 'feature/clean-wt',
       dirtyWt: 'feature/dirty-wt',
-      stashWt: 'feature/stash-wt'
+      stashWt: 'feature/stash-wt',
+      maliciousWt: 'feature/malicious-wt',
+      maliciousWt2: 'feature/malicious-wt-2'
     },
-    worktrees: { clean: wtClean, dirty: wtDirty, stash: wtStash, lost: wtLost }
+    worktrees: { clean: wtClean, dirty: wtDirty, stash: wtStash, lost: wtLost, malicious: wtMalicious, malicious2: wtMalicious2 }
   };
 }
 
@@ -418,6 +431,12 @@ async function verifyFixtures(qaRoot, fx) {
   const dirtyStatus = await gitOut(qaRoot, main.worktrees.dirty, 'status', '--porcelain');
   expect(dirtyStatus.split('\n').filter(Boolean).length === 3, 'wt-dirty 应含未提交修改/staged/untracked 三类条目');
 
+  // 恶意提交素材：两个 worktree 的 HEAD 主题必须精确等于负载字符串
+  const xssSubject = await gitOut(qaRoot, main.worktrees.malicious, 'log', '-1', '--format=%s');
+  expect(xssSubject === '<img src=x onerror=alert(1)>', 'wt-malicious HEAD 主题应为 XSS 负载');
+  const escapeSubject = await gitOut(qaRoot, main.worktrees.malicious2, 'log', '-1', '--format=%s');
+  expect(escapeSubject === '../../escape <script>alert(2)</script> 伪注入行', 'wt-malicious-2 HEAD 主题应为路径逃逸负载');
+
   const stashLines = (await gitOut(qaRoot, main.worktrees.stash, 'stash', 'list')).split('\n').filter(Boolean);
   expect(stashLines.length === 2, 'wt-stash 应有 2 条 stash');
   expect(stashLines.some((l) => l.includes('含冲突标记')), 'stash 素材应含「含冲突标记」条目');
@@ -453,7 +472,22 @@ export async function buildFixtures(qaRoot) {
   const absorbed = await buildRepoAbsorbed(qaRoot);
   const mr = await buildRepoMr(qaRoot);
   const special = await buildRepoSpecial(qaRoot);
-  const fx = { qaRoot, scanRoot: path.join(qaRoot, 'repos'), main, absorbed, mr, special };
+  const chinese = await buildRepoChinese(qaRoot);
+  const fx = { qaRoot, scanRoot: path.join(qaRoot, 'repos'), main, absorbed, mr, special, chinese };
   await verifyFixtures(qaRoot, fx);
   return fx;
+}
+
+/**
+ * 构建中文与特殊字符命名的独立仓库：目录名含中文、空格、双引号与 &，
+ * 供桌面/浏览器端「项目列表渲染不缺项」与转义渲染断言使用。
+ */
+async function buildRepoChinese(qaRoot) {
+  const repo = path.join(qaRoot, 'repos', '中文 仓库"&特殊');
+  await fs.mkdir(repo, { recursive: true });
+  await git(qaRoot, repo, 'init');
+  await git(qaRoot, repo, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+  await writeAndCommit(qaRoot, repo, 'README.md', '# 中文与特殊字符命名仓库\n', 'main: 初始化中文名仓库');
+  await writeAndCommit(qaRoot, repo, 'docs/说明 文档.txt', '中文路径与空格素材。\n', 'docs: 添加中文说明文档');
+  return { repo, name: path.basename(repo) };
 }
