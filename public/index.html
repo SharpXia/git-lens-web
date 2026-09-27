@@ -1696,9 +1696,91 @@
       white-space: nowrap;
     }
 
+    /* ---- 桌面模式服务状态覆盖层与静默提示条（浏览器模式不出现） ----
+       颜色全部取自 :root 既有变量，与页面深色设计语言保持一致 */
+    .service-overlay {
+      position: fixed;
+      inset: 0;
+      /* 高于提交/MR 抽屉(z-index 1000)：服务不可用时覆盖一切交互 */
+      z-index: 2000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(1, 4, 9, 0.72);
+      backdrop-filter: blur(2px);
+    }
+    .service-overlay-card {
+      max-width: 440px;
+      margin: 0 16px;
+      padding: 28px 32px;
+      text-align: center;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+    }
+    .service-overlay-card h2 {
+      font-size: 17px;
+      margin-bottom: 8px;
+      color: var(--text-bright);
+    }
+    .service-overlay-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      word-break: break-word;
+    }
+    .service-overlay-spinner {
+      width: 28px;
+      height: 28px;
+      margin: 0 auto 14px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: service-spin 0.9s linear infinite;
+    }
+    .service-overlay-spinner[data-hidden="1"] {
+      display: none;
+    }
+    @keyframes service-spin {
+      to { transform: rotate(360deg); }
+    }
+    .service-overlay-actions {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .service-stopped-bar {
+      position: fixed;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 2000;
+      padding: 6px 16px;
+      font-size: 13px;
+      color: var(--warning);
+      background: var(--card-bg);
+      border: 1px solid var(--warning);
+      border-radius: 999px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    }
+
   </style>
 </head>
 <body>
+  <!-- 桌面模式服务状态覆盖层：仅在 window.gitLens 存在时由脚本驱动（契约 §6 onServiceState），
+       浏览器模式永不显示 -->
+  <div id="serviceStateOverlay" class="service-overlay" style="display:none" role="alertdialog" aria-modal="true" aria-labelledby="serviceStateTitle" aria-describedby="serviceStateDesc">
+    <div class="service-overlay-card">
+      <div id="serviceStateSpinner" class="service-overlay-spinner" aria-hidden="true"></div>
+      <h2 id="serviceStateTitle">服务正在重启…</h2>
+      <p id="serviceStateDesc" class="service-overlay-desc"></p>
+      <div id="serviceStateActions" class="service-overlay-actions"></div>
+    </div>
+  </div>
+  <!-- 桌面模式「服务已停止」静默提示条（非阻断，不遮蔽页面内容） -->
+  <div id="serviceStoppedBar" class="service-stopped-bar" style="display:none" role="status">⏹ 本地服务已停止</div>
+
   <header>
     <h1>🔍 Git Lens <span class="badge">Worktree & Branch Guard + Code Diff Inspector</span></h1>
     <span id="headerPath" style="font-size: 13px; color: var(--text-muted);"></span>
@@ -6080,8 +6162,120 @@
       }).catch((err) => console.warn('读取桌面运行时信息失败:', err && err.message));
     }
 
-    loadProjects();
+    /* ---- 桌面模式服务状态覆盖层（契约 §6 onServiceState；浏览器模式全部不生效） ---- */
+    let lastServiceState = null;     // 最近一次收到的服务状态；重复事件不重复处理
+    let serviceRestartTimer = null;  // 「正在重启」已等待秒数计时器
+    let serviceOverlayShown = false; // 覆盖层当前是否可见（区分首启 ready 与恢复 ready）
 
+    function setServiceOverlay(visible) {
+      document.getElementById('serviceStateOverlay').style.display = visible ? 'flex' : 'none';
+      serviceOverlayShown = visible;
+    }
+
+    /* 覆盖层文案与动作按钮统一入口；actionsHtml 为页面自身的静态按钮串，不含任何外部数据 */
+    function setServiceOverlayContent(title, desc, showSpinner, actionsHtml) {
+      document.getElementById('serviceStateTitle').textContent = title;
+      document.getElementById('serviceStateDesc').textContent = desc;
+      document.getElementById('serviceStateSpinner').dataset.hidden = showSpinner ? '' : '1';
+      document.getElementById('serviceStateActions').innerHTML = actionsHtml || '';
+    }
+
+    function startServiceRestartTimer() {
+      stopServiceRestartTimer();
+      const descEl = document.getElementById('serviceStateDesc');
+      const startedAt = Date.now();
+      descEl.textContent = '已等待 0 秒…';
+      serviceRestartTimer = setInterval(() => {
+        descEl.textContent = `已等待 ${Math.floor((Date.now() - startedAt) / 1000)} 秒…`;
+      }, 1000);
+    }
+
+    function stopServiceRestartTimer() {
+      if (serviceRestartTimer) {
+        clearInterval(serviceRestartTimer);
+        serviceRestartTimer = null;
+      }
+    }
+
+    function hideServiceStoppedBar() {
+      document.getElementById('serviceStoppedBar').style.display = 'none';
+    }
+
+    /* crashed 态「复制诊断信息」：写入运行时信息与时间戳，便于用户粘贴反馈；
+       剪贴板 API 不可用时回退到隐藏 textarea 方案（与 copyText 一致） */
+    async function copyServiceDiagnostics() {
+      const payload = JSON.stringify({
+        state: 'crashed',
+        time: new Date().toISOString(),
+        href: window.location.href,
+        userAgent: navigator.userAgent,
+        runtime: desktopRuntimeInfo || null
+      }, null, 2);
+      const btn = document.getElementById('copyServiceDiagnosticsBtn');
+      try {
+        await navigator.clipboard.writeText(payload);
+      } catch (err) {
+        const ta = document.createElement('textarea');
+        ta.value = payload;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      if (btn) {
+        btn.textContent = '已复制诊断信息';
+        setTimeout(() => { btn.textContent = '复制诊断信息'; }, 1500);
+      }
+    }
+
+    function handleServiceState(state) {
+      if (state === lastServiceState) return; // 重复的同状态事件不重复处理
+      lastServiceState = state;
+      switch (state) {
+        case 'restarting':
+          hideServiceStoppedBar();
+          setServiceOverlayContent('服务正在重启…', '', true, '');
+          setServiceOverlay(true);
+          startServiceRestartTimer();
+          break;
+        case 'ready': {
+          stopServiceRestartTimer();
+          hideServiceStoppedBar();
+          const wasShown = serviceOverlayShown;
+          setServiceOverlay(false);
+          // 只有经历过 restarting/crashed 的 ready 才重拉数据，避免与页面首次加载竞态
+          if (wasShown) loadProjects();
+          break;
+        }
+        case 'crashed':
+          stopServiceRestartTimer();
+          hideServiceStoppedBar();
+          // 重连由 Shell 的自动重启完成；「重试」仅重新加载页面恢复视图
+          setServiceOverlayContent(
+            '本地服务意外退出',
+            '后台服务进程已退出，通常会由桌面端自动重启；稍候可点击「重试」重新加载页面。',
+            false,
+            '<button type="button" class="btn-primary" onclick="location.reload()">重试</button>' +
+            '<button type="button" id="copyServiceDiagnosticsBtn" class="btn-outline" onclick="copyServiceDiagnostics()">复制诊断信息</button>'
+          );
+          setServiceOverlay(true);
+          break;
+        case 'stopped':
+          stopServiceRestartTimer();
+          setServiceOverlay(false);
+          document.getElementById('serviceStoppedBar').style.display = 'block';
+          break;
+        default:
+          break;
+      }
+    }
+
+    // 仅桌面模式订阅服务状态；浏览器模式无 window.gitLens，覆盖层与提示条永不出现
+    if (isDesktop && typeof window.gitLens?.onServiceState === 'function') {
+      window.gitLens.onServiceState(handleServiceState);
+    }
+
+    loadProjects();
     // 回到顶部逻辑
     function scrollToTop() {
       window.scrollTo({
