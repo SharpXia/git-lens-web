@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Git Lens · 本地仓库透镜与代码 Diff 审计</title>
+  <link id="appFavicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%2358a6ff%22/%3E%3Ccircle cx=%2214%22 cy=%2214%22 r=%227%22 fill=%22none%22 stroke=%22white%22 stroke-width=%223%22/%3E%3Cpath d=%22m19 19 7 7%22 stroke=%22white%22 stroke-width=%223%22 stroke-linecap=%22round%22/%3E%3C/svg%3E">
   <style>
     :root {
       --bg: #0d1117;
@@ -2026,6 +2027,87 @@
     let scanDirectoryDraft = [];
     let worktreeRemoveRequest = null;
 
+    const TAB_TITLE_LABELS = {
+      overview: '仓库总览',
+      diff: '差异对比',
+      mr: 'Merge Request'
+    };
+    const PROJECT_ICON_COLORS = [
+      '#238636', '#1f6feb', '#8957e5', '#bf8700', '#db6d28', '#d1242f', '#0f766e', '#8250df'
+    ];
+
+    /**
+     * 取出仓库的展示名称；扫描列表尚未完成时回退到路径末级目录。
+     */
+    function getCurrentRepoIdentity() {
+      const repo = allRepos.find(item => item.path === currentRepo);
+      if (repo) return repo;
+      const parts = String(currentRepo || '').split(/[\\/]/).filter(Boolean);
+      return currentRepo ? { name: parts[parts.length - 1] || 'Git Lens', group: '', path: currentRepo } : null;
+    }
+
+    /**
+     * 只有同名仓库同时出现在扫描结果中时，标题才补充分组，避免标题过长。
+     */
+    function getCurrentRepoTitleName(repo) {
+      if (!repo) return 'Git Lens';
+      const sameNameCount = allRepos.filter(item => item.name === repo.name).length;
+      return sameNameCount > 1 && repo.group ? `${repo.group}/${repo.name}` : repo.name;
+    }
+
+    /**
+     * favicon 在浏览器标签中很小，只取一个首字母以保持可读。
+     */
+    function getProjectInitial(name) {
+      return (Array.from(String(name || 'Git Lens').trim())[0] || 'G').toLocaleUpperCase();
+    }
+
+    /**
+     * SVG 文本只允许进入 favicon 的 text 节点，避免项目名破坏 SVG 结构。
+     */
+    function escapeSvgText(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&apos;');
+    }
+
+    /**
+     * 根据仓库路径稳定选择颜色，让同一项目在不同刷新和浏览器标签中保持一致。
+     */
+    function getProjectIconColor(value) {
+      let hash = 0;
+      for (const char of String(value || 'git-lens')) {
+        hash = ((hash << 5) - hash + char.codePointAt(0)) | 0;
+      }
+      return PROJECT_ICON_COLORS[Math.abs(hash) % PROJECT_ICON_COLORS.length];
+    }
+
+    /**
+     * 生成带项目首字母和 Git Lens 放大镜标记的 data URI favicon。
+     */
+    function buildProjectFavicon(repo) {
+      const name = getCurrentRepoTitleName(repo);
+      const initial = escapeSvgText(getProjectInitial(name));
+      const color = getProjectIconColor(repo?.path || name);
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="${color}"/><text x="29" y="46" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,sans-serif" font-size="39" font-weight="700" fill="white">${initial}</text><circle cx="48" cy="43" r="8" fill="${color}" stroke="white" stroke-width="3"/><path d="m54 49 6 6" fill="none" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>`;
+      return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+    }
+
+    /**
+     * 同步浏览器 tab 的标题和图标，确保切换仓库或功能页后仍能快速定位。
+     */
+    function updateDocumentIdentity() {
+      const repo = getCurrentRepoIdentity();
+      const titleName = getCurrentRepoTitleName(repo);
+      const tabLabel = TAB_TITLE_LABELS[activeTab] || TAB_TITLE_LABELS.overview;
+      document.title = repo ? `${titleName} · ${tabLabel} | Git Lens` : `Git Lens · ${tabLabel}`;
+      const favicon = document.getElementById('appFavicon');
+      if (favicon) favicon.href = buildProjectFavicon(repo);
+    }
+
     // 可搜索 Diff 选择器实例与请求防竞态计数
     let diffBasePicker = null;
     let diffTargetPicker = null;
@@ -2899,12 +2981,14 @@
       document.getElementById('repoSelect').value = repoPath;
       updateRepoTriggerText();
       renderRepoDropdownList();
+      updateDocumentIdentity();
       syncStateToUrl(true);
       inspectRepo(repoPath);
     }
 
     function switchTab(tab, pushHistory = true) {
       activeTab = tab;
+      updateDocumentIdentity();
       document.getElementById('tabOverview').className = tab === 'overview' ? 'tab-btn active' : 'tab-btn';
       document.getElementById('tabMr').className = tab === 'mr' ? 'tab-btn active' : 'tab-btn';
       document.getElementById('tabDiff').className = tab === 'diff' ? 'tab-btn active' : 'tab-btn';
@@ -2964,6 +3048,7 @@
         sel.value = currentRepo;
         updateRepoTriggerText();
         renderRepoDropdownList();
+        updateDocumentIdentity();
         syncStateToUrl(false);
 
         await inspectRepo(currentRepo);
@@ -3062,6 +3147,7 @@
     async function inspectRepo(repoPath) {
       if (!repoPath) return;
       currentRepo = repoPath;
+      updateDocumentIdentity();
       document.getElementById('headerPath').textContent = repoPath;
       document.getElementById('wtList').innerHTML = '<div class="loading">正在分析 Worktrees...</div>';
       document.getElementById('brList').innerHTML = '<div class="loading">正在分析分支...</div>';
