@@ -9,6 +9,7 @@ import {
   isGitRepo,
   getWorktrees,
   getBranches,
+  getCleanupCandidates,
   deleteBranch,
   removeWorktree,
   pruneWorktrees,
@@ -141,6 +142,48 @@ async function getComparablePath(targetPath) {
   } catch {
     return path.resolve(targetPath);
   }
+}
+
+/**
+ * 移除 Worktree 后可选删除它的绑定分支，供单项与批量入口复用。
+ * 删除分支前再次核对绑定关系，避免页面数据过期时删除其它分支。
+ */
+async function removeWorktreeWithBranch(repoPath, worktreePath, force, branchName, shouldDeleteBranch) {
+  if (shouldDeleteBranch) {
+    if (!branchName) throw new Error('缺少待删除的绑定分支');
+    const worktrees = await getWorktrees(repoPath);
+    const comparableWorktreePath = await getComparablePath(worktreePath);
+    let boundWorktree = null;
+    for (const worktree of worktrees) {
+      if (await getComparablePath(worktree.path) === comparableWorktreePath) {
+        boundWorktree = worktree;
+        break;
+      }
+    }
+    if (!boundWorktree || boundWorktree.isMain || boundWorktree.branch !== branchName) {
+      throw new Error('只能删除与该 Worktree 强绑定的非主分支');
+    }
+  }
+
+  const result = await removeWorktree(repoPath, worktreePath, force);
+  let branchDeleted = false;
+  let branchDeleteError = null;
+  if (shouldDeleteBranch && result.removed) {
+    try {
+      const branchResult = await deleteBranch(repoPath, branchName, true);
+      branchDeleted = branchResult.deleted;
+      if (!branchDeleted) branchDeleteError = '分支删除后仍然存在';
+    } catch (err) {
+      // Worktree 已经移除，无法回滚；把分支删除失败明确返回给前端。
+      branchDeleteError = err.message;
+    }
+  }
+  return {
+    ...result,
+    branchName: shouldDeleteBranch ? branchName : null,
+    branchDeleted,
+    branchDeleteError
+  };
 }
 
 /**
@@ -320,46 +363,90 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/remove-worktree' && req.method === 'POST') {
       const { repoPath, worktreePath, force, branchName, deleteBranch: shouldDeleteBranch } = await readJson();
       if (!repoPath || !worktreePath) throw new Error('Missing repoPath or worktreePath');
-
-      let boundWorktree = null;
-      if (shouldDeleteBranch) {
-        if (!branchName) throw new Error('Missing branchName for branch deletion');
-        const worktrees = await getWorktrees(repoPath);
-        const comparableWorktreePath = await getComparablePath(worktreePath);
-        for (const worktree of worktrees) {
-          if (await getComparablePath(worktree.path) === comparableWorktreePath) {
-            boundWorktree = worktree;
-            break;
-          }
-        }
-        if (!boundWorktree || boundWorktree.isMain || boundWorktree.branch !== branchName) {
-          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-          return res.end(JSON.stringify({ ok: false, error: '只能删除与该 Worktree 强绑定的非主分支' }));
-        }
+      let result;
+      try {
+        result = await removeWorktreeWithBranch(repoPath, worktreePath, force, branchName, shouldDeleteBranch);
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: err.message }));
       }
-
-      const result = await removeWorktree(repoPath, worktreePath, force);
-      let branchDeleted = false;
-      let branchDeleteError = null;
-      if (shouldDeleteBranch && result.removed) {
-        try {
-          const branchResult = await deleteBranch(repoPath, branchName, true);
-          branchDeleted = branchResult.deleted;
-          if (!branchDeleted) branchDeleteError = '分支删除后仍然存在';
-        } catch (err) {
-          // Worktree 已经移除，无法回滚；把分支删除失败明确返回给前端提示用户。
-          branchDeleteError = err.message;
-        }
-      }
-
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({
-        ok: true,
-        ...result,
-        branchName: shouldDeleteBranch ? branchName : null,
-        branchDeleted,
-        branchDeleteError
-      }));
+      return res.end(JSON.stringify({ ok: true, ...result }));
+    }
+
+    // 4.1 批量清理预览：只返回已同步且干净的 Worktree、未绑定的已合入分支。
+    if (pathname === '/api/cleanup-candidates' && req.method === 'GET') {
+      const repoPath = parsed.query.path;
+      if (!repoPath || !(await isGitRepo(repoPath))) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: '仓库路径无效' }));
+      }
+      const candidates = await getCleanupCandidates(repoPath);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: true, ...candidates }));
+    }
+
+    // 4.2 执行前重新核验每个候选；只处理用户在预览中确认的路径。
+    if (pathname === '/api/cleanup-synced-worktrees' && req.method === 'POST') {
+      const { repoPath, paths, deleteBoundBranches } = await readJson();
+      if (!repoPath || !(await isGitRepo(repoPath)) || !Array.isArray(paths)
+        || paths.length > 100 || paths.some(item => typeof item !== 'string' || !path.isAbsolute(item))) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: '清理参数无效' }));
+      }
+      const current = await getCleanupCandidates(repoPath);
+      const results = [];
+      for (const worktreePath of new Set(paths)) {
+        try {
+          const comparablePath = await getComparablePath(worktreePath);
+          let candidate = null;
+          for (const item of current.worktrees) {
+            if (await getComparablePath(item.path) === comparablePath) {
+              candidate = item;
+              break;
+            }
+          }
+          if (!candidate) {
+            results.push({ path: worktreePath, removed: false, error: '状态已变化，不再符合安全清理条件' });
+            continue;
+          }
+          const result = await removeWorktreeWithBranch(
+            repoPath, candidate.path, false, candidate.branch, Boolean(deleteBoundBranches)
+          );
+          results.push({ path: worktreePath, ...result });
+        } catch (err) {
+          results.push({ path: worktreePath, removed: false, error: err.message });
+        }
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: true, results }));
+    }
+
+    // 4.3 分支批量清理只接受预览中的名称，并逐项重新核验绑定与合入状态。
+    if (pathname === '/api/cleanup-redundant-branches' && req.method === 'POST') {
+      const { repoPath, names } = await readJson();
+      if (!repoPath || !(await isGitRepo(repoPath)) || !Array.isArray(names)
+        || names.length > 100 || names.some(item => typeof item !== 'string' || !item.trim())) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ ok: false, error: '清理参数无效' }));
+      }
+      const current = await getCleanupCandidates(repoPath);
+      const results = [];
+      for (const branchName of new Set(names)) {
+        try {
+          const candidate = current.branches.find(item => item.name === branchName);
+          if (!candidate) {
+            results.push({ name: branchName, deleted: false, error: '状态已变化，不再符合安全清理条件' });
+            continue;
+          }
+          const result = await deleteBranch(repoPath, branchName, true);
+          results.push({ name: branchName, ...result });
+        } catch (err) {
+          results.push({ name: branchName, deleted: false, error: err.message });
+        }
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      return res.end(JSON.stringify({ ok: true, results }));
     }
 
     // 5. API: 单项检查分支状态

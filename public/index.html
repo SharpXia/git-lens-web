@@ -122,6 +122,13 @@
       margin-bottom: 20px;
       align-items: center;
     }
+    .cleanup-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: -8px 0 20px;
+    }
     select, button, input {
       background: var(--card-bg);
       border: 1px solid var(--border);
@@ -1053,6 +1060,9 @@
       font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
       font-size: 12px;
       overflow-wrap: anywhere;
+      white-space: pre-line;
+      max-height: 240px;
+      overflow-y: auto;
     }
     .worktree-remove-option {
       display: flex;
@@ -1629,7 +1639,6 @@
     </button>
     <div class="tab-bar-actions">
       <button id="newMrBtn" class="btn-primary" onclick="openCreateMrModal()" title="基于当前仓库的两个本地分支发起 Merge Request">新建 MR</button>
-      <button id="pruneBtn" class="btn-primary">一键 Prune 无效引用</button>
     </div>
   </div>
 
@@ -1668,6 +1677,11 @@
 
   <!-- TAB 1: 仓库透视与管理面板 -->
   <div id="viewOverview">
+    <div class="cleanup-toolbar" aria-label="仓库清理操作">
+      <button id="pruneBtn" class="btn-outline" type="button" title="清理已经失联的 Worktree 引用">Prune 无效引用</button>
+      <button id="cleanupWorktreesBtn" class="btn-outline" type="button" onclick="runBulkCleanup('worktrees')">移除已同步 Worktree</button>
+      <button id="cleanupBranchesBtn" class="btn-outline" type="button" onclick="runBulkCleanup('branches')">删除无效分支</button>
+    </div>
     <div class="metrics-grid">
       <div class="metric-card">
         <div class="metric-title">总 Worktree 数</div>
@@ -1837,7 +1851,7 @@
       <div class="worktree-remove-body">
         <h2 id="worktreeRemoveModalTitle">移除 Worktree</h2>
         <div id="worktreeRemovePath" class="worktree-remove-path"></div>
-        <label class="worktree-remove-option" for="deleteBoundBranchCheckbox">
+        <label id="deleteBoundBranchOption" class="worktree-remove-option" for="deleteBoundBranchCheckbox">
           <input id="deleteBoundBranchCheckbox" type="checkbox">
           <span class="worktree-remove-option-text">
             <strong id="deleteBoundBranchLabel">同步删除强绑定分支</strong>
@@ -2109,16 +2123,23 @@
       }
     }
 
-    function requestWorktreeRemoval(worktreePath, branchName) {
+    function requestWorktreeRemoval(worktreePath, branchName, options = {}) {
       return new Promise((resolve) => {
         worktreeRemoveRequest = resolve;
         const checkbox = document.getElementById('deleteBoundBranchCheckbox');
         const label = document.getElementById('deleteBoundBranchLabel');
         const hint = document.getElementById('deleteBoundBranchHint');
+        const allowBranchDelete = options.allowBranchDelete ?? Boolean(branchName);
+        document.getElementById('worktreeRemoveModalTitle').textContent = options.title || '移除 Worktree';
         document.getElementById('worktreeRemovePath').textContent = worktreePath;
         checkbox.checked = false;
-        checkbox.disabled = !branchName;
-        if (branchName) {
+        checkbox.disabled = !allowBranchDelete;
+        if (options.batch) {
+          label.textContent = '同步删除候选 Worktree 的绑定分支';
+          hint.textContent = allowBranchDelete
+            ? '默认不勾选；勾选后只删除仍与这些 Worktree 绑定的分支。'
+            : '候选 Worktree 都没有可同步删除的分支。';
+        } else if (branchName) {
           label.textContent = `同步删除强绑定分支「${branchName}」`;
           hint.textContent = '默认不勾选；勾选后会在移除 Worktree 后强制删除该分支。';
         } else {
@@ -2126,8 +2147,85 @@
           hint.textContent = '当前操作只会移除 Worktree。';
         }
         document.getElementById('worktreeRemoveModal').style.display = 'flex';
-        setTimeout(() => (branchName ? checkbox : document.querySelector('#worktreeRemoveModal button')).focus(), 0);
+        setTimeout(() => (allowBranchDelete ? checkbox : document.querySelector('#worktreeRemoveModal button')).focus(), 0);
       });
+    }
+
+    async function fetchCleanupCandidates() {
+      const res = await fetch(`/api/cleanup-candidates?path=${encodeURIComponent(currentRepo)}`);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || '获取清理候选失败');
+      return data;
+    }
+
+    async function runBulkCleanup(kind) {
+      const buttonId = kind === 'worktrees' ? 'cleanupWorktreesBtn' : 'cleanupBranchesBtn';
+      const button = document.getElementById(buttonId);
+      if (!currentRepo || !button) return;
+      button.disabled = true;
+      const originalText = button.textContent;
+      button.textContent = '检查中...';
+      try {
+        const candidates = await fetchCleanupCandidates();
+        if (kind === 'worktrees') {
+          const items = candidates.worktrees || [];
+          if (!items.length) {
+            alert('没有符合条件的已同步 Worktree。失联引用请使用 Prune。');
+            return;
+          }
+          const hasBranches = items.some(item => item.branch);
+          const summary = items.map(item => `• ${item.path}${item.branch ? `（${item.branch}）` : ''}`).join('\n');
+          const options = await requestWorktreeRemoval(
+            `将移除以下 ${items.length} 个已同步 Worktree：\n${summary}`,
+            '',
+            { batch: true, allowBranchDelete: hasBranches, title: '批量移除已同步 Worktree' }
+          );
+          if (!options) return;
+
+          button.textContent = '移除中...';
+          const res = await fetch('/api/cleanup-synced-worktrees', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              repoPath: currentRepo,
+              paths: items.map(item => item.path),
+              deleteBoundBranches: options.deleteBranch
+            })
+          });
+          const data = await res.json();
+          if (!data.ok) throw new Error(data.error || '批量移除失败');
+          const successCount = (data.results || []).filter(item => item.removed).length;
+          const failed = (data.results || []).filter(item => !item.removed);
+          await inspectRepo(currentRepo);
+          alert(`已移除 ${successCount} 个 Worktree${failed.length ? `，${failed.length} 个因状态变化未处理` : ''}。`);
+        } else {
+          const items = candidates.branches || [];
+          if (!items.length) {
+            alert('没有符合条件的无效分支。');
+            return;
+          }
+          const names = items.map(item => item.name);
+          if (!confirm(`确认删除以下 ${names.length} 个已同步且未绑定的分支？\n\n${names.join('\n')}`)) return;
+
+          button.textContent = '删除中...';
+          const res = await fetch('/api/cleanup-redundant-branches', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ repoPath: currentRepo, names })
+          });
+          const data = await res.json();
+          if (!data.ok) throw new Error(data.error || '批量删除分支失败');
+          const successCount = (data.results || []).filter(item => item.deleted).length;
+          const failed = (data.results || []).filter(item => !item.deleted);
+          await inspectRepo(currentRepo);
+          alert(`已删除 ${successCount} 个分支${failed.length ? `，${failed.length} 个因状态变化未处理` : ''}。`);
+        }
+      } catch (err) {
+        alert(`清理失败：${err.message}`);
+      } finally {
+        button.disabled = false;
+        button.textContent = originalText;
+      }
     }
 
     function closeWorktreeRemoveModal(confirmed) {
