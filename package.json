@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "test:isolated": "node scripts/qa/run.mjs",
-    "test:desktop:isolated": "node scripts/qa/run-desktop.mjs"
+    "test:desktop:isolated": "node scripts/qa/run-desktop.mjs",
+    "test:desktop:full": "node scripts/qa/run-desktop-full.mjs"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
