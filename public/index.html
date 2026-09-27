@@ -2228,14 +2228,22 @@
       button.textContent = '正在打开…';
       error.textContent = '';
       try {
-        const res = await fetch('/api/choose-scan-directory', { method: 'POST' });
-        const data = await res.json();
-        if (!data.ok) throw new Error(data.error || '打开目录选择器失败');
-        if (data.directory) {
-          if (scanDirectoryDraft.includes(data.directory)) {
+        let directory = null;
+        if (isDesktop && typeof window.gitLens?.chooseDirectory === 'function') {
+          // 桌面模式：经 preload 直连原生目录对话框（契约 §6）；用户取消时返回 null
+          directory = await window.gitLens.chooseDirectory();
+        } else {
+          // 浏览器模式：沿用服务端系统选择器
+          const res = await fetch('/api/choose-scan-directory', { method: 'POST' });
+          const data = await res.json();
+          if (!data.ok) throw new Error(data.error || '打开目录选择器失败');
+          directory = data.directory || null;
+        }
+        if (directory) {
+          if (scanDirectoryDraft.includes(directory)) {
             error.textContent = '这个目录已经添加。';
           } else {
-            scanDirectoryDraft.push(data.directory);
+            scanDirectoryDraft.push(directory);
             renderScanDirectoryList();
           }
         }
