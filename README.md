@@ -49,6 +49,12 @@ Base 和 Target 可以分别选择 Worktree 或本地分支。分支 ↔ 分支�
 
 ![Git Lens Web 虚构 fixture 的 Branch Diff](./docs/images/readme-branch-diff.png)
 
+### 未提交自审
+
+将 Base 和 Target 选择为同一个 Worktree 后，页面会切换到未提交自审模式，只显示工作区和未跟踪文件，并保留 Stash 相关操作入口。
+
+![Git Lens Web 虚构 fixture 的未提交自审](./docs/images/readme-uncommitted-diff.png)
+
 ### 提交记录抽屉
 
 提交抽屉支持过滤、日期分组、详情展开和单提交 Diff，适合在执行 Cherry-pick 或 Revert 前确认提交内容。
