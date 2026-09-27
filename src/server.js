@@ -25,7 +25,9 @@ import {
   commitAction,
   getStashList,
   stashAction,
-  getRefDiff
+  getRefDiff,
+  annotateWorktreesFromBranches,
+  annotateDeliveredViaWorktrees
 } from './git-inspector.js';
 import {
   listMergeRequests,
@@ -228,6 +230,12 @@ const server = http.createServer(async (req, res) => {
         getWorktrees(repoPath),
         getBranches(repoPath)
       ]);
+
+      // 传递吸收判定收尾：worktree 自身的四方判定没有全局分支视图。
+      // 先同步分支侧结论（含历史整合推断覆盖的场景），再对 worktree 直接探测载体——
+      // squash/PR 合并后的开发分支在分支面板常已显示合入，worktree 面板却仍显示领先
+      annotateWorktreesFromBranches(worktrees, branchData.branches);
+      await annotateDeliveredViaWorktrees(repoPath, worktrees, branchData.branches);
 
       const staleWorktrees = worktrees.filter(w => !w.isMain && (!w.existsOnDisk || w.isPrunable));
       const redundantBranches = branchData.branches.filter(b => b.redundancyReason);
@@ -519,13 +527,12 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // 11.2 API: 对指定 Worktree 执行 stash 写操作（push/pop/drop/discard）。
-    // 请求体 { worktree, action, message?, stashRef? }；校验与 commitAction 同样收敛在
-    // stashAction 内，discard 为不可恢复操作，前端必须二次确认后才调用。
+    // 11.2 API: 对指定 Worktree 执行 stash 与未提交修改操作。
+    // pop 可另选同仓库的目标 Worktree 或分支；未绑定的分支需指定新 Worktree 目录。
     if (pathname === '/api/stash-action' && req.method === 'POST') {
-      const { worktree, action, message, stashRef } = await readJson();
+      const { worktree, action, message, stashRef, targetWorktree, targetBranch, newWorktreePath } = await readJson();
       try {
-        const result = await stashAction(worktree, action, { message, stashRef });
+        const result = await stashAction(worktree, action, { message, stashRef, targetWorktree, targetBranch, newWorktreePath });
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         return res.end(JSON.stringify(result));
       } catch (err) {

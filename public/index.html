@@ -83,6 +83,12 @@
       margin-bottom: 20px;
       border-bottom: 1px solid var(--border);
       padding-bottom: 12px;
+      align-items: center;
+    }
+    .tab-bar-actions {
+      display: flex;
+      gap: 8px;
+      margin-left: auto;
     }
     .tab-btn {
       background: transparent;
@@ -596,6 +602,48 @@
       align-items: center;
       gap: 4px;
     }
+    .diff-stash-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
+    }
+    .diff-stash-actions > button, .stash-menu > summary {
+      font-size: 12px;
+      padding: 4px 10px;
+      white-space: nowrap;
+    }
+    .stash-menu { position: relative; }
+    .stash-menu > summary { list-style: none; cursor: pointer; }
+    .stash-menu > summary::-webkit-details-marker { display: none; }
+    .stash-popover {
+      position: absolute;
+      z-index: 120;
+      top: calc(100% + 8px);
+      right: 0;
+      width: min(560px, calc(100vw - 48px));
+      max-height: 360px;
+      overflow-y: auto;
+      padding: 10px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+    }
+    .stash-target-select {
+      width: 100%;
+      margin: 8px 0 12px;
+      padding: 7px 8px;
+      color: var(--text-bright);
+      background: #0d1117;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .stash-cleanup-menu {
+      display: grid;
+      gap: 8px;
+      min-width: 220px;
+    }
 
     /* 文件列表与手风琴 Diff 组件 */
     .diff-tools-bar {
@@ -630,7 +678,7 @@
       gap: 8px;
     }
 
-    /* 未提交面板的 stash 列表条目 */
+    /* Stash 弹出列表的条目 */
     .stash-item {
       display: flex;
       align-items: center;
@@ -641,6 +689,11 @@
       border-radius: 6px;
       margin-bottom: 8px;
       font-size: 13px;
+      flex-wrap: wrap;
+    }
+    .stash-item button {
+      font-size: 12px;
+      padding: 4px 10px;
     }
     .stash-ref {
       font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
@@ -1574,6 +1627,10 @@
     <button id="tabMr" class="tab-btn" onclick="switchTab('mr')">
       <span>🔀 Merge Requests</span>
     </button>
+    <div class="tab-bar-actions">
+      <button id="newMrBtn" class="btn-primary" onclick="openCreateMrModal()" title="基于当前仓库的两个本地分支发起 Merge Request">新建 MR</button>
+      <button id="pruneBtn" class="btn-primary">一键 Prune 无效引用</button>
+    </div>
   </div>
 
   <div class="project-bar">
@@ -1605,10 +1662,8 @@
     <select id="repoSelect" style="display: none;"></select>
 
     <input id="searchInput" type="search" placeholder="搜索分支或 Worktree..." autocomplete="off" aria-label="搜索分支或 Worktree">
-    <button id="scanDirectoryBtn" class="btn-outline" type="button" onclick="openScanDirectoryModal()">📁 扫描目录</button>
     <button id="refreshBtn" class="btn-outline">全量刷新</button>
-    <button id="newMrBtn" class="btn-primary" style="margin-left: auto;" onclick="openCreateMrModal()" title="基于当前仓库的两个本地分支发起 Merge Request">🔀 新建 MR</button>
-    <button id="pruneBtn" class="btn-primary">一键 Prune 无效引用</button>
+    <button id="scanDirectoryBtn" class="btn-outline" type="button" onclick="openScanDirectoryModal()">扫描目录</button>
   </div>
 
   <!-- TAB 1: 仓库透视与管理面板 -->
@@ -1910,8 +1965,9 @@
     let createMrTargetPicker = null;
 
     function selectDiffMode(mode) {
+      if (mode === currentDiffMode) return;
       currentDiffMode = mode;
-      fetchAndRenderRefDiff(mode, true);
+      fetchAndRenderRefDiff(mode, true, true);
     }
 
     const STARRED_STORAGE_KEY = 'git_lens_starred_repos';
@@ -2875,7 +2931,12 @@
         if (!wt.existsOnDisk) tags.push('<span class="badge badge-danger">磁盘已失联</span>');
         if (wt.isDirty) tags.push(`<span class="badge badge-warning">⚡ 未提交修改 (${wt.dirtyCount})</span>`);
         if (wt.aheadCount > 0) {
-          tags.push(`<span class="badge badge-success" title="分支文件内容相对 Main 仍有实际差异，提交历史领先 ${wt.historyAheadCount || wt.aheadCount} 个提交">🚀 领先 ${wt.aheadCount} 提交</span>`);
+          if (wt.deliveredViaBranch) {
+            // 传递吸收判定命中：提交的机械领先是过时快照，成果已经由载体分支进入主干
+            tags.push(`<span class="badge badge-success" title="提交历史领先 ${wt.historyAheadCount || wt.aheadCount} 个提交，但这些提交已全部包含在已合入主干的分支 ${escapeHtml(wt.deliveredViaBranch)} 中，成果已经交付。本 Worktree 为过时快照：合并会带回旧内容，确认后可直接移除">✓ 成果已经由 ${escapeHtml(wt.deliveredViaBranch)} 进入主干</span>`);
+          } else {
+            tags.push(`<span class="badge badge-success" title="分支文件内容相对 Main 仍有实际差异，提交历史领先 ${wt.historyAheadCount || wt.aheadCount} 个提交">🚀 领先 ${wt.aheadCount} 提交</span>`);
+          }
         } else if (wt.isContentEqualToMain && (wt.historyAheadCount || 0) > 0) {
           tags.push(`<span class="badge badge-success" title="提交历史领先 ${wt.historyAheadCount} 个提交，但分支改动已被主干吸收（revert 抵消 / cherry-pick / squash 合入等），合入主干不会产生实际变化">内容已与主干同步</span>`);
         }
@@ -2923,6 +2984,10 @@
       if (b.inUseByWorktree) tags.push('<span class="badge">🌳 Worktree 绑定中</span>');
       if (b.isMerged) {
         tags.push(`<span class="badge" title="${b.isDirectlyMerged ? '分支提交已直接进入主分支历史' : '分支改动已通过内容或协调分支进入主分支'}">${b.isDirectlyMerged ? '已合入主干' : '内容已合入主干'}</span>`);
+      } else if (b.deliveredViaBranch) {
+        // 传递吸收判定命中：原始提交不再是主干祖先（如 squash 合并后的开发分支快照），
+        // 但成果已经由载体分支进入主干，展示交付事实并引导删除而非合并
+        tags.push(`<span class="badge badge-success" title="分支提交已全部包含在已合入主干的分支 ${escapeHtml(b.deliveredViaBranch)} 中，成果已经交付。本分支为过时快照：合并会带回旧内容，建议直接删除">成果已经由 ${escapeHtml(b.deliveredViaBranch)} 合入主干（过时快照）</span>`);
       }
 
       div.innerHTML = `
@@ -2946,7 +3011,7 @@
         <div class="item-actions">
           <button class="btn-outline" onclick="openBranchCommitsDrawer('${escapeHtml(b.name)}')" title="${b.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>
           ${!b.isMain ? `<button class="btn-outline" onclick="viewBranchDiffAgainstMain('${escapeHtml(b.name)}')" title="以「仅已提交」模式对比该分支与主分支（仅比较已提交内容，无 Worktree 的分支也可用）">与主分支对比</button>` : ''}
-          ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${escapeHtml(b.name)}', ${!b.isMerged})">删除</button>` : ''}
+          ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${escapeHtml(b.name)}', ${!(b.isMerged || b.deliveredViaBranch)})">删除</button>` : ''}
         </div>
       `;
       return div;
@@ -3332,7 +3397,7 @@
 
     /* 统一 Diff 比对入口：读取两个选择器的 kind:value 身份串调用 /api/diff-refs，
        worktree↔worktree 组合也走该接口，与 worktree↔branch 语义一致 */
-    async function fetchAndRenderRefDiff(requestedMode = null, pushHistory = false) {
+    async function fetchAndRenderRefDiff(requestedMode = null, pushHistory = false, modeOnly = false) {
       const baseSel = document.getElementById('diffBaseSelect');
       const targetSel = document.getElementById('diffTargetSelect');
       const container = document.getElementById('diffResultsContainer');
@@ -3358,7 +3423,11 @@
       }
       syncStateToUrl(pushHistory);
 
-      container.innerHTML = '<div class="loading">正在比对代码差异...</div>';
+      // 模式切换沿用现有摘要与 Stash 弹层，只等待文件列表及模式相关数字更新。
+      const preserveShell = modeOnly && container.querySelector('#diffModeControl')
+        && container.dataset.renderedRepo === currentRepo
+        && container.dataset.renderedBase === base && container.dataset.renderedTarget === target;
+      if (!preserveShell) container.innerHTML = '<div class="loading">正在比对代码差异...</div>';
 
       const seq = ++diffRequestSeq;
       const baseRef = splitRefIdentity(base);
@@ -3385,10 +3454,12 @@
         if (diff.effectiveMode) {
           currentDiffMode = diff.effectiveMode;
         }
-        renderDiffView(diff);
+        renderDiffView(diff, preserveShell);
       } catch (err) {
         if (seq !== diffRequestSeq) return;
-        container.innerHTML = `<div class="empty-diff-box" style="color: var(--danger);">Diff 计算失败: ${escapeHtml(err.message)}</div>`;
+        const errorHtml = `<div class="empty-diff-box" style="color: var(--danger);">Diff 计算失败: ${escapeHtml(err.message)}</div>`;
+        if (preserveShell) container.querySelector('#diffFileListContent').innerHTML = errorHtml;
+        else container.innerHTML = errorHtml;
       }
     }
 
@@ -3569,14 +3640,19 @@
       return `<span${title}>${icon} <span class="badge">${escapeHtml(name)}</span> ${head}</span>`;
     }
 
-    /* 渲染两个 Worktree 之间的 Diff 视图 */
-    function renderDiffView(diff) {
+    /* 渲染两个 Worktree 或分支之间的 Diff 视图 */
+    function renderDiffView(diff, preserveShell = false) {
       const container = document.getElementById('diffResultsContainer');
       const files = diff.files || [];
       const ahead = diff.ahead || 0;
       const behind = diff.behind || 0;
       const counts = diff.counts || { uncommitted: 0, all: 0, committed: 0 };
       const effectiveMode = diff.effectiveMode || 'all';
+
+      // Stash 属于目标 Worktree，已提交模式或干净工作区仍可还原历史记录。
+      const stashWorktreePath = diff.target?.kind === 'worktree' ? diff.target.path || '' : '';
+      currentUncommittedPath = stashWorktreePath;
+
       const isBehindOnly = !diff.isSameWorktree && ahead === 0 && behind > 0;
 
       let syncStatusBadge = '';
@@ -3604,7 +3680,11 @@
       const isSelfDiff = !!diff.isSameWorktree || currentDiffBase === currentDiffTarget;
       // branch 类型参与比对时后端会通过 modesAvailable 限制可用模式（如无 worktree 则无未提交可看），
       // 前端据此禁用不可用的模式按钮
-      const modesAvailable = Array.isArray(diff.modesAvailable) ? diff.modesAvailable : null;
+      const modesAvailable = Array.isArray(diff.modesAvailable)
+        ? diff.modesAvailable
+        : (diff.modesAvailable && typeof diff.modesAvailable === 'object'
+          ? Object.keys(diff.modesAvailable).filter(mode => diff.modesAvailable[mode])
+          : null);
       const isModeDisabled = (m) => (isSelfDiff && m !== 'uncommitted')
         || (Boolean(modesAvailable) && !modesAvailable.includes(m));
       const modeDisabledTitle = (m) => (isSelfDiff && m !== 'uncommitted')
@@ -3621,8 +3701,26 @@
         modeTipText = '📌 纯分支文件内容对比（已忽略本地未提交修改）';
       }
 
+      const stashActionsHtml = stashWorktreePath ? `
+        <div class="diff-stash-actions">
+          ${counts.uncommitted > 0 ? `
+            <button class="btn-outline" title="将全部未提交修改（含未跟踪文件）存入暂存记录" onclick="stashActionWithConfirm('push', '', this)">暂存</button>
+            <details class="stash-menu">
+              <summary class="btn-outline">处理未提交</summary>
+              <div class="stash-popover stash-cleanup-menu">
+                <button class="btn-outline" onclick="stashActionWithConfirm('restore', '', this)">还原已跟踪</button>
+                <button class="btn-outline" onclick="stashActionWithConfirm('clean', '', this)">删除未跟踪</button>
+                <button class="btn-danger" onclick="stashActionWithConfirm('discard', '', this)">全部丢弃</button>
+              </div>
+            </details>` : ''}
+          <details class="stash-menu">
+            <summary class="btn-outline">历史暂存</summary>
+            <div class="stash-popover" id="stashListContainer"><div class="loading">正在加载历史暂存...</div></div>
+          </details>
+        </div>
+      ` : '';
       const modeControlHtml = `
-        <div class="diff-mode-control-row">
+        <div id="diffModeControl" class="diff-mode-control-row">
           <div class="diff-mode-segmented">
             <button class="diff-mode-btn ${effectiveMode === 'uncommitted' ? 'active' : ''} ${isModeDisabled('uncommitted') ? 'disabled' : ''}" ${isModeDisabled('uncommitted') ? 'disabled' : ''} onclick="selectDiffMode('uncommitted')" title="${isModeDisabled('uncommitted') ? modeDisabledTitle('uncommitted') : '仅查看当前工作区未提交和未跟踪的代码'}">
               <span>⚡ 仅未提交 & 未跟踪</span>
@@ -3638,34 +3736,23 @@
             </button>
           </div>
           <div class="diff-mode-tip">${modeTipText}</div>
+          ${stashActionsHtml}
         </div>
       `;
 
-      if (files.length === 0) {
+      const emptyDiffHtml = (() => {
+        if (files.length !== 0) return '';
         let emptyDesc = '🎉 当前审查模式下无任何文件差异。';
         if (effectiveMode === 'uncommitted') {
-          emptyDesc = '🎉 Target 工作区非常干净（Clean），没有本地未暂存或未提交的修改。<br><span style="color: var(--text-muted); font-size: 13px;">如需审查已提交的代码，请点击上方<b>【📦 全量变更】</b>或<b>【📌 仅已提交】</b>。</span>';
+          emptyDesc = '🎉 Target 工作区干净，没有本地未提交修改。<br><span style="color: var(--text-muted); font-size: 13px;">如需审查已提交代码，请点击上方<b>【📦 全量变更】</b>或<b>【📌 仅已提交】</b>；历史暂存可通过上方入口还原或删除。</span>';
         } else if (diff.isCommittedContentEqual && (diff.historyAhead > 0 || diff.historyBehind > 0)) {
           emptyDesc = '🎉 两个工作区的最终文件内容一致。<br><span style="color: var(--text-muted); font-size: 13px;">提交历史存在差异，但这通常是 squash 合入造成的历史差异，已从文件 Diff 中过滤。</span>';
         } else if (behind > 0 && ahead === 0) {
           emptyDesc = `ℹ️ <b>对比分支当前落后于基准分支（落后 ${behind} 个提交）</b>，且没有领先的独有代码修改。<br><span style="color: var(--text-muted); font-size: 13px;">已默认隐藏基准分支的更新；若需查看这些文件变更，可点击右上角<b>【落后 ${behind} 个提交】</b>状态。</span>`;
         }
 
-        container.innerHTML = `
-          <div class="diff-summary-card">
-            <div class="stat-bar">
-              <div>基准 (Base): ${diffRefBadgeHtml(diff.source)}</div>
-              <div>对比 (Target): ${diffRefBadgeHtml(diff.target)}</div>
-              <div style="margin-left: auto;">${syncStatusBadge}</div>
-            </div>
-            ${modeControlHtml}
-            <div class="empty-diff-box" style="padding: 28px; border: none; background: transparent; line-height: 1.8;">
-              ${emptyDesc}
-            </div>
-          </div>
-        `;
-        return;
-      }
+        return `<div class="empty-diff-box" style="padding: 28px; border: none; background: transparent; line-height: 1.8;">${emptyDesc}</div>`;
+      })();
 
       let totalAdd = 0;
       let totalDel = 0;
@@ -3690,7 +3777,13 @@
 
       const fileCardsHtml = sortedDiffFiles.map((f, idx) => {
         const cardId = `diff-card-${idx}`;
-        const bodyContent = renderFileBodyContent(f, sourceRef, targetRef, currentRepo, null);
+        const bodyContent = renderFileBodyContent(
+          f,
+          sourceRef,
+          targetRef,
+          currentRepo,
+          effectiveMode === 'uncommitted' ? stashWorktreePath : null
+        );
         const isImg = f.isImage || isImageFilePath(f.filePath);
 
         let statusTag = '<span class="file-status-badge status-modified">MODIFIED</span>';
@@ -3726,9 +3819,8 @@
         `;
       }).join('');
 
-      container.innerHTML = `
-        <div class="diff-summary-card">
-          <div class="stat-bar">
+      const statBarHtml = `
+          <div id="diffStatBar" class="stat-bar">
             <div>基准 (Base): ${diffRefBadgeHtml(diff.source)}</div>
             <div>对比 (Target): ${diffRefBadgeHtml(diff.target)}</div>
             <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
@@ -3738,11 +3830,8 @@
               <span>新增: <span class="add-count">+${totalAdd}</span> 行</span>
               <span>删除: <span class="del-count">-${totalDel}</span> 行</span>
             </div>
-          </div>
-
-          ${modeControlHtml}
-        </div>
-
+          </div>`;
+      const fileListHtml = files.length === 0 ? emptyDiffHtml : `
         <div class="diff-tools-bar">
           <div class="diff-tools-left">
             <span>📁 变更文件列表 (${files.length})</span>
@@ -3758,109 +3847,30 @@
           ${fileCardsHtml}
         </div>
       `;
-    }
-
-    /* 渲染未提交代码 (Dirty Diff) 视图 */
-    function renderUncommittedDiffView(uncommitted) {
-      const container = document.getElementById('diffResultsContainer');
-      const files = uncommitted.files || [];
-
-      if (files.length === 0) {
-        container.innerHTML = `
-          <div class="diff-summary-card">
-            <div class="stat-bar">
-              <div>工作区: <code>${escapeHtml(uncommitted.worktreePath)}</code></div>
-              <div style="margin-left: auto;"><span class="badge badge-success">工作树干净 (Clean)</span></div>
-            </div>
-            <div class="empty-diff-box" style="padding: 28px; border: none; background: transparent;">
-              🎉 该工作区没有任何未暂存或未提交的修改。
-            </div>
-          </div>
-          <div id="stashListContainer"></div>
-        `;
-        // 工作树干净时也可能存在历史 stash，仍需加载 stash 列表供 Pop/Drop
-        fetchAndRenderStashList(uncommitted.worktreePath);
-        return;
-      }
-
-      // 优先展示文本代码变更，将图片及媒体文件置底展示
-      const sortedDiffFiles = [...files].sort((a, b) => {
-        const aIsMedia = (a.isImage || isMediaFile(a.filePath) || a.isBinary) ? 1 : 0;
-        const bIsMedia = (b.isImage || isMediaFile(b.filePath) || b.isBinary) ? 1 : 0;
-        return aIsMedia - bIsMedia;
-      });
-
-      const fileCardsHtml = sortedDiffFiles.map((f, idx) => {
-        const cardId = `uncommitted-card-${idx}`;
-        const bodyContent = renderFileBodyContent(f, null, null, currentRepo, uncommitted.worktreePath);
-        const isImg = f.isImage || isImageFilePath(f.filePath);
-
-        let statusTag = '<span class="file-status-badge status-modified">MODIFIED</span>';
-        if (f.status === '?') statusTag = '<span class="file-status-badge status-added">UNTRACKED</span>';
-        else if (f.deleted === 0 && f.added > 0) statusTag = '<span class="file-status-badge status-added">ADDED</span>';
-        else if (f.added === 0 && f.deleted > 0) statusTag = '<span class="file-status-badge status-deleted">DELETED</span>';
-
-        let statTag = '';
-        if (isImg) {
-          statTag = '<span class="binary-file-tag">🖼️ 图片文件</span>';
-        } else if (f.isBinary) {
-          statTag = '<span class="binary-file-tag">二进制文件</span>';
-        } else {
-          statTag = `<span><span class="add-count">+${f.added}</span> <span class="del-count">-${f.deleted}</span></span>`;
+      if (preserveShell) {
+        const statBar = container.querySelector('#diffStatBar');
+        const modeControl = container.querySelector('#diffModeControl');
+        const fileList = container.querySelector('#diffFileListContent');
+        if (statBar) statBar.outerHTML = statBarHtml;
+        if (modeControl) {
+          // 保留模式行及 Stash 弹层本身，只替换模式按钮和说明文字，避免切换时关闭弹层。
+          const modeTemplate = document.createElement('div');
+          modeTemplate.innerHTML = modeControlHtml;
+          const nextSegmented = modeTemplate.querySelector('.diff-mode-segmented');
+          const nextTip = modeTemplate.querySelector('.diff-mode-tip');
+          const currentSegmented = modeControl.querySelector('.diff-mode-segmented');
+          const currentTip = modeControl.querySelector('.diff-mode-tip');
+          if (currentSegmented && nextSegmented) currentSegmented.replaceWith(nextSegmented);
+          if (currentTip && nextTip) currentTip.replaceWith(nextTip);
         }
-
-        return `
-          <div id="${cardId}" class="file-diff-card">
-            <div class="file-header" onclick="toggleFileDiff('${cardId}')">
-              <div class="file-title-left">
-                <span class="file-arrow">▶</span>
-                ${statusTag}
-                <span>${escapeHtml(f.filePath)}</span>
-              </div>
-              <div style="display: flex; gap: 12px; align-items: center; font-size: 12px;">
-                ${statTag}
-              </div>
-            </div>
-            <div class="file-body">
-              ${bodyContent}
-            </div>
-          </div>
-        `;
-      }).join('');
-
-      container.innerHTML = `
-        <div class="diff-summary-card">
-          <div class="stat-bar">
-            <div>本地工作区: <code>${escapeHtml(uncommitted.worktreePath)}</code></div>
-            <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
-              <button class="btn-outline" style="font-size: 12px; padding: 4px 10px;" title="将全部未提交修改（含未跟踪文件）存入 stash" onclick="stashActionWithConfirm('push', '', this)">📥 暂存 (Stash)</button>
-              <button class="btn-danger" style="font-size: 12px; padding: 4px 10px;" title="丢弃全部未提交修改（含未跟踪文件），不可恢复" onclick="stashActionWithConfirm('discard', '', this)">🗑 丢弃全部修改</button>
-              <span class="badge badge-warning">未提交代码 (${files.length} 个文件)</span>
-              <span style="color: var(--text-muted);">|</span>
-              <span>新增: <span class="add-count">+${uncommitted.totalAdded}</span> 行</span>
-              <span>删除: <span class="del-count">-${uncommitted.totalDeleted}</span> 行</span>
-            </div>
-          </div>
-        </div>
-
-        <div id="stashListContainer"></div>
-
-        <div class="diff-tools-bar">
-          <div class="diff-tools-left">
-            <span>📝 未提交代码文件清单 (${files.length})</span>
-            <span style="font-size: 12px; color: var(--text-muted); font-weight: normal;">单击单项展开/收起代码审查</span>
-          </div>
-          <div class="diff-tools-right">
-            <button class="btn-outline" onclick="toggleAllDiffs(true)" style="font-size: 12px; padding: 4px 10px;">展开全部</button>
-            <button class="btn-outline" onclick="toggleAllDiffs(false)" style="font-size: 12px; padding: 4px 10px;">收起全部</button>
-          </div>
-        </div>
-
-        <div style="margin-top: 8px;">
-          ${fileCardsHtml}
-        </div>
-      `;
-      fetchAndRenderStashList(uncommitted.worktreePath);
+        if (fileList) fileList.innerHTML = fileListHtml;
+      } else {
+        container.innerHTML = `<div class="diff-summary-card">${statBarHtml}${modeControlHtml}</div><div id="diffFileListContent">${fileListHtml}</div>`;
+      }
+      container.dataset.renderedRepo = currentRepo;
+      container.dataset.renderedBase = currentDiffBase;
+      container.dataset.renderedTarget = currentDiffTarget;
+      if (stashWorktreePath) fetchAndRenderStashList(stashWorktreePath);
     }
 
     /**
@@ -3876,15 +3886,27 @@
         const data = await resp.json();
         if (!data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
         const stashes = data.stashes || [];
+        const targetOptions = [
+          ...currentWorktrees.filter(w => w.existsOnDisk !== false && !w.isPrunable).map(w => ({
+            value: `worktree:${w.path}`,
+            label: `Worktree：${w.branch || 'HEAD'}（${w.path.split('/').filter(Boolean).pop() || w.path}）`
+          })),
+          ...currentBranches.map(b => ({ value: `branch:${b.name}`, label: `分支：${b.name}` }))
+        ];
+        const targetSelect = `<label style="font-size: 12px; color: var(--text-muted);">还原目标：</label>
+          <select id="stashTargetWorktreeSelect" class="stash-target-select">
+            ${targetOptions.map(option => `<option value="${escapeHtml(option.value)}" ${option.value === `worktree:${worktreePath}` ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}
+          </select>
+          <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">暂存记录属于当前仓库，可恢复到其他工作区或分支。</div>`;
         if (stashes.length === 0) {
-          el.innerHTML = '';
+          el.innerHTML = `${targetSelect}<div style="padding: 8px; color: var(--text-muted); font-size: 12px;">暂无历史 Stash</div>`;
           return;
         }
         const rows = stashes.map(s => {
           const refOk = /^stash@\{\d+\}$/.test(s.ref || '');
           const actions = refOk
-            ? `<button class="btn-outline" style="font-size: 12px; padding: 3px 10px;" onclick="stashActionWithConfirm('pop', '${s.ref}', this)">Pop</button>` +
-              `<button class="btn-danger" style="font-size: 12px; padding: 3px 10px;" onclick="stashActionWithConfirm('drop', '${s.ref}', this)">Drop</button>`
+            ? `<button class="btn-outline" onclick="stashActionWithConfirm('pop', '${s.ref}', this)">还原</button>` +
+              `<button class="btn-danger" onclick="stashActionWithConfirm('drop', '${s.ref}', this)">删除</button>`
             : '';
           return `<div class="stash-item">
             <span class="stash-ref">${escapeHtml(s.ref)}</span>
@@ -3894,41 +3916,68 @@
           </div>`;
         }).join('');
         el.innerHTML = `
+          ${targetSelect}
           <div class="diff-tools-bar">
             <div class="diff-tools-left">
-              <span>📦 Stash 列表 (${stashes.length})</span>
-              <span style="font-size: 12px; color: var(--text-muted); font-weight: normal;">Pop 恢复到工作区，Drop 删除该条 stash</span>
+              <span>历史暂存 (${stashes.length})</span>
+              <span style="font-size: 12px; color: var(--text-muted); font-weight: normal;">选择目标后还原，删除后不可恢复</span>
             </div>
           </div>
           ${rows}
         `;
       } catch (err) {
-        el.innerHTML = `<div class="stash-item" style="color: var(--danger);">Stash 列表加载失败：${escapeHtml(err.message)}</div>`;
+        el.innerHTML = `<div class="stash-item" style="color: var(--danger);">历史暂存加载失败：${escapeHtml(err.message)}</div>`;
       }
     }
 
     /**
      * 未提交面板 stash 相关写操作统一入口：
-     * push（prompt 可选备注）/ discard（强警告二次确认，不可恢复）/ pop / drop（各自中文确认）。
+     * push（prompt 可选备注）/ restore / clean / discard（按范围二次确认）/ pop / drop（各自中文确认）。
      * 成功后调 refreshCurrentDiff 统一刷新未提交面板、stash 列表与外层 worktree dirty 状态。
-     * @param {string} action - 仅允许 'push' | 'pop' | 'drop' | 'discard'
+     * @param {string} action - 仅允许 'push' | 'pop' | 'drop' | 'discard' | 'restore' | 'clean'
      * @param {string} stashRef - pop/drop 的目标引用，已在渲染侧做过白名单校验
      * @param {HTMLElement} [btn] - 被点击的按钮，执行期间禁用以防重复提交
      */
     async function stashActionWithConfirm(action, stashRef, btn) {
       const worktreePath = currentUncommittedPath;
       if (!worktreePath) return;
+      let targetWorktree;
+      let targetBranch;
+      let newWorktreePath;
+      if (action === 'pop') {
+        const targetIdentity = document.getElementById('stashTargetWorktreeSelect')?.value || `worktree:${worktreePath}`;
+        const splitTarget = splitRefIdentity(targetIdentity);
+        if (splitTarget.kind === 'worktree') {
+          targetWorktree = splitTarget.value;
+        } else {
+          targetBranch = splitTarget.value;
+          const targetWt = currentWorktrees.find(w => w.branch === targetBranch && w.existsOnDisk !== false && !w.isPrunable);
+          if (!targetWt) {
+            newWorktreePath = prompt(`分支「${targetBranch}」当前没有 Worktree，请输入新 Worktree 的绝对目录：`);
+            if (newWorktreePath === null) return;
+            if (!newWorktreePath.trim()) {
+              alert('未填写新 Worktree 目录，已取消还原');
+              return;
+            }
+          }
+        }
+      }
       let message;
       if (action === 'push') {
-        message = prompt('Stash 备注（可留空）：');
+        message = prompt('暂存备注（可留空）：');
         if (message === null) return; // 用户取消
         if (!message.trim()) message = undefined; // 空备注不传，由 git 生成默认说明
       } else if (action === 'discard') {
         if (!confirm(`确认丢弃该工作区的全部未提交修改吗？\n将还原所有已跟踪文件的修改并删除未跟踪文件，此操作不可恢复！\n工作区：${worktreePath}`)) return;
+      } else if (action === 'restore') {
+        if (!confirm(`确认还原该工作区中所有已跟踪文件的未提交修改吗？\n未跟踪文件不会被删除。\n工作区：${worktreePath}`)) return;
+      } else if (action === 'clean') {
+        if (!confirm(`确认删除该工作区中的全部未跟踪文件吗？\n已跟踪文件的修改不会改变，此操作不可恢复！\n工作区：${worktreePath}`)) return;
       } else if (action === 'pop') {
-        if (!confirm(`确认将 ${stashRef} 恢复到工作区吗？\n工作区：${worktreePath}`)) return;
+        const targetLabel = targetWorktree || (targetBranch ? `分支 ${targetBranch}${newWorktreePath ? `（新建 Worktree：${newWorktreePath}）` : ''}` : worktreePath);
+        if (!confirm(`确认将 ${stashRef} 还原到目标吗？\n目标：${targetLabel}`)) return;
       } else if (action === 'drop') {
-        if (!confirm(`确认删除 ${stashRef} 吗？删除后无法从 stash 列表恢复。`)) return;
+        if (!confirm(`确认删除 ${stashRef} 吗？删除后无法恢复。`)) return;
       } else {
         return;
       }
@@ -3937,7 +3986,7 @@
         const resp = await fetch('/api/stash-action', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ worktree: worktreePath, action, message, stashRef: stashRef || undefined })
+          body: JSON.stringify({ worktree: worktreePath, action, message, stashRef: stashRef || undefined, targetWorktree, targetBranch, newWorktreePath })
         });
         const data = await resp.json();
         if (!data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
