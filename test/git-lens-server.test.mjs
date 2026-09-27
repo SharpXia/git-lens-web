@@ -274,16 +274,46 @@ test('请求体校验：超限 413（中文）、非 JSON Content-Type 415', asy
   });
   assert.equal(wrongType.status, 415);
   assert.match(wrongType.json().error, /Content-Type 必须为 application\/json/);
+  await instance.close();
 
-  // 既有端点兼容：/api/choose-scan-directory 不消费请求体，允许不带 Content-Type 的 POST
+  // 415 例外已收紧（契约 §4 第一次修订）：UI 已为 choose-scan-directory 补齐
+  // JSON Content-Type，缺失 Content-Type 的 POST 现在一律 415，与其他 /api POST 一致
   const dialog = await startBrowserServer({
     chooseScanDirectory: async () => null
   });
   t.after(dialog.cleanup);
   const noHeader = await request(dialog.port, { method: 'POST', path: '/api/choose-scan-directory' });
-  assert.equal(noHeader.status, 200);
-  assert.equal(noHeader.json().ok, true);
+  assert.equal(noHeader.status, 415, '缺失 Content-Type 的对话框 POST 应被拒绝');
+  assert.match(noHeader.json().error, /Content-Type 必须为 application\/json/);
+
+  const withJsonHeader = await request(dialog.port, {
+    method: 'POST',
+    path: '/api/choose-scan-directory',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(withJsonHeader.status, 200, '带 JSON Content-Type 的对话框调用应正常放行');
+  assert.equal(withJsonHeader.json().ok, true);
   await dialog.instance.close();
+});
+
+test('CSP 响应头：静态页与 API 统一携带契约 §14 冻结策略（逐字符）', async t => {
+  const { instance, port, cleanup } = await startBrowserServer();
+  t.after(cleanup);
+  // 与 docs/proposals/electron-contracts.md §14 逐字符一致；改动必须先修订契约
+  const expectedCsp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'none'";
+
+  const home = await request(port, { path: '/' });
+  assert.equal(home.status, 200);
+  assert.equal(home.headers['content-security-policy'], expectedCsp, '静态页响应的 CSP 必须逐字符符合冻结策略');
+
+  const api = await request(port, { path: '/api/projects' });
+  assert.equal(api.status, 200);
+  assert.equal(api.headers['content-security-policy'], expectedCsp, 'API 响应的 CSP 必须逐字符符合冻结策略');
+
+  const denied = await request(port, { path: '/api/projects', headers: { Origin: 'http://evil.example.com' } });
+  assert.equal(denied.status, 403);
+  assert.equal(denied.headers['content-security-policy'], expectedCsp, '拒绝响应同样携带 CSP');
   await instance.close();
 });
 
@@ -327,7 +357,13 @@ test('测试握手：test 模式 + runId 齐备才启用，缺一 404，响应�
 test('目录选择器注入：工厂优先使用注入实现而非系统对话框', async t => {
   const injected = await startBrowserServer({ chooseScanDirectory: async () => '/tmp/injected-dir' });
   t.after(injected.cleanup);
-  const res = await request(injected.port, { method: 'POST', path: '/api/choose-scan-directory' });
+  // 415 收紧后所有 /api POST（含对话框端点）都必须带 JSON Content-Type（UI 已适配）
+  const res = await request(injected.port, {
+    method: 'POST',
+    path: '/api/choose-scan-directory',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  });
   assert.equal(res.status, 200);
   assert.equal(res.json().directory, '/tmp/injected-dir');
   await injected.instance.close();
