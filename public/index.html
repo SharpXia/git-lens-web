@@ -2234,7 +2234,12 @@
           directory = await window.gitLens.chooseDirectory();
         } else {
           // 浏览器模式：沿用服务端系统选择器
-          const res = await fetch('/api/choose-scan-directory', { method: 'POST' });
+          const res = await fetch('/api/choose-scan-directory', {
+            method: 'POST',
+            // 契约 §4 已批准偏差：此前该调用缺失 Content-Type 被服务放行；
+            // 补齐 JSON 头后 Runtime 侧即可收紧该例外
+            headers: { 'Content-Type': 'application/json' }
+          });
           const data = await res.json();
           if (!data.ok) throw new Error(data.error || '打开目录选择器失败');
           directory = data.directory || null;
