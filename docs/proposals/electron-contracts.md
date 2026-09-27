@@ -57,6 +57,7 @@ export function createGitLensServer(options) { ... }
 - **（第一次修订）CLI 环境变量接线**：CLI 以 `GIT_LENS_TEST_MODE=1` 启动时，必须读取环境变量 `GIT_LENS_TEST_RUN_ID` 作为 `handshake.runId` 传入工厂（QA 启动器经 CLI spawn，无法直接传工厂参数）。未设置 `GIT_LENS_TEST_RUN_ID` 时握手保持关闭（404）。
 - 响应 `200 {"ok":true,"runId":"<runId>","configDir":"<realpath 后的配置目录>","host":"127.0.0.1","port":<实际端口>,"pid":<进程号>}`；**`pid` 必须是服务进程自身的 pid**（QA 启动器以其与 spawn 子进程 pid 比对）。
 - QA 启动器在**发出任何其他请求前**必须完成握手，并核对 `runId`、`configDir` 与本轮 manifest 完全一致；`/api/projects` 成功不构成身份验证。
+- **（第二次修订）desktop 模式下握手也受会话凭据约束**（属 `/api/*`），E2E 须凭 `GIT_LENS_E2E_TOKEN_FILE` 中的凭据携带 `X-Git-Lens-Session` 访问。
 
 ## 4. 本地 API 访问边界契约
 
@@ -80,7 +81,7 @@ browser 模式不要求凭据（无主进程可托管 token），但保留 1–5
 ## 5. 配置与迁移契约
 
 - browser 模式：`GIT_LENS_CONFIG_DIR` 或 `~/.config/git-lens-web`，语义不变。
-- desktop 模式：`<userData>/git-lens-config`（userData = Electron `app.getPath('userData')`）；目录结构沿用现有 `config.json` + 本地 MR 存储。
+- desktop 模式：`<userData>/git-lens-config`（userData = Electron `app.getPath('userData')`）；目录结构沿用现有 `config.json` + 本地 MR 存储。**（第二次修订澄清）desktop 模式下 `GIT_LENS_CONFIG_DIR` 环境变量被忽略，服务配置目录一律取 `<userData>/git-lens-config`**；QA 预写配置应写入该路径。
 - `config.json` 冻结新增字段 `configVersion`：旧文件无该字段视为 `1`；桌面版写入 `2`。迁移动作 = 读取旧目录（只读预览 → 用户确认 → 复制）+ 原子写（临时文件 + rename）+ 保留 `<configDir>/migration.json`（记录 fromVersion/at/sourceDir/result）+ 失败保留 `.bak` 可重试。
 - 测试时 `userData`、服务 configDir、`GIT_CONFIG_GLOBAL`、`HOME`/`XDG_CONFIG_HOME` 全部指向本轮 qa-root（计划书 §6.1）；禁止读取真实配置做断言。
 
