@@ -247,9 +247,15 @@ async function buildRepoMain(qaRoot) {
   const wtClean = path.join(qaRoot, 'repos', 'wt-clean');
   await git(qaRoot, repo, 'worktree', 'add', '-q', '-b', 'feature/clean-wt', wtClean);
 
-  // 脏 worktree：未提交修改 + staged 新文件 + untracked 文件三类并存
+  // 脏 worktree：已提交素材（图片/二进制字节追加，供 diff isImage/isBinary 与
+  // raw-file 断言）+ 未提交修改 + staged 新文件 + untracked 文件并存
   const wtDirty = path.join(qaRoot, 'repos', 'wt-dirty');
   await git(qaRoot, repo, 'worktree', 'add', '-q', '-b', 'feature/dirty-wt', wtDirty);
+  await writeAndCommit(qaRoot, wtDirty, 'dirty-committed.txt', 'dirty 分支的已提交新文件。\n', 'dirty: 新增已提交文件并追加图片/二进制字节');
+  await writeFileInQaRoot(qaRoot, path.join(wtDirty, 'assets/logo.png'), Buffer.concat([MINIMAL_PNG, Buffer.from([0x00, 0xff])]));
+  await writeFileInQaRoot(qaRoot, path.join(wtDirty, 'assets/blob.bin'), Buffer.concat([BINARY_BLOB, Buffer.from([0xde, 0xad])]));
+  await git(qaRoot, wtDirty, 'add', 'assets');
+  await git(qaRoot, wtDirty, 'commit', '-q', '-m', 'dirty: 追加图片/二进制字节');
   await writeFileInQaRoot(qaRoot, path.join(wtDirty, 'notes.txt'), 'main 基础文本。\n脏 worktree 的未提交修改行。\n');
   await writeFileInQaRoot(qaRoot, path.join(wtDirty, 'staged-file.txt'), '已 git add 但未提交的文件。\n');
   await git(qaRoot, wtDirty, 'add', 'staged-file.txt');
@@ -272,6 +278,41 @@ async function buildRepoMain(qaRoot) {
   await writeAndCommit(qaRoot, wtMalicious2, 'malicious-2.txt', '路径逃逸与 script 注入负载。\n',
     '../../escape <script>alert(2)</script> 伪注入行');
 
+  // G4 写操作矩阵素材：
+  //   wt-cherry（干净）——cherry-pick 成功/冲突/revert 的目标 worktree；
+  //   feature/cherry-source 提交 A（新增 cherry-file.txt）可干净 pick；
+  //   feature/pick-conflict 基于 main 新增同路径文件——先 pick A 再 pick 它时
+  //   形成 add/add 冲突（base 无此文件、ours 有 A 的版本、theirs 是冲突版本）；
+  //   revert A 即可恢复 cherry-file.txt 缺失的原始状态
+  const wtCherry = path.join(qaRoot, 'repos', 'wt-cherry');
+  await git(qaRoot, repo, 'worktree', 'add', '-q', '-b', 'feature/cherry-wt', wtCherry);
+  const tmpCherrySource = path.join(qaRoot, 'repos', '.tmp-wt-cherry-source');
+  await git(qaRoot, repo, 'worktree', 'add', '-q', '-b', 'feature/cherry-source', tmpCherrySource);
+  await writeAndCommit(qaRoot, tmpCherrySource, 'cherry-file.txt', 'source v1\n', 'cherry: 新增 cherry-file（可干净 pick）');
+  await git(qaRoot, repo, 'worktree', 'remove', tmpCherrySource);
+  const tmpPickConflict = path.join(qaRoot, 'repos', '.tmp-wt-pick-conflict');
+  await git(qaRoot, repo, 'worktree', 'add', '-q', '-b', 'feature/pick-conflict', tmpPickConflict);
+  await writeAndCommit(qaRoot, tmpPickConflict, 'cherry-file.txt', 'conflict v2\n', 'conflict: 新增同路径不同内容（pick 必冲突）');
+  await git(qaRoot, repo, 'worktree', 'remove', tmpPickConflict);
+
+  // stash 矩阵专用：wt-stash-ops 为操作源（保持无 stash、干净），wt-stash-target 为
+  // 「pop 到同仓库另一 worktree」的干净目标；两者均无独有提交（可作清理候选素材）
+  const wtStashOps = path.join(qaRoot, 'repos', 'wt-stash-ops');
+  await git(qaRoot, repo, 'worktree', 'add', '-q', '-b', 'feature/stash-ops-wt', wtStashOps);
+  const wtStashTarget = path.join(qaRoot, 'repos', 'wt-stash-target');
+  await git(qaRoot, repo, 'worktree', 'add', '-q', '-b', 'feature/stash-target-wt', wtStashTarget);
+  // 「pop 到未绑定分支」的目标：分支存在但无 worktree（服务语义要求分支已存在）
+  const tmpUnbound = path.join(qaRoot, 'repos', '.tmp-wt-unbound');
+  await git(qaRoot, repo, 'worktree', 'add', '-q', '-b', 'feature/stash-unbound', tmpUnbound);
+  await git(qaRoot, repo, 'worktree', 'remove', tmpUnbound);
+
+  // 长列表素材：35 个提交，供提交抽屉「加载更多」追加渲染断言（分页 limit 为 30）
+  const wtManyCommits = path.join(qaRoot, 'repos', 'wt-many-commits');
+  await git(qaRoot, repo, 'worktree', 'add', '-q', '-b', 'feature/many-commits-wt', wtManyCommits);
+  for (let i = 1; i <= 35; i++) {
+    await writeAndCommit(qaRoot, wtManyCommits, `many/commit-${String(i).padStart(2, '0')}.txt`, `第 ${i} 个提交的内容。\n`, `many: 第 ${i} 个提交`);
+  }
+
   // stash worktree：两条 stash，第 2 条内容含冲突标记
   const wtStash = path.join(qaRoot, 'repos', 'wt-stash');
   await git(qaRoot, repo, 'worktree', 'add', '-q', '-b', 'feature/stash-wt', wtStash);
@@ -291,9 +332,19 @@ async function buildRepoMain(qaRoot) {
       dirtyWt: 'feature/dirty-wt',
       stashWt: 'feature/stash-wt',
       maliciousWt: 'feature/malicious-wt',
-      maliciousWt2: 'feature/malicious-wt-2'
+      maliciousWt2: 'feature/malicious-wt-2',
+      cherryWt: 'feature/cherry-wt',
+      cherrySource: 'feature/cherry-source',
+      pickConflict: 'feature/pick-conflict',
+      stashOpsWt: 'feature/stash-ops-wt',
+      stashTargetWt: 'feature/stash-target-wt',
+      manyCommitsWt: 'feature/many-commits-wt'
     },
-    worktrees: { clean: wtClean, dirty: wtDirty, stash: wtStash, lost: wtLost, malicious: wtMalicious, malicious2: wtMalicious2 }
+    worktrees: {
+      clean: wtClean, dirty: wtDirty, stash: wtStash, lost: wtLost,
+      malicious: wtMalicious, malicious2: wtMalicious2,
+      cherry: wtCherry, stashOps: wtStashOps, stashTarget: wtStashTarget, manyCommits: wtManyCommits
+    }
   };
 }
 
@@ -436,6 +487,17 @@ async function verifyFixtures(qaRoot, fx) {
   expect(xssSubject === '<img src=x onerror=alert(1)>', 'wt-malicious HEAD 主题应为 XSS 负载');
   const escapeSubject = await gitOut(qaRoot, main.worktrees.malicious2, 'log', '-1', '--format=%s');
   expect(escapeSubject === '../../escape <script>alert(2)</script> 伪注入行', 'wt-malicious-2 HEAD 主题应为路径逃逸负载');
+
+  // G4 素材：cherry 冲突对（同文件不同内容、同 base）、stash 矩阵 worktree 干净、长列表 35 提交
+  expect((await gitOut(qaRoot, main.worktrees.cherry, 'status', '--porcelain')) === '', 'wt-cherry 应干净');
+  const sourceFile = await gitOut(qaRoot, main.repo, 'show', 'feature/cherry-source:cherry-file.txt');
+  const conflictFile = await gitOut(qaRoot, main.repo, 'show', 'feature/pick-conflict:cherry-file.txt');
+  expect(sourceFile === 'source v1' && conflictFile === 'conflict v2', 'cherry 冲突对的同文件内容应不同');
+  expect((await gitOut(qaRoot, main.worktrees.stashOps, 'stash', 'list')) === (await gitOut(qaRoot, main.worktrees.stash, 'stash', 'list')),
+    'wt-stash-ops 初始不应有额外 stash（stash ref 仓库级共享，应恰为 wt-stash 的 2 条）');
+  expect((await gitOut(qaRoot, main.worktrees.manyCommits, 'rev-list', '--count', 'HEAD')) !== ''
+    && Number(await gitOut(qaRoot, main.worktrees.manyCommits, 'rev-list', '--count', 'HEAD')) > 35,
+    'wt-many-commits 应有超过 35 个提交');
 
   const stashLines = (await gitOut(qaRoot, main.worktrees.stash, 'stash', 'list')).split('\n').filter(Boolean);
   expect(stashLines.length === 2, 'wt-stash 应有 2 条 stash');
