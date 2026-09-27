@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import url from 'node:url';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
@@ -41,8 +42,38 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+/** JSON 请求体默认字节上限：2MB，与契约 §4 请求体限制一致 */
+const DEFAULT_REQUEST_BODY_LIMIT = 2 * 1024 * 1024;
+
 /** 关闭服务时等待在途请求的最长时间，超时后强制销毁全部连接 */
 const CLOSE_GRACE_PERIOD_MS = 3000;
+
+/**
+ * 构造带 statusCode 的错误对象，供顶层统一按状态码返回中文错误。
+ * @param {string} message - 中文错误信息
+ * @param {number} statusCode - HTTP 状态码
+ * @returns {Error}
+ */
+function httpError(message, statusCode) {
+  return Object.assign(new Error(message), { statusCode });
+}
+
+/**
+ * 以常数时间比较两个会话凭据字符串，避免逐字节比较造成的时序侧信道。
+ * @param {string} actual - 请求携带的凭据
+ * @param {string} expected - 服务实例持有的凭据
+ * @returns {boolean} 两者一致时返回 true
+ */
+function timingSafeEqual(actual, expected) {
+  const a = Buffer.from(String(actual), 'utf-8');
+  const b = Buffer.from(String(expected), 'utf-8');
+  if (a.length !== b.length) {
+    // 长度不同时仍执行一次比较，保持耗时与命中场景接近
+    crypto.timingSafeEqual(b, b);
+    return false;
+  }
+  return crypto.timingSafeEqual(a, b);
+}
 
 /**
  * 调用服务所在电脑的系统目录选择器，取消选择时返回 null。
@@ -164,19 +195,11 @@ async function removeWorktreeWithBranch(repoPath, worktreePath, force, branchNam
 }
 
 /**
- * 创建 Git Lens HTTP 服务实例。本模块导入时零副作用（不创建 server、不监听、不读配置），
- * 所有副作用都发生在 createGitLensServer 调用之后，供 CLI 与 Electron 主进程复用。
- * @param {object} options
- * @param {string}   options.configDir            必填；配置目录（扫描目录与本地 MR 数据的根）
- * @param {string}  [options.host='127.0.0.1']    监听地址；桌面版与测试一律环回
- * @param {number}  [options.port=0]              0 = 系统分配随机端口
- * @param {'browser'|'desktop'} [options.mode='browser'] 访问边界模式
- * @param {string|null} [options.sessionToken]    desktop 模式必填；browser 模式忽略
- * @param {() => Promise<string|null>} [options.chooseScanDirectory] 覆盖目录选择器；缺省用系统对话框实现
- * @param {(level: 'info'|'warn'|'error', message: string) => void} [options.log]
- * @returns {{ server: http.Server, ready: Promise<{host: string, port: number}>, close: () => Promise<void> }}
+ * 校验工厂参数并填充默认值。
+ * @param {object} options - createGitLensServer 的原始参数
+ * @returns {object} 归一化后的配置
  */
-export function createGitLensServer(options) {
+function normalizeOptions(options) {
   if (!options || typeof options !== 'object') {
     throw new TypeError('创建 Git Lens 服务失败：必须传入 options 配置对象');
   }
@@ -184,6 +207,58 @@ export function createGitLensServer(options) {
   if (typeof configDir !== 'string' || configDir.trim() === '') {
     throw new TypeError('创建 Git Lens 服务失败：configDir 必须为非空字符串');
   }
+
+  const mode = options.mode || 'browser';
+  if (mode !== 'browser' && mode !== 'desktop') {
+    throw new TypeError(`创建 Git Lens 服务失败：mode 只支持 'browser' 或 'desktop'，收到「${mode}」`);
+  }
+
+  const sessionToken = options.sessionToken || null;
+  if (mode === 'desktop' && !sessionToken) {
+    throw new TypeError('创建 Git Lens 服务失败：desktop 模式必须提供 sessionToken 会话凭据');
+  }
+
+  const port = options.port === undefined || options.port === null ? 0 : options.port;
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new TypeError(`创建 Git Lens 服务失败：port 必须为 0-65535 的整数，收到「${options.port}」`);
+  }
+
+  const requestBodyLimit = options.requestBodyLimit === undefined || options.requestBodyLimit === null
+    ? DEFAULT_REQUEST_BODY_LIMIT
+    : options.requestBodyLimit;
+  if (!Number.isInteger(requestBodyLimit) || requestBodyLimit <= 0) {
+    throw new TypeError(`创建 Git Lens 服务失败：requestBodyLimit 必须为正整数，收到「${options.requestBodyLimit}」`);
+  }
+
+  return {
+    configDir,
+    host: options.host || '127.0.0.1',
+    port,
+    mode,
+    sessionToken,
+    chooseScanDirectory: typeof options.chooseScanDirectory === 'function' ? options.chooseScanDirectory : chooseScanDirectory,
+    requestBodyLimit
+  };
+}
+
+/**
+ * 创建 Git Lens HTTP 服务实例。本模块导入时零副作用（不创建 server、不监听、不读配置），
+ * 所有副作用都发生在 createGitLensServer 调用之后，供 CLI 与 Electron 主进程复用。
+ * @param {object} options
+ * @param {string}   options.configDir            必填；配置目录（扫描目录与本地 MR 数据的根）
+ * @param {string}  [options.host='127.0.0.1']    监听地址；桌面版与测试一律环回
+ * @param {number}  [options.port=0]              0 = 系统分配随机端口
+ * @param {'browser'|'desktop'} [options.mode='browser'] 访问边界模式，见契约 §4
+ * @param {string|null} [options.sessionToken]    desktop 模式必填；browser 模式忽略
+ * @param {() => Promise<string|null>} [options.chooseScanDirectory] 覆盖目录选择器；缺省用系统对话框实现
+ * @param {string}  [options.gitPath]             git 可执行文件路径；缺省取 GIT_LENS_GIT_PATH，再缺省 'git'
+ * @param {number}  [options.requestBodyLimit=2*1024*1024] JSON 请求体字节上限
+ * @param {(level: 'info'|'warn'|'error', message: string) => void} [options.log]
+ * @returns {{ server: http.Server, ready: Promise<{host: string, port: number}>, close: () => Promise<void> }}
+ */
+export function createGitLensServer(options) {
+  const config = normalizeOptions(options);
+  const configDir = config.configDir;
   const configFilePath = path.join(configDir, 'config.json');
 
   // 显式传入 gitPath 时注入两块 Git 调用模块；未传入时保持模块默认
@@ -193,22 +268,9 @@ export function createGitLensServer(options) {
     configureMrGitPath(options.gitPath);
   }
 
-  const mode = options.mode || 'browser';
-  if (mode !== 'browser' && mode !== 'desktop') {
-    throw new TypeError(`创建 Git Lens 服务失败：mode 只支持 'browser' 或 'desktop'，收到「${mode}」`);
-  }
-  const sessionToken = options.sessionToken || null;
-  if (mode === 'desktop' && !sessionToken) {
-    throw new TypeError('创建 Git Lens 服务失败：desktop 模式必须提供 sessionToken 会话凭据');
-  }
-  const port = options.port === undefined || options.port === null ? 0 : options.port;
-  if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    throw new TypeError(`创建 Git Lens 服务失败：port 必须为 0-65535 的整数，收到「${options.port}」`);
-  }
-
   const log = (level, message) => {
-    if (typeof options.log === 'function') {
-      options.log(level, message);
+    if (config.log) {
+      config.log(level, message);
       return;
     }
     if (level === 'error') console.error(message);
@@ -305,9 +367,10 @@ export function createGitLensServer(options) {
     });
   });
 
-  // 监听后回填的实际端口；port:0 场景由 listen 回调写入真实端口，
-  // 既有路由中的 Origin 校验依赖这个值，不能使用调用方传入的占位端口。
-  let actualPort = port;
+  // 监听后回填的实际地址；port:0 场景由 listen 回调写入真实端口，
+  // 访问边界校验（Host/Origin）依赖这个值，不能使用调用方传入的占位端口。
+  let actualHost = config.host;
+  let actualPort = config.port;
 
   const ready = new Promise((resolve, reject) => {
     let settled = false;
@@ -316,16 +379,17 @@ export function createGitLensServer(options) {
       settled = true;
       // 端口占用是最常见的启动失败，给出可直接展示给用户的中文提示
       if (err.code === 'EADDRINUSE') {
-        reject(new Error(`端口 ${port} 已被占用，无法启动 Git Lens Web 服务，请更换端口或先停止占用该端口的进程`));
+        reject(new Error(`端口 ${config.port} 已被占用，无法启动 Git Lens Web 服务，请更换端口或先停止占用该端口的进程`));
       } else {
-        reject(new Error(`Git Lens Web 服务监听 ${options.host || '127.0.0.1'}:${port} 失败：${err.code || err.message}`));
+        reject(new Error(`Git Lens Web 服务监听 ${config.host}:${config.port} 失败：${err.code || err.message}`));
       }
     });
-    server.listen(port, options.host || '127.0.0.1', () => {
+    server.listen(config.port, config.host, () => {
       settled = true;
       const address = server.address();
+      actualHost = config.host;
       actualPort = address.port;
-      resolve({ host: options.host || '127.0.0.1', port: actualPort });
+      resolve({ host: actualHost, port: actualPort });
     });
   });
 
@@ -357,7 +421,8 @@ export function createGitLensServer(options) {
   }
 
   /**
-   * 逐请求入口：迁移自原 server.js 的全部路由，行为保持一致。
+   * 逐请求入口：先执行访问边界校验（Host/Origin/会话凭据/请求体类型，契约 §4），
+   * 再进入既有路由。所有拒绝路径返回中文错误。
    * @param {http.IncomingMessage} req
    * @param {http.ServerResponse} res
    */
@@ -365,25 +430,84 @@ export function createGitLensServer(options) {
     const parsed = url.parse(req.url, true);
     const pathname = parsed.pathname;
 
-    // 设置 CORS（保持既有行为；访问边界收紧在后续提交中处理）
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    // ---- 访问边界（契约 §4）：所有请求统一执行，先于任何业务逻辑 ----
 
+    // 1. Host 校验：防 DNS rebinding。只接受本机主机名 + 本实例实际端口。
+    const hostHeader = String(req.headers.host || '').toLowerCase();
+    const allowedHosts = [`127.0.0.1:${actualPort}`, `localhost:${actualPort}`];
+    if (!allowedHosts.includes(hostHeader)) {
+      return sendJson(res, 403, { ok: false, error: '拒绝访问：Host 头不是本机地址，疑似 DNS rebinding 或跨机访问' });
+    }
+
+    // 2. Origin 校验：携带 Origin 的请求仅接受本机同源来源；
+    //    Origin: null（sandboxed iframe/重定向）与其他站点一律拒绝。
+    const origin = req.headers.origin;
+    const allowedOrigins = [`http://127.0.0.1:${actualPort}`, `http://localhost:${actualPort}`];
+    const originAllowed = origin !== undefined && allowedOrigins.includes(origin);
+    if (origin !== undefined && !originAllowed) {
+      return sendJson(res, 403, { ok: false, error: '拒绝访问：请求来源不在本机允许列表内' });
+    }
+
+    // 3. CORS 收紧：移除 Access-Control-Allow-Origin: *，不再向普通响应发送 CORS 头。
+    //    预检仅对本机同源来源放行（此时 originAllowed 为真），其余已被上面的 Origin 校验拒绝。
     if (req.method === 'OPTIONS') {
-      res.writeHead(204);
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': origin,
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, X-Git-Lens-Session',
+        Vary: 'Origin'
+      });
       return res.end();
+    }
+
+    // 4. desktop 模式会话凭据：每个 /api 请求必须携带主进程注入的 token。
+    //    browser 模式无主进程托管凭据，忽略该头。
+    if (config.mode === 'desktop' && pathname.startsWith('/api/')) {
+      const token = req.headers['x-git-lens-session'];
+      if (typeof token !== 'string' || !timingSafeEqual(token, config.sessionToken)) {
+        return sendJson(res, 403, { ok: false, error: '拒绝访问：缺少或会话凭据不匹配' });
+      }
+    }
+
+    // 5. 请求体类型检查：/api 的 POST 必须是 JSON。
+    //    例外：/api/choose-scan-directory 不消费请求体，既有前端调用该接口时不带
+    //    Content-Type（同源简单请求），仅在显式提供了非 JSON 的 Content-Type 时拒绝。
+    if (req.method === 'POST' && pathname.startsWith('/api/')) {
+      const contentType = String(req.headers['content-type'] || '').trim().toLowerCase();
+      const isDialogEndpoint = pathname === '/api/choose-scan-directory';
+      const typeRejected = isDialogEndpoint
+        ? (contentType !== '' && !contentType.startsWith('application/json'))
+        : (contentType === '' || !contentType.startsWith('application/json'));
+      if (typeRejected) {
+        return sendJson(res, 415, { ok: false, error: '不支持的请求格式：Content-Type 必须为 application/json' });
+      }
     }
 
     try {
       /**
-       * 读取 JSON 请求体（迁移自原 server.js，行为一致）。
+       * 读取 JSON 请求体；超过 requestBodyLimit 时抛 413（中文错误）。
+       * 超限后丢弃后续数据并等请求自然结束再响应，保证拒绝响应可靠送达。
        */
       const readJson = () => new Promise((resolve, reject) => {
-        let body = '';
-        req.on('data', chunk => { body += chunk; });
+        const chunks = [];
+        let size = 0;
+        let oversized = false;
+        req.on('data', chunk => {
+          size += chunk.length;
+          if (size > config.requestBodyLimit) {
+            oversized = true;
+            chunks.length = 0;
+            return;
+          }
+          chunks.push(chunk);
+        });
         req.on('end', () => {
-          try { resolve(body ? JSON.parse(body) : {}); }
+          if (oversized) {
+            reject(httpError(`请求体超过大小限制（最大 ${config.requestBodyLimit} 字节）`, 413));
+            return;
+          }
+          const raw = Buffer.concat(chunks).toString('utf-8');
+          try { resolve(raw ? JSON.parse(raw) : {}); }
           catch (e) { reject(e); }
         });
         req.on('error', reject);
@@ -473,13 +597,10 @@ export function createGitLensServer(options) {
         return sendJson(res, 200, { ok: true, ...config });
       }
 
-      // 系统对话框只接受本机页面的调用，避免其他网页触发目录选择器。
+      // 系统对话框只接受本机页面的调用（Origin 已在全局边界校验中限制，
+      // 原 /api/choose-scan-directory 的单独 Origin 判断并入全局后删除）。
       if (pathname === '/api/choose-scan-directory' && req.method === 'POST') {
-        const origin = req.headers.origin;
-        if (origin && origin !== `http://127.0.0.1:${actualPort}` && origin !== `http://localhost:${actualPort}`) {
-          return sendJson(res, 403, { ok: false, error: '只能从本机页面打开目录选择器' });
-        }
-        const directory = await (typeof options.chooseScanDirectory === 'function' ? options.chooseScanDirectory : chooseScanDirectory)();
+        const directory = await config.chooseScanDirectory();
         return sendJson(res, 200, { ok: true, directory });
       }
 
@@ -852,8 +973,13 @@ export function createGitLensServer(options) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Not Found');
     } catch (err) {
-      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: false, error: err.message }));
+      // 业务错误可能携带 statusCode（413/409 等）；无标记时按内部错误处理
+      const status = err && err.statusCode ? err.statusCode : 500;
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
+      sendJson(res, status, { ok: false, error: err.message });
     }
   }
 
