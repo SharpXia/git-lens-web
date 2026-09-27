@@ -181,6 +181,72 @@ export async function assertPathInsideRoot(candidatePath, qaRoot) {
 }
 
 /**
+ * 校验「计划写入」的候选路径位于 qa-root 内（目标允许尚不存在）。
+ *
+ * assertPathInsideRoot 要求目标已存在（realpath 直查），不适用于即将创建的
+ * manifest/文件/目录。本函数自候选路径向上找到第一个真实存在的祖先做 realpath
+ * 校验，再对未存在段做词法校验（禁止 `..`），兼顾 fail-closed 与创建前校验。
+ *
+ * @param {string} candidatePath 待创建目标的绝对路径
+ * @param {string} qaRoot 本轮 qa-root 根目录（绝对路径）
+ * @returns {Promise<string>} 规范化后的目标路径（已存在段为 realpath，未存在段为词法拼接）
+ * @throws {GuardError} code=PATH_ESCAPED，message 为中文拒绝原因
+ */
+export async function assertPlannedPathInsideRoot(candidatePath, qaRoot) {
+  if (typeof candidatePath !== 'string' || candidatePath.trim() === '') {
+    throw new GuardError(GUARD_ERROR_CODES.PATH_ESCAPED, '待校验路径不能为空');
+  }
+  if (typeof qaRoot !== 'string' || qaRoot.trim() === '') {
+    throw new GuardError(GUARD_ERROR_CODES.PATH_ESCAPED, 'qa-root 不能为空');
+  }
+  if (!path.isAbsolute(candidatePath)) {
+    throw new GuardError(GUARD_ERROR_CODES.PATH_ESCAPED, `待校验路径必须是绝对路径，实际: ${candidatePath}`);
+  }
+  if (!path.isAbsolute(qaRoot)) {
+    throw new GuardError(GUARD_ERROR_CODES.PATH_ESCAPED, `qa-root 必须是绝对路径，实际: ${qaRoot}`);
+  }
+
+  // 自上而下找第一个真实存在的祖先；逐级记录尚未存在的段名
+  let existing = path.resolve(candidatePath);
+  const unresolved = [];
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop -- 段数有限（临时目录深度），无需并行
+    const real = await fs.realpath(existing).catch((err) => {
+      if (err && err.code === 'ENOENT') return null;
+      throw new GuardError(GUARD_ERROR_CODES.PATH_ESCAPED, `路径无法解析（fail-closed 拒绝）: ${existing}（${err.message}）`);
+    });
+    if (real !== null) break;
+    unresolved.unshift(path.basename(existing));
+    const parent = path.dirname(existing);
+    if (parent === existing) {
+      throw new GuardError(GUARD_ERROR_CODES.PATH_ESCAPED, `路径整条链都不存在: ${candidatePath}`);
+    }
+    existing = parent;
+  }
+  const realRoot = await fs.realpath(qaRoot).catch(() => {
+    throw new GuardError(GUARD_ERROR_CODES.PATH_ESCAPED, `qa-root 不存在或无法解析: ${qaRoot}`);
+  });
+  const realExisting = await fs.realpath(existing);
+
+  // 已存在的祖先必须在 qa-root 内
+  const rel = path.relative(realRoot, realExisting);
+  if (rel !== '' && (rel.startsWith('..') || path.isAbsolute(rel))) {
+    throw new GuardError(
+      GUARD_ERROR_CODES.PATH_ESCAPED,
+      `路径逃逸 qa-root：${realExisting} 不在 ${realRoot} 内（已拒绝符号链接或 .. 逃逸）`
+    );
+  }
+  // 未存在的段只允许普通名称，词法 `..` 直接拒绝
+  if (unresolved.some((seg) => seg === '..')) {
+    throw new GuardError(
+      GUARD_ERROR_CODES.PATH_ESCAPED,
+      `待创建路径包含 .. 逃逸段（fail-closed 拒绝）: ${candidatePath}`
+    );
+  }
+  return path.join(realExisting, ...unresolved);
+}
+
+/**
  * 校验候选路径（realpath 后）不位于真实用户配置目录 `$HOME/.config/git-lens-web` 之下。
  *
  * @param {string} candidatePath 待校验的绝对路径

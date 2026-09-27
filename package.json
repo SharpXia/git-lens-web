@@ -4,7 +4,8 @@
   "description": "Local Git Project Lens - Clean & Worktree Inspector",
   "type": "module",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "test:isolated": "node scripts/qa/run.mjs"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
