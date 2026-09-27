@@ -1780,8 +1780,8 @@
         </div>
 
         <div style="display: flex; gap: 8px; align-self: flex-end; margin-bottom: 2px;">
-          <button class="btn-primary" onclick="fetchAndRenderRefDiff(null, true)">比对 Diff</button>
-          <button id="diffRefreshBtn" class="btn-outline" onclick="refreshCurrentDiff()" title="重新分析并刷新当前 Diff 视图">🔄 刷新 Diff</button>
+          <button class="btn-primary" onclick="fetchAndRenderRefDiff(null, true)" title="使用当前选择的对象重新比对">比对 Diff</button>
+          <button id="diffRefreshBtn" class="btn-outline" onclick="refreshCurrentDiff()" title="重新扫描仓库状态并刷新当前 Diff">刷新状态</button>
         </div>
       </div>
 
@@ -1937,6 +1937,7 @@
     let currentDiffBase = '';
     let currentDiffTarget = '';
     let currentDiffMode = null; // 'uncommitted' | 'all' | 'committed'
+    let currentDiffComparison = null;
     let pendingRestoreState = null;
     let isRestoringHistory = false;
     let historyRestoreQueue = Promise.resolve();
@@ -2155,6 +2156,7 @@
       const urlCommits = url.searchParams.get('commits');
       const urlCommitsFull = url.searchParams.get('commitsFull');
       const urlCommitsRef = url.searchParams.get('commitsRef');
+      const urlCommitsBase = url.searchParams.get('commitsBase');
       const urlMr = url.searchParams.get('mr');
 
       if (!urlRepo && !urlTab && !urlQ && !urlDiffType && !urlCommits && !urlMr) return null;
@@ -2172,6 +2174,7 @@
           commits: urlCommits || '',
           commitsFull: urlCommitsFull === '1',
           commitsRef: urlCommitsRef || '',
+          commitsBase: urlCommitsBase || '',
           mr: urlMr || ''
       };
     }
@@ -2258,10 +2261,13 @@
           else url.searchParams.delete('commitsFull');
           if (commitsDrawerState.ref) url.searchParams.set('commitsRef', commitsDrawerState.ref);
           else url.searchParams.delete('commitsRef');
+          if (commitsDrawerState.baseRef) url.searchParams.set('commitsBase', commitsDrawerState.baseRef);
+          else url.searchParams.delete('commitsBase');
         } else {
           url.searchParams.delete('commits');
           url.searchParams.delete('commitsFull');
           url.searchParams.delete('commitsRef');
+          url.searchParams.delete('commitsBase');
         }
 
         // MR 详情抽屉打开状态持久化：刷新/前进后退均可恢复
@@ -2297,6 +2303,7 @@
           commits: commitsDrawerState.isOpen ? commitsDrawerState.worktreePath : '',
           commitsFull: commitsDrawerState.isOpen && commitsDrawerState.fullHistory,
           commitsRef: commitsDrawerState.isOpen ? (commitsDrawerState.ref || '') : '',
+          commitsBase: commitsDrawerState.isOpen ? (commitsDrawerState.baseRef || '') : '',
           mr: mrDrawerState.isOpen && mrDrawerState.id != null ? mrDrawerState.id : ''
         }));
       } catch (e) {
@@ -2365,6 +2372,13 @@
     document.addEventListener('click', (e) => {
       searchablePickers.forEach(p => {
         if (p.wrapper && !p.wrapper.contains(e.target)) p.closeDropdown();
+      });
+    });
+
+    // Stash 菜单是原生 details；点击其它区域时主动收起，避免弹层长时间遮挡 Diff。
+    document.addEventListener('click', (e) => {
+      document.querySelectorAll('.stash-menu[open]').forEach(menu => {
+        if (!menu.contains(e.target)) menu.removeAttribute('open');
       });
     });
 
@@ -2774,7 +2788,7 @@
             }
           }
           if (pendingRestoreState.commits) {
-            await openCommitsDrawer(pendingRestoreState.commits, pendingRestoreState.commitsFull, false, pendingRestoreState.commitsRef || '');
+            await openCommitsDrawer(pendingRestoreState.commits, pendingRestoreState.commitsFull, false, pendingRestoreState.commitsRef || '', pendingRestoreState.commitsBase || '');
           }
           // 恢复 MR 详情抽屉（mr 记录不存在时抽屉内展示错误与重试入口）
           if (pendingRestoreState.mr) {
@@ -3451,6 +3465,7 @@
         if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
 
         const diff = data.diff;
+        currentDiffComparison = diff;
         if (diff.effectiveMode) {
           currentDiffMode = diff.effectiveMode;
         }
@@ -3490,7 +3505,7 @@
       const btn = document.getElementById('diffRefreshBtn');
       if (btn) {
         btn.disabled = true;
-        btn.textContent = '🔄 刷新中...';
+        btn.textContent = '刷新中...';
       }
 
       try {
@@ -3515,7 +3530,7 @@
       } finally {
         if (btn) {
           btn.disabled = false;
-          btn.textContent = '🔄 刷新 Diff';
+          btn.textContent = '刷新状态';
         }
       }
     }
@@ -3640,6 +3655,23 @@
       return `<span${title}>${icon} <span class="badge">${escapeHtml(name)}</span> ${head}</span>`;
     }
 
+    /**
+     * 打开当前 Diff 的提交抽屉，基准与目标沿用正在比对的两个引用。
+     * 历史提交已被基准吸收时，默认列表为空；完整历史仍可在抽屉内切换。
+     */
+    async function openDiffCommitsDrawer() {
+      const diff = currentDiffComparison;
+      if (!diff || !currentRepo || !diff.source || !diff.target) return;
+      const base = diff.source.branch && diff.source.branch !== 'HEAD'
+        ? diff.source.branch
+        : diff.source.head;
+      const target = diff.target;
+      const worktreePath = target.kind === 'worktree' ? target.path : currentRepo;
+      const ref = target.kind === 'branch' ? target.branch : '';
+      if (!base || !worktreePath) return;
+      await openCommitsDrawer(worktreePath, false, true, ref, base);
+    }
+
     /* 渲染两个 Worktree 或分支之间的 Diff 视图 */
     function renderDiffView(diff, preserveShell = false) {
       const container = document.getElementById('diffResultsContainer');
@@ -3661,7 +3693,7 @@
         syncStatusBadge = diff.source?.kind === 'branch'
           ? '<span class="badge badge-success">🌿 同分支自审（内容一致）</span>'
           : '<span class="badge badge-success">🌿 本地工作区自审</span>';
-      } else if (diff.isCommittedContentEqual && (diff.historyAhead > 0 || diff.historyBehind > 0)) {
+      } else if (diff.contentEquivalent && (diff.historyAhead > 0 || diff.historyBehind > 0)) {
         syncStatusBadge = '<span class="badge badge-success">文件内容一致（提交历史已 squash 整合）</span>';
       } else if (diff.isCommittedContentEqual) {
         syncStatusBadge = '<span class="badge badge-success">提交内容完全同步</span>';
@@ -3736,6 +3768,7 @@
             </button>
           </div>
           <div class="diff-mode-tip">${modeTipText}</div>
+          ${!diff.isSameWorktree ? '<button class="btn-outline" onclick="openDiffCommitsDrawer()" title="查看目标相对基准的差异提交">差异提交</button>' : ''}
           ${stashActionsHtml}
         </div>
       `;
@@ -3745,7 +3778,7 @@
         let emptyDesc = '🎉 当前审查模式下无任何文件差异。';
         if (effectiveMode === 'uncommitted') {
           emptyDesc = '🎉 Target 工作区干净，没有本地未提交修改。<br><span style="color: var(--text-muted); font-size: 13px;">如需审查已提交代码，请点击上方<b>【📦 全量变更】</b>或<b>【📌 仅已提交】</b>；历史暂存可通过上方入口还原或删除。</span>';
-        } else if (diff.isCommittedContentEqual && (diff.historyAhead > 0 || diff.historyBehind > 0)) {
+        } else if (diff.contentEquivalent && (diff.historyAhead > 0 || diff.historyBehind > 0)) {
           emptyDesc = '🎉 两个工作区的最终文件内容一致。<br><span style="color: var(--text-muted); font-size: 13px;">提交历史存在差异，但这通常是 squash 合入造成的历史差异，已从文件 Diff 中过滤。</span>';
         } else if (behind > 0 && ahead === 0) {
           emptyDesc = `ℹ️ <b>对比分支当前落后于基准分支（落后 ${behind} 个提交）</b>，且没有领先的独有代码修改。<br><span style="color: var(--text-muted); font-size: 13px;">已默认隐藏基准分支的更新；若需查看这些文件变更，可点击右上角<b>【落后 ${behind} 个提交】</b>状态。</span>`;
@@ -4082,11 +4115,12 @@
       }
     }
 
-    async function openCommitsDrawer(worktreePath, fullHistory = false, pushHistory = true, ref = '') {
+    async function openCommitsDrawer(worktreePath, fullHistory = false, pushHistory = true, ref = '', baseRef = '') {
       commitsDrawerState = {
         worktreePath, branch: null, base: null, baseAvailable: true, fullHistory, isFullHistory: false, isMainHistory: false, head: null,
         totalCommits: 0, loadedCount: 0, limit: 30, isOpen: true, lastGroupLabel: null,
         ref, // 分支查看模式：非空时以后端 options.ref 为提交顶点（分支列表入口）
+        baseRef, // Diff 入口使用当前比对基准，避免抽屉退回默认主分支
         filters: { author: '', grep: '', since: '', until: '' } // 每次打开新 worktree 都重置过滤条件
       };
       commitsDrawerAheadBehind = null; // 新抽屉丢弃上一轮的领先/落后统计
@@ -4192,6 +4226,9 @@
       // 分支查看模式：以后端 options.ref 指定的分支为提交顶点
       if (commitsDrawerState.ref) {
         params.set('ref', commitsDrawerState.ref);
+      }
+      if (commitsDrawerState.baseRef) {
+        params.set('base', commitsDrawerState.baseRef);
       }
       // 追加过滤条件(仅非空项): 值只经 URLSearchParams 编码进请求, 不参与任何 HTML 拼接
       const filters = commitsDrawerState.filters || {};
@@ -4327,6 +4364,7 @@
         const params = new URLSearchParams({ worktree: commitsDrawerState.worktreePath });
         // 分支查看模式：统计该分支（而非 worktree 当前 HEAD）相对基准的领先/落后
         if (commitsDrawerState.ref) params.set('ref', commitsDrawerState.ref);
+        if (commitsDrawerState.baseRef) params.set('base', commitsDrawerState.baseRef);
         const resp = await fetch(`/api/worktree-ahead-behind?${params}`);
         const data = await resp.json();
         // 抽屉已关闭或已切换到更新的请求时，丢弃旧响应避免污染 meta 行
@@ -5438,8 +5476,9 @@
           if (!commitsDrawerState.isOpen
             || commitsDrawerState.worktreePath !== state.commits
             || commitsDrawerState.fullHistory !== state.commitsFull
-            || (commitsDrawerState.ref || '') !== (state.commitsRef || '')) {
-            await openCommitsDrawer(state.commits, state.commitsFull, false, state.commitsRef || '');
+            || (commitsDrawerState.ref || '') !== (state.commitsRef || '')
+            || (commitsDrawerState.baseRef || '') !== (state.commitsBase || '')) {
+            await openCommitsDrawer(state.commits, state.commitsFull, false, state.commitsRef || '', state.commitsBase || '');
           }
         } else if (commitsDrawerState.isOpen) {
           closeCommitsDrawer(false);
