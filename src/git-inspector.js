@@ -222,34 +222,18 @@ export async function getWorktrees(repoPath) {
       wt.hasDiff = wt.isDirty;
       return;
     }
-    try {
-      const countStr = await runGit(repoPath, ['rev-list', '--count', `${mainRef}..${targetRef}`]);
-      wt.historyAheadCount = parseInt(countStr.trim(), 10) || 0;
-    } catch {
-      wt.historyAheadCount = 0;
-    }
-    // 内容等价判定（与提交抽屉徽章同一套 getBranchMergeStatus 四方判定）：
-    // 只做树一致比较会把「revert 抵消后主干已前移」「提交被 cherry-pick 进主干」
-    // 误判为仍有领先改动（树因主干其他提交而不同）。
-    // 真实案例 2026-09-25：append-verification-line 误显领先 2、add-mit-license 误显领先 1
-    let isMerged = false;
-    if (wt.historyAheadCount === 0) {
-      // 无领先提交即祖先关系（或与主干一致），不存在独有改动
-      isMerged = true;
-    } else if (mainTree) {
-      try {
-        const mergeStatus = await getBranchMergeStatus(repoPath, mainRef, targetRef);
-        isMerged = mergeStatus.isMerged;
-      } catch {
-        isMerged = false;
-      }
-    }
-    wt.isContentEqualToMain = isMerged;
-    // 分支改动已被主干吸收时，不存在属于它的已提交差异；
-    // 主干引用不可解析（mainTree 为空）时不做有差异的断言
-    wt.hasCommittedDiff = Boolean(mainTree) && !isMerged && wt.historyAheadCount > 0;
-    // squash/revert/cherry-pick 吸收后提交 SHA 不同但无实际差异；只有确有独有改动时才显示领先
-    wt.aheadCount = isMerged ? 0 : wt.historyAheadCount;
+    const comparison = mainTree
+      ? await getUnifiedRefComparison(repoPath, mainRef, targetRef, { includeHistorical: true })
+      : null;
+    wt.historyAheadCount = comparison?.historyAhead || 0;
+    wt.historyBehindCount = comparison?.historyBehind || 0;
+    wt.isContentEqualToMain = Boolean(comparison?.contentEquivalent);
+    // 主干引用不可解析时不做有差异的断言；否则统一使用有效独有改动结论。
+    wt.hasCommittedDiff = Boolean(mainTree) && Boolean(comparison?.hasUniqueCommittedChanges);
+    wt.mergeType = comparison?.mergeType || 'unmerged';
+    wt.historicalIntegration = comparison?.historicalIntegration || null;
+    wt.aheadCount = comparison?.ahead || 0;
+    wt.behindCount = comparison?.behind || 0;
     wt.hasDiff = wt.isDirty || wt.hasCommittedDiff || wt.aheadCount > 0;
   }));
 
@@ -349,6 +333,78 @@ export async function getBranchMergeStatus(repoPath, mainBranch, branchName) {
 }
 
 /**
+ * 统一计算两个引用之间的历史关系与有效改动。
+ *
+ * Git 的 rev-list 只反映提交拓扑，无法识别 squash、cherry-pick 或 revert
+ * 后已经被主干吸收的改动。所有需要展示“领先/落后”的入口都应使用本函数，
+ * 其中 history* 保留机械提交计数，ahead/behind 表示用户仍需处理的有效关系。
+ * @param {string} repoPath 仓库路径
+ * @param {string} sourceRef 基准引用
+ * @param {string} targetRef 目标引用
+ * @param {{includeHistorical?: boolean, historyCache?: Map}} [options] 是否启用历史整合兜底
+ * @returns {Promise<object>} 统一比较结果
+ */
+export async function getUnifiedRefComparison(repoPath, sourceRef, targetRef, options = {}) {
+  let historyAhead = 0;
+  let historyBehind = 0;
+  try {
+    const revCounts = await runGit(repoPath, ['rev-list', '--left-right', '--count', `${sourceRef}...${targetRef}`]);
+    const parts = revCounts.trim().split(/\s+/).map(Number);
+    if (parts.length >= 2) {
+      historyBehind = parts[0] || 0;
+      historyAhead = parts[1] || 0;
+    }
+  } catch {
+    // 引用不可解析时保留零值，调用方仍可继续展示其它状态。
+  }
+
+  let mergeStatus = {
+    isMerged: false,
+    isDirectlyMerged: false,
+    isMergedByContent: false,
+    isTreeEqual: false,
+    isPatchEquivalent: false,
+    isMergeTreeEqual: false,
+    mergeType: 'unmerged'
+  };
+  try {
+    mergeStatus = await getBranchMergeStatus(repoPath, sourceRef, targetRef);
+  } catch {
+    // 保留未吸收的降级结论。
+  }
+
+  let historicalIntegration = null;
+  let contentEquivalent = mergeStatus.isMerged;
+  let mergeType = mergeStatus.mergeType;
+  if (options.includeHistorical && !contentEquivalent && historyAhead > 0) {
+    historicalIntegration = await findHistoricalIntegration(
+      repoPath,
+      sourceRef,
+      targetRef,
+      options.historyCache || new Map()
+    );
+    if (historicalIntegration && historicalIntegration.unexplainedPaths.length === 0) {
+      contentEquivalent = true;
+      mergeType = 'historical';
+    }
+  }
+
+  return {
+    ...mergeStatus,
+    historyAhead,
+    historyBehind,
+    ahead: contentEquivalent ? 0 : historyAhead,
+    // 树完全一致时没有需要同步的落后内容；其它吸收方式仍保留落后计数。
+    behind: mergeStatus.isTreeEqual ? 0 : historyBehind,
+    contentEquivalent,
+    isCommittedContentEqual: mergeStatus.isTreeEqual,
+    hasUniqueCommittedChanges: historyAhead > 0 && !contentEquivalent,
+    mergeType,
+    historicalIntegration,
+  };
+}
+
+/**
  * 传递吸收判定：识别「成果已经由其他分支进入主干」的过时快照分支。
  *
  * 背景：squash/汇总合并（如 PR 流程）只把载体分支的最终内容合入主干，
@@ -407,12 +463,24 @@ export async function annotateDeliveredViaBranches(repoPath, branchList) {
  * @param {Array<object>} branches getBranches 输出（已经过 annotateDeliveredViaBranches）
  */
 export function annotateWorktreesFromBranches(worktrees, branches) {
-  const byName = new Map(
-    branches.filter(b => b.deliveredViaBranch).map(b => [b.name, b.deliveredViaBranch])
-  );
+  const byName = new Map(branches.map(branch => [branch.name, branch]));
   for (const wt of worktrees) {
-    if (wt.branch && byName.has(wt.branch)) {
-      wt.deliveredViaBranch = byName.get(wt.branch);
+    const branch = wt.branch ? byName.get(wt.branch) : null;
+    if (!branch) continue;
+
+    if (branch.deliveredViaBranch) {
+      wt.deliveredViaBranch = branch.deliveredViaBranch;
+    }
+
+    // squash 合并后，分支的原始提交仍会机械领先主干；分支列表已通过
+    // historicalIntegration 证明这些路径均被主干后续提交解释，Worktree 也必须复用该结论。
+    if (branch.mergeType === 'historical'
+      && branch.historicalIntegration
+      && branch.historicalIntegration.unexplainedPaths.length === 0) {
+      wt.isContentEqualToMain = true;
+      wt.hasCommittedDiff = false;
+      wt.aheadCount = 0;
+      wt.hasDiff = Boolean(wt.isDirty);
     }
   }
 }
@@ -601,8 +669,15 @@ export async function getBranches(repoPath) {
 
   const branchList = await Promise.all(branchRecords.map(async ({ name, relativeTime, author, subject, isoDate, isMain, committerTs }) => {
     const directMergedByGit = mergedBranches.includes(name);
-    const mergeStatus = isMain
+    const comparison = isMain
       ? {
+        historyAhead: 0,
+        historyBehind: 0,
+        ahead: 0,
+        behind: 0,
+        contentEquivalent: true,
+        isCommittedContentEqual: true,
+        hasUniqueCommittedChanges: false,
         isMerged: true,
         isDirectlyMerged: true,
         isMergedByContent: true,
@@ -611,16 +686,16 @@ export async function getBranches(repoPath) {
         isMergeTreeEqual: true,
         mergeType: 'direct'
       }
-      : await getBranchMergeStatus(repoPath, mainBranch, name);
+      : await getUnifiedRefComparison(repoPath, mainBranch, name, { includeHistorical: true, historyCache });
+    const mergeStatus = comparison;
     // 保留 `branch --merged` 作为兼容性证据；祖先检查是同一语义的更明确实现。
     const isMerged = directMergedByGit || mergeStatus.isMerged;
     const isDirectlyMerged = directMergedByGit || mergeStatus.isDirectlyMerged;
     const inUseByWorktree = activeWorktreeBranches.has(name);
     let contentComparison = null;
-    let historicalIntegration = null;
+    const historicalIntegration = mergeStatus.historicalIntegration || null;
     if (!isMain && !isMerged) {
       contentComparison = await compareBranchChangedFiles(repoPath, mainBranch, name);
-      historicalIntegration = await findHistoricalIntegration(repoPath, mainBranch, name, historyCache);
     }
     const isHistoricallyMerged = Boolean(
       historicalIntegration && historicalIntegration.unexplainedPaths.length === 0
@@ -928,6 +1003,8 @@ export async function getRefDiff(repoPath, source, target, requestedMode = null)
       behind: 0,
       historyAhead: 0,
       historyBehind: 0,
+      contentEquivalent: true,
+      mergeType: 'direct',
       isCommittedContentEqual: true,
       effectiveMode: 'committed',
       modesAvailable: {
@@ -948,44 +1025,20 @@ export async function getRefDiff(repoPath, source, target, requestedMode = null)
   const targetRef = targetInfo.refName;
   const targetIsWorktree = targetInfo.kind === 'worktree';
 
-  // 1. 提交计数只描述历史关系；squash 后 SHA 会不同，但最终文件内容可能完全一致。
-  let historyAhead = 0;
-  let historyBehind = 0;
-  try {
-    const revCounts = await runGit(repoPath, ['rev-list', '--left-right', '--count', `${sourceRef}...${targetRef}`]);
-    const parts = revCounts.trim().split(/\s+/).map(Number);
-    if (parts.length >= 2) {
-      historyBehind = parts[0];
-      historyAhead = parts[1];
-    }
-  } catch {
-    // ignore
-  }
-  const sourceTree = await runGit(repoPath, ['rev-parse', `${sourceRef}^{tree}`]);
-  const targetTree = await runGit(repoPath, ['rev-parse', `${targetRef}^{tree}`]);
-  const isCommittedContentEqual = sourceTree === targetTree;
-
-  // 独有改动判定：树一致只是最严格的一种。Target 的提交被 cherry-pick 进 Source、
-  // revert 相互抵消、或合并结果与 Source 一致时，树仍会因 Source 其他提交而不同，
-  // 但 Target 已没有需要展示的独有改动——其 Diff 内容在 Source 里已经存在。
-  // 与 worktree 列表/提交抽屉徽章复用同一套 getBranchMergeStatus 四方判定。
-  // 真实案例 2026-09-25：add-mit-license 的 LICENSE 已 cherry-pick 进 main，
-  // Diff 详情页仍把 merge-base..branch 的 LICENSE 当 Target 改动展示
-  let isTargetAbsorbedBySource = isCommittedContentEqual;
-  if (!isCommittedContentEqual && historyAhead > 0) {
-    try {
-      const mergeStatus = await getBranchMergeStatus(repoPath, sourceRef, targetRef);
-      isTargetAbsorbedBySource = mergeStatus.isMerged;
-    } catch {
-      // 判定失败时保持 false，退回原来的树比较行为
-    }
-  }
-  const ahead = isTargetAbsorbedBySource ? 0 : historyAhead;
-  const behind = isCommittedContentEqual ? 0 : historyBehind;
+  // 提交计数、内容吸收与历史整合统一由同一个比较器计算，避免 Diff 与其它面板
+  // 在 squash/cherry-pick/revert 场景显示不同结论。
+  const comparison = await getUnifiedRefComparison(repoPath, sourceRef, targetRef, { includeHistorical: true });
+  const {
+    historyAhead,
+    historyBehind,
+    ahead,
+    behind,
+    isCommittedContentEqual
+  } = comparison;
 
   // 文件 Diff 只展示 Target 一侧的提交。Target 没有领先提交、或改动已被 Source
   // 吸收（cherry-pick/revert 抵消/squash）时，不产生属于 Target 的文件 Diff。
-  const hasTargetCommittedChanges = historyAhead > 0 && !isTargetAbsorbedBySource;
+  const hasTargetCommittedChanges = comparison.hasUniqueCommittedChanges;
   let targetDiffBase = targetRef;
   if (hasTargetCommittedChanges) {
     try {
@@ -1124,6 +1177,9 @@ export async function getRefDiff(repoPath, source, target, requestedMode = null)
     historyAhead,
     historyBehind,
     isCommittedContentEqual,
+    contentEquivalent: comparison.contentEquivalent,
+    mergeType: comparison.mergeType,
+    historicalIntegration: comparison.historicalIntegration,
     effectiveMode,
     modesAvailable: {
       uncommitted: hasUncommitted,
@@ -1455,6 +1511,7 @@ export async function getWorktreeCommits(worktreePath, options = {}) {
   let baseRef = base;
   let baseAvailable = true;
   let revRange = isFullHistory ? tipRef : null;
+  let comparison = null;
   if (!isFullHistory) {
     const baseCandidates = [base, base.startsWith('origin/') ? null : `origin/${base}`].filter(Boolean);
     baseAvailable = false;
@@ -1468,7 +1525,12 @@ export async function getWorktreeCommits(worktreePath, options = {}) {
         // 继续尝试本地或远程的另一个同名基准引用。
       }
     }
-    if (baseAvailable) revRange = `${baseRef}..${tipRef}`;
+    if (baseAvailable) {
+      comparison = await getUnifiedRefComparison(worktreePath, baseRef, tipRef, { includeHistorical: true });
+      // 提交已经被基准吸收时，默认差异提交列表应与 Diff 文件列表一样为空；
+      // 用户仍可切换到完整历史查看原始提交。
+      if (comparison.hasUniqueCommittedChanges) revRange = `${baseRef}..${tipRef}`;
+    }
   }
 
   // 4. 获取提交总数
@@ -1666,10 +1728,10 @@ export async function getWorktreeAheadBehind(worktreePath, options = {}) {
     };
   }
 
-  // 4. 统计领先/落后：rev-list --left-right --count 输出第一列为 base 侧 (behind 落后数)，
-  //    第二列为目标引用侧 (ahead 领先数)，顺序不能弄反
-  const countOutput = await runGit(worktreePath, ['rev-list', '--left-right', '--count', `${baseRef}...${targetRef}`]);
-  const [behind, ahead] = countOutput.split(/\s+/).map(v => parseInt(v, 10) || 0);
+  // 4. 统一计算历史计数与有效领先/落后结论，确保提交抽屉、Diff 和列表口径一致。
+  const comparison = await getUnifiedRefComparison(worktreePath, baseRef, targetRef, {
+    includeHistorical: true
+  });
 
   const result = {
     ok: true,
@@ -1677,21 +1739,18 @@ export async function getWorktreeAheadBehind(worktreePath, options = {}) {
     baseBranch: base,
     worktreeBranch,
     baseAvailable: true,
-    ahead,
-    behind
+    ahead: comparison.ahead,
+    behind: comparison.behind,
+    historyAhead: comparison.historyAhead,
+    historyBehind: comparison.historyBehind
   };
 
-  // 5. 内容等价判定：机械计数会把「原提交 + revert 抵消提交」显示成领先 N，
-  //    复用分支列表的 getBranchMergeStatus（祖先/树一致/git cherry 补丁等价/merge-tree
-  //    四方判定）判断目标引用改动是否已被基准吸收，供前端展示「与基准无差异」。
-  //    detached HEAD 时 targetRef 为 HEAD，merge-base/cherry/rev-parse 同样可解析。
-  try {
-    const mergeStatus = await getBranchMergeStatus(worktreePath, baseRef, targetRef);
-    result.contentEquivalent = mergeStatus.isMerged;
-    result.mergeType = mergeStatus.mergeType;
-  } catch {
-    // 判定失败时省略这两个字段，前端回退为纯计数展示
-  }
+  // contentEquivalent 表示目标没有需要合并的独有提交；mergeType 便于前端解释
+  // squash、cherry-pick、revert 等非祖先关系。
+  result.contentEquivalent = comparison.contentEquivalent;
+  result.mergeType = comparison.mergeType;
+  result.hasUniqueCommittedChanges = comparison.hasUniqueCommittedChanges;
+  result.historicalIntegration = comparison.historicalIntegration;
 
   return result;
 }

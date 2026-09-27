@@ -5,7 +5,16 @@ import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { getBranches, getWorktrees, annotateDeliveredViaBranches, annotateWorktreesFromBranches, annotateDeliveredViaWorktrees } from '../src/git-inspector.js';
+import {
+  getBranches,
+  getWorktrees,
+  getRefDiff,
+  getWorktreeAheadBehind,
+  getWorktreeCommits,
+  annotateDeliveredViaBranches,
+  annotateWorktreesFromBranches,
+  annotateDeliveredViaWorktrees
+} from '../src/git-inspector.js';
 
 /**
  * 传递吸收判定测试：模拟 PR squash 合并流程，
@@ -140,21 +149,30 @@ test('Worktree 绑定：过时快照被标记但不可标安全删除（先解�
   }
 });
 
-test('worktree 面板兜底：hasCommittedDiff 的过时快照经 annotateDeliveredViaWorktrees 标记载体', async () => {
+test('worktree 面板与分支列表直接复用历史整合结论', async () => {
   const repo = repoPath;
   const wtPath = path.join(fixtureRoot, 'wt-feature-base2');
   git(repo, ['worktree', 'add', wtPath, 'feature-base']);
   try {
     const worktrees = await getWorktrees(repo);
     const { branches } = await getBranches(repo);
-    // worktree 面板判定：feature-base 相对 main 四方判定未吸收 → hasCommittedDiff=true（复现「领先」显示）
+    const branch = branches.find(b => b.name === 'feature-base');
     const wt = worktrees.find(w => w.branch === 'feature-base');
-    assert.equal(wt.hasCommittedDiff, true, '四方判定应视 feature-base 为领先（复现用户所见）');
-    assert.equal(wt.deliveredViaBranch, undefined, '传播前未标记');
+    if (branch.mergeType === 'historical') {
+      assert.equal(wt.hasCommittedDiff, false, '历史整合结论应直接消除已提交差异');
+      assert.equal(wt.aheadCount, 0, '历史整合结论应直接消除机械领先');
+    }
 
-    await annotateWorktreesFromBranches(worktrees, branches);
+    annotateWorktreesFromBranches(worktrees, branches);
+    if (branch.mergeType === 'historical') {
+      assert.equal(wt.aheadCount, 0, '历史整合分支不应继续显示机械领先提交数');
+      assert.equal(wt.hasCommittedDiff, false, '历史整合分支不应继续显示已提交差异');
+      assert.equal(wt.isContentEqualToMain, true, '历史整合结论应同步到 Worktree');
+    }
     await annotateDeliveredViaWorktrees(repo, worktrees, branches);
-    assert.equal(wt.deliveredViaBranch, 'carrier', '兜底探测应识别载体 carrier');
+    if (branch.mergeType !== 'historical') {
+      assert.equal(wt.deliveredViaBranch, 'carrier', '兜底探测应识别载体 carrier');
+    }
 
     // 对照：真实领先的 worktree（unrelated）不得被标记
     git(repo, ['worktree', 'add', path.join(fixtureRoot, 'wt-unrelated'), 'unrelated']);
@@ -168,6 +186,36 @@ test('worktree 面板兜底：hasCommittedDiff 的过时快照经 annotateDelive
     }
   } finally {
     git(repo, ['worktree', 'remove', '--force', wtPath]);
+  }
+});
+
+test('squash 后 Worktree、分支、Diff 与提交抽屉使用同一有效领先结论', async () => {
+  const wtPath = path.join(fixtureRoot, 'wt-unified-comparison');
+  git(repoPath, ['worktree', 'add', wtPath, 'feature-base']);
+  try {
+    const worktrees = await getWorktrees(repoPath);
+    const { branches } = await getBranches(repoPath);
+    const wt = worktrees.find(item => item.branch === 'feature-base');
+    const branch = branches.find(item => item.name === 'feature-base');
+    const diff = await getRefDiff(
+      repoPath,
+      { kind: 'branch', value: 'main' },
+      { kind: 'branch', value: 'feature-base' },
+      'committed'
+    );
+    const counts = await getWorktreeAheadBehind(wtPath, { base: 'main' });
+    const commits = await getWorktreeCommits(wtPath, { base: 'main' });
+
+    assert.equal(branch.isMerged, true);
+    assert.equal(wt.aheadCount, 0);
+    assert.equal(diff.ahead, 0);
+    assert.equal(counts.ahead, 0);
+    assert.equal(commits.totalCommits, 0);
+    assert.equal(diff.counts.committed, 0);
+    assert.ok(wt.historyAheadCount > 0, '原始历史计数仍可用于解释 squash');
+    assert.equal(counts.historyAhead, wt.historyAheadCount);
+  } finally {
+    git(repoPath, ['worktree', 'remove', '--force', wtPath]);
   }
 });
 
