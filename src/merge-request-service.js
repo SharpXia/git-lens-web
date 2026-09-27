@@ -8,6 +8,31 @@ import { normalizeRepoPath, loadMergeRequests, saveMergeRequests } from './merge
 
 const exec = promisify(execFile);
 
+// git 可执行文件路径，解析优先级与 git-inspector.js 一致：
+// configureGitPath 显式传入 > GIT_LENS_GIT_PATH 环境变量 > 'git'。
+// 本模块的 runGit/tryGit 与 git-inspector 的实现互相独立，注入也要各自维护一份。
+let gitExecutable = process.env.GIT_LENS_GIT_PATH || 'git';
+
+/**
+ * 配置本模块全部 git 调用使用的可执行文件路径。
+ * @param {string} [gitPath] - git 可执行文件路径；为空时保持当前配置不变
+ * @returns {string} 配置后的实际路径（供诊断接口展示）
+ */
+export function configureGitPath(gitPath) {
+  if (typeof gitPath === 'string' && gitPath.trim() !== '') {
+    gitExecutable = gitPath;
+  }
+  return gitExecutable;
+}
+
+/**
+ * 读取本模块当前生效的 git 可执行文件路径。
+ * @returns {string}
+ */
+export function getGitPath() {
+  return gitExecutable;
+}
+
 /**
  * 构造带 statusCode 的业务错误对象（与仓库既有中文错误惯例一致，
  * server.js 路由统一按 err.statusCode || 500 捕获返回）。
@@ -27,7 +52,7 @@ function httpError(message, statusCode) {
  * @returns {Promise<string>}
  */
 async function runGit(cwd, args) {
-  const { stdout } = await exec('git', args, { cwd, maxBuffer: 20 * 1024 * 1024 });
+  const { stdout } = await exec(gitExecutable, args, { cwd, maxBuffer: 20 * 1024 * 1024 });
   return stdout.trim();
 }
 
@@ -40,7 +65,7 @@ async function runGit(cwd, args) {
  */
 async function tryGit(cwd, args) {
   try {
-    const { stdout, stderr } = await exec('git', args, { cwd, maxBuffer: 20 * 1024 * 1024 });
+    const { stdout, stderr } = await exec(gitExecutable, args, { cwd, maxBuffer: 20 * 1024 * 1024 });
     return { ok: true, stdout: stdout || '', stderr: stderr || '', message: '' };
   } catch (err) {
     return {
