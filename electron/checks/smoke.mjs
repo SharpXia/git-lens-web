@@ -148,6 +148,10 @@ function launchApp(ctx, label) {
  * @param {number} timeoutMs
  */
 function waitExit(child, timeoutMs) {
+  // 进程可能在挂监听前就已退出，先查已缓存的结果
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve({ code: child.exitCode, signal: child.signalCode });
+  }
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(null), timeoutMs);
     child.once('exit', (code, signal) => {
@@ -205,13 +209,16 @@ async function runPrimaryInstance(ctx) {
   assert('错误凭据请求被 403 拒绝', badToken.status === 403, `status=${badToken.status}`);
 
   // 3. 测试握手（契约 §3：runId、configDir、pid 三方一致）
+  // 服务回报的 configDir 经 realpath 规范化（macOS 上 /var → /private/var），
+  // 本脚本根目录同样先做 realpath 再比较
+  const rootReal = fs.realpathSync(ctx.root);
   const handshakeResponse = await httpGet(ready.port, '/api/test-handshake', { 'X-Git-Lens-Session': token || '' });
   const handshake = handshakeResponse.ok ? await handshakeResponse.json() : null;
   const handshakeOk = handshake?.ok === true
     && handshake?.runId === ctx.runId
     && handshake?.pid === ready.servicePid
     && typeof handshake?.configDir === 'string'
-    && handshake.configDir.startsWith(ctx.root);
+    && handshake.configDir.startsWith(rootReal);
   assert('test-handshake 握手 runId/pid/configDir 三方一致', handshakeOk, handshake ? JSON.stringify(handshake) : `status=${handshakeResponse.status}`);
 
   // 4. 服务崩溃 → state:"crashed" 落盘 → 自动重启 → 服务恢复
@@ -275,19 +282,42 @@ async function runPrimaryInstance(ctx) {
 // ---- 场景二：主进程被强杀后的孤儿防护 ----
 
 /**
- * 再次启动应用，SIGKILL 主进程，验证服务进程自退出、端口释放。
- * @param {{root: string, readyFile: string, tokenFile: string, runId: string}} ctx
+ * 再次启动应用（独立临时根目录，避免读到上一轮的就绪文件），
+ * SIGKILL 主进程，验证服务进程自退出、端口释放。
  */
 async function runHardKillOrphanCheck(ctx) {
-  const app = launchApp(ctx, 'app2');
+  const root2 = fs.mkdtempSync(path.join(os.tmpdir(), 'glwt-smoke-hard-'));
+  const ctx2 = {
+    root: root2,
+    readyFile: path.join(root2, 'ready.json'),
+    tokenFile: path.join(root2, 'token.txt'),
+    runId: `${ctx.runId}-hard`,
+  };
+  await fsp.mkdir(path.join(root2, 'user-data'), { recursive: true });
+  await fsp.mkdir(path.join(root2, 'xdg-config'), { recursive: true });
+
+  const app = launchApp(ctx2, 'app2');
   const ready = await waitFor(() => {
-    const data = readReadyFile(ctx.readyFile);
+    const data = readReadyFile(ctx2.readyFile);
     return data && Number.isInteger(data.port) && Number.isInteger(data.servicePid) ? data : null;
   }, 30000);
   if (!ready) {
     assert('强杀场景：应用能再次正常启动', false, '就绪文件超时\n' + app.tail());
     return;
   }
+  assert('强杀场景：应用能再次正常启动', true, `port=${ready.port} servicePid=${ready.servicePid}`);
+
+  // 先确认服务确实存活，保证后续"自退出"断言不是空洞通过
+  const serviceWasAlive = await waitFor(() => {
+    try {
+      process.kill(ready.servicePid, 0);
+      return true;
+    } catch {
+      return null;
+    }
+  }, 5000);
+  assert('强杀场景：服务进程在主进程被杀前存活', serviceWasAlive === true, `servicePid=${ready.servicePid}`);
+
   app.child.kill('SIGKILL');
   const appExit = await waitExit(app.child, 10000);
   assert('强杀场景：主进程被 SIGKILL 后立即退出', appExit !== null && appExit.signal === 'SIGKILL', appExit ? `code=${appExit.code} signal=${appExit.signal}` : '超时');
@@ -311,6 +341,12 @@ async function runHardKillOrphanCheck(ctx) {
     }
   }, 8000);
   assert('强杀场景：端口已释放', portFreed === true, `port=${ready.port}`);
+
+  try {
+    await fsp.rm(root2, { recursive: true, force: true });
+  } catch {
+    console.log(`强杀场景临时目录保留：${root2}`);
+  }
 }
 
 // ---- 入口 ----
