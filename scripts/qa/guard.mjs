@@ -290,12 +290,14 @@ export async function assertPathNotUnderRealConfig(candidatePath, { home = os.ho
  * 握手请求也只会发往 127.0.0.1 的非 9527 端口。
  *
  * @param {string} baseUrl 被测服务地址
- * @param {{ runId: string, configDir: string, timeoutMs?: number }} options
+ * @param {{ runId: string, configDir: string, timeoutMs?: number, headers?: Record<string, string> }} options
+ *   headers：附加请求头。desktop 模式下所有 /api 请求（含握手）都要求
+ *   X-Git-Lens-Session 会话凭据（契约 §4），桌面 E2E 启动器必须传入。
  * @returns {Promise<{ok: true, runId: string, configDir: string, host: string, port: number, pid: number}>}
  * @throws {GuardError} 404 → HANDSHAKE_NOT_READY（Runtime 契约未就绪，正向用例应跳过）；
  *                      网络/超时 → HANDSHAKE_UNREACHABLE；其余状态/字段不一致按码分类
  */
-export async function performHandshake(baseUrl, { runId, configDir, timeoutMs = 5000 } = {}) {
+export async function performHandshake(baseUrl, { runId, configDir, timeoutMs = 5000, headers } = {}) {
   // 防御性复核：握手自身也必须经过 base-url 守卫，不允许直连任意地址
   const { baseUrl: normalized } = parseAndValidateBaseUrl(baseUrl);
 
@@ -311,7 +313,10 @@ export async function performHandshake(baseUrl, { runId, configDir, timeoutMs = 
 
   let res;
   try {
-    res = await fetch(normalized + HANDSHAKE_PATH, { signal: AbortSignal.timeout(timeoutMs) });
+    res = await fetch(normalized + HANDSHAKE_PATH, {
+      headers: headers || undefined,
+      signal: AbortSignal.timeout(timeoutMs)
+    });
   } catch (err) {
     throw new GuardError(
       GUARD_ERROR_CODES.HANDSHAKE_UNREACHABLE,

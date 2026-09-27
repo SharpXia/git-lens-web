@@ -202,14 +202,22 @@ test('守卫：performHandshake 接受 runId/configDir 完全一致的 200 响�
   const configDir = path.join(root, 'config');
   await fs.mkdir(configDir);
   const payload = { ok: true, runId: 'qa-run-1', configDir: await fs.realpath(configDir), host: '127.0.0.1', port: 19528, pid: process.pid };
+  let seenSessionHeader = null;
   const server = await startHandshakeServer((req, res) => {
+    // desktop 模式所有 /api（含握手）都要求会话凭据（契约 §4），守卫必须支持透传自定义头
+    seenSessionHeader = req.headers['x-git-lens-session'] || null;
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(payload));
   });
   try {
-    const body = await performHandshake(server.baseUrl, { runId: 'qa-run-1', configDir });
+    const body = await performHandshake(server.baseUrl, {
+      runId: 'qa-run-1',
+      configDir,
+      headers: { 'X-Git-Lens-Session': 'qa-session-token' }
+    });
     assert.equal(body.runId, 'qa-run-1');
     assert.equal(body.port, 19528);
+    assert.equal(seenSessionHeader, 'qa-session-token', '自定义头必须随握手请求透传');
   } finally {
     await server.close();
     await fs.rm(root, { recursive: true, force: true });
