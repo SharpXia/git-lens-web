@@ -335,11 +335,17 @@ test('目录选择器注入：工厂优先使用注入实现而非系统对话�
   assert.equal(typeof chooseScanDirectory, 'function');
 });
 
-test('CLI：PORT=0 时打印实际端口，同源 API 可用，默认消息格式不变', async t => {
-  const root = await makeTempDir('git-lens-cli-smoke-');
+/**
+ * 以指定环境启动 CLI 子进程（PORT=0），等待端口回报行出现。
+ * @param {object} t - 测试上下文（注册子进程清理）
+ * @param {object} [extraEnv] - 追加环境变量（如 GIT_LENS_TEST_MODE/GIT_LENS_TEST_RUN_ID）
+ * @returns {Promise<{child: object, stdout: () => string, port: number, configDir: string, elapsedMs: number}>}
+ */
+async function spawnCliAndWait(t, extraEnv = {}) {
+  const root = await makeTempDir('git-lens-cli-');
   const child = spawn(process.execPath, ['src/server.js'], {
     cwd: repoRoot,
-    env: { ...process.env, PORT: '0', GIT_LENS_CONFIG_DIR: path.join(root, 'config') },
+    env: { ...process.env, PORT: '0', GIT_LENS_CONFIG_DIR: path.join(root, 'config'), ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   const stdoutChunks = [];
@@ -353,28 +359,94 @@ test('CLI：PORT=0 时打印实际端口，同源 API 可用，默认消息格�
     child.kill();
   }));
 
+  const startedAt = Date.now();
   let port = 0;
-  for (let attempt = 0; attempt < 100 && !port; attempt += 1) {
-    const text = Buffer.concat(stdoutChunks).toString('utf-8');
-    const match = text.match(/Git Lens Web running on http:\/\/127\.0\.0\.1:(\d+)/);
+  for (let attempt = 0; attempt < 200 && !port; attempt += 1) {
+    const match = stdoutChunks.join('').match(/Git Lens Web running on http:\/\/127\.0\.0\.1:(\d+)/);
     if (match) port = Number(match[1]);
-    else await new Promise(resolve => setTimeout(resolve, 100));
+    else await new Promise(resolve => setTimeout(resolve, 50));
   }
-  assert.ok(port > 0, `CLI 应打印实际监听端口，输出：${Buffer.concat(stdoutChunks).toString()}`);
-  assert.notEqual(port, 9527);
+  return {
+    child,
+    stdout: () => stdoutChunks.join(''),
+    port,
+    configDir: path.join(root, 'config'),
+    elapsedMs: Date.now() - startedAt
+  };
+}
 
-  const projects = await request(port, { path: '/api/projects' });
-  assert.equal(projects.status, 200);
-  assert.equal(projects.json().ok, true);
-
-  // 错误 Host 一样被 CLI 启动的实例拒绝（访问边界对两种启动方式一致生效）
-  const rejected = await request(port, { path: '/api/projects', headers: { Host: 'evil.example.com' } });
-  assert.equal(rejected.status, 403);
-
-  // 先等子进程退出再结束测试，避免留下孤儿服务
-  await new Promise(resolve => {
+/** 等待 CLI 子进程退出（已在等待中或已退出时立即返回）。 */
+function stopCli(child) {
+  return new Promise(resolve => {
     if (child.exitCode !== null || child.signalCode !== null) return resolve();
     child.once('exit', resolve);
     child.kill();
   });
+}
+
+test('CLI 端口回报格式：ready 后 1.5 秒内单行输出实际端口（契约 §2.2 第一次修订）', async t => {
+  const { child, stdout, port, elapsedMs } = await spawnCliAndWait(t);
+  assert.ok(port > 0, `CLI 应打印实际监听端口，输出：${stdout()}`);
+  assert.notEqual(port, 9527);
+
+  // 端口回报行是冻结接口：完整行恰好出现一次，绝无 ":0" 占位行先回显
+  const lines = stdout().split('\n').filter(line => line.includes('Git Lens Web running on'));
+  assert.equal(lines.length, 1, `running 行应恰好一行，实际输出：${JSON.stringify(stdout())}`);
+  assert.equal(
+    lines[0], `Git Lens Web running on http://127.0.0.1:${port}`,
+    'running 行必须逐字符符合冻结格式'
+  );
+  assert.doesNotMatch(stdout(), /running on http:\/\/127\.0\.0\.1:0\b/, '不得先回显 ":0" 占位行');
+
+  // QA 启动器使用的解析正则必须命中同一端口
+  const qaMatch = stdout().match(/(?:127\.0\.0\.1|localhost):(\d+)/);
+  assert.ok(qaMatch, 'QA 解析正则应能命中端口');
+  assert.equal(Number(qaMatch[1]), port, 'QA 正则解析出的端口应与 running 行一致');
+
+  // ready 后立即打印：从进程启动到该行出现应在 1.5 秒内（含 node 启动时间）
+  assert.ok(elapsedMs < 1500, `端口回报应在 1.5 秒内出现，实际 ${elapsedMs}ms`);
+
+  // 同源 API 可用；错误 Host 同样被 CLI 启动的实例拒绝（访问边界对两种启动方式一致生效）
+  const projects = await request(port, { path: '/api/projects' });
+  assert.equal(projects.status, 200);
+  assert.equal(projects.json().ok, true);
+  const rejected = await request(port, { path: '/api/projects', headers: { Host: 'evil.example.com' } });
+  assert.equal(rejected.status, 403);
+
+  await stopCli(child);
+});
+
+test('CLI 测试模式握手接线：GIT_LENS_TEST_MODE=1 + GIT_LENS_TEST_RUN_ID 启用并回显服务进程 pid（契约 §3 第一次修订）', async t => {
+  const { child, stdout, port, configDir } = await spawnCliAndWait(t, {
+    GIT_LENS_TEST_MODE: '1',
+    GIT_LENS_TEST_RUN_ID: 'qa-run-cli-001'
+  });
+  assert.ok(port > 0, `CLI 应正常启动，输出：${stdout()}`);
+
+  const handshake = await request(port, { path: '/api/test-handshake' });
+  assert.equal(handshake.status, 200);
+  const payload = handshake.json();
+  assert.equal(payload.ok, true);
+  assert.equal(payload.runId, 'qa-run-cli-001', 'runId 必须来自 GIT_LENS_TEST_RUN_ID 环境变量');
+  assert.equal(payload.configDir, await fs.realpath(configDir), 'configDir 应为 realpath 后的目录');
+  assert.equal(payload.host, '127.0.0.1');
+  assert.equal(payload.port, port);
+  // pid 必须是服务进程自身的 pid，QA 启动器以它与 spawn 子进程 pid 比对
+  assert.equal(payload.pid, child.pid);
+
+  await stopCli(child);
+});
+
+test('CLI 测试模式缺 GIT_LENS_TEST_RUN_ID 时握手保持关闭（404）', async t => {
+  const { child, stdout, port } = await spawnCliAndWait(t, { GIT_LENS_TEST_MODE: '1' });
+  assert.ok(port > 0, `CLI 应正常启动，输出：${stdout()}`);
+  assert.equal((await request(port, { path: '/api/test-handshake' })).status, 404);
+  await stopCli(child);
+});
+
+test('CLI 仅设置 GIT_LENS_TEST_RUN_ID 未开测试模式时握手关闭（404）', async t => {
+  const { child, stdout, port } = await spawnCliAndWait(t, { GIT_LENS_TEST_RUN_ID: 'qa-run-unused' });
+  assert.ok(port > 0, `CLI 应正常启动，输出：${stdout()}`);
+  assert.equal((await request(port, { path: '/api/test-handshake' })).status, 404);
+  await stopCli(child);
 });
