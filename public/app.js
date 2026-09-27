@@ -1311,20 +1311,24 @@
         div.id = 'wt-item-' + encodeURIComponent(wt.path).replace(/%/g, '_');
 
         const isSafeMain = wt.isMain;
+        // 服务端数值字段统一收敛为数字后再进 HTML 插值，保证异常响应也不会注入标记
+        const dirtyCount = Number(wt.dirtyCount) || 0;
+        const aheadCount = Number(wt.aheadCount) || 0;
+        const historyAheadCount = Number(wt.historyAheadCount) || 0;
         let tags = [];
         if (wt.isMain) tags.push('<span class="badge badge-success">Main 工作区</span>');
         if (wt.branch) tags.push(`<span class="badge" title="${escapeHtml(wt.branch)}">🌿 ${escapeHtml(wt.branch)}</span>`);
         if (!wt.existsOnDisk) tags.push('<span class="badge badge-danger">磁盘已失联</span>');
-        if (wt.isDirty) tags.push(`<span class="badge badge-warning">⚡ 未提交修改 (${wt.dirtyCount})</span>`);
-        if (wt.aheadCount > 0) {
+        if (wt.isDirty) tags.push(`<span class="badge badge-warning">⚡ 未提交修改 (${dirtyCount})</span>`);
+        if (aheadCount > 0) {
           if (wt.deliveredViaBranch) {
             // 传递吸收判定命中：提交的机械领先是过时快照，成果已经由载体分支进入主干
-            tags.push(`<span class="badge badge-success" title="提交历史领先 ${wt.historyAheadCount || wt.aheadCount} 个提交，但这些提交已全部包含在已合入主干的分支 ${escapeHtml(wt.deliveredViaBranch)} 中，成果已经交付。本 Worktree 为过时快照：合并会带回旧内容，确认后可直接移除">✓ 成果已经由 ${escapeHtml(wt.deliveredViaBranch)} 进入主干</span>`);
+            tags.push(`<span class="badge badge-success" title="提交历史领先 ${historyAheadCount || aheadCount} 个提交，但这些提交已全部包含在已合入主干的分支 ${escapeHtml(wt.deliveredViaBranch)} 中，成果已经交付。本 Worktree 为过时快照：合并会带回旧内容，确认后可直接移除">✓ 成果已经由 ${escapeHtml(wt.deliveredViaBranch)} 进入主干</span>`);
           } else {
-            tags.push(`<span class="badge badge-success" title="分支文件内容相对 Main 仍有实际差异，提交历史领先 ${wt.historyAheadCount || wt.aheadCount} 个提交">🚀 领先 ${wt.aheadCount} 提交</span>`);
+            tags.push(`<span class="badge badge-success" title="分支文件内容相对 Main 仍有实际差异，提交历史领先 ${historyAheadCount || aheadCount} 个提交">🚀 领先 ${aheadCount} 提交</span>`);
           }
-        } else if (wt.isContentEqualToMain && (wt.historyAheadCount || 0) > 0) {
-          tags.push(`<span class="badge badge-success" title="提交历史领先 ${wt.historyAheadCount} 个提交，但分支改动已被主干吸收（revert 抵消 / cherry-pick / squash 合入等），合入主干不会产生实际变化">内容已与主干同步</span>`);
+        } else if (wt.isContentEqualToMain && historyAheadCount > 0) {
+          tags.push(`<span class="badge badge-success" title="提交历史领先 ${historyAheadCount} 个提交，但分支改动已被主干吸收（revert 抵消 / cherry-pick / squash 合入等），合入主干不会产生实际变化">内容已与主干同步</span>`);
         }
         if (wt.isLocked) tags.push('<span class="badge">已加锁</span>');
 
@@ -1352,7 +1356,7 @@
           </div>
           <div class="item-actions">
             <div class="item-actions-diff-group">
-              ${wt.isDirty ? `<button class="btn-outline" data-action="wt-uncommitted-diff" style="color: var(--warning); border-color: rgba(210, 153, 34, 0.4);">未提交 Diff (${wt.dirtyCount})</button>` : ''}
+              ${wt.isDirty ? `<button class="btn-outline" data-action="wt-uncommitted-diff" style="color: var(--warning); border-color: rgba(210, 153, 34, 0.4);">未提交 Diff (${dirtyCount})</button>` : ''}
               ${wt.existsOnDisk ? `<button class="btn-outline" data-action="wt-open-commits" title="${wt.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>` : ''}
               <button class="btn-outline" data-action="wt-diff-vs-main">与主干对比</button>
             </div>
@@ -2118,9 +2122,13 @@
     function renderDiffView(diff, preserveShell = false) {
       const container = document.getElementById('diffResultsContainer');
       const files = diff.files || [];
-      const ahead = diff.ahead || 0;
-      const behind = diff.behind || 0;
-      const counts = diff.counts || { uncommitted: 0, all: 0, committed: 0 };
+      // 服务端数值字段统一收敛为数字后再进 HTML 插值，保证异常响应也不会注入标记
+      const ahead = Number(diff.ahead) || 0;
+      const behind = Number(diff.behind) || 0;
+      const counts = diff.counts || {};
+      const uncommittedCount = Number(counts.uncommitted) || 0;
+      const allCount = Number(counts.all) || 0;
+      const committedCount = Number(counts.committed) || 0;
       const effectiveMode = diff.effectiveMode || 'all';
 
       // Stash 属于目标 Worktree，已提交模式或干净工作区仍可还原历史记录。
@@ -2177,7 +2185,7 @@
 
       const stashActionsHtml = stashWorktreePath ? `
         <div class="diff-stash-actions">
-          ${counts.uncommitted > 0 ? `
+          ${uncommittedCount > 0 ? `
             <button class="btn-outline stash-action-button" title="将全部未提交修改（含未跟踪文件）存入暂存记录" data-action="stash-act" data-stash-action="push">暂存</button>
             <details class="stash-menu">
               <summary class="btn-outline stash-action-button">处理未提交</summary>
@@ -2198,15 +2206,15 @@
           <div class="diff-mode-segmented">
             <button class="diff-mode-btn ${effectiveMode === 'uncommitted' ? 'active' : ''} ${isModeDisabled('uncommitted') ? 'disabled' : ''}" ${isModeDisabled('uncommitted') ? 'disabled' : ''} data-action="diff-mode" data-mode="uncommitted" title="${isModeDisabled('uncommitted') ? modeDisabledTitle('uncommitted') : '仅查看当前工作区未提交和未跟踪的代码'}">
               <span>⚡ 仅未提交 & 未跟踪</span>
-              <span class="diff-mode-pill">${counts.uncommitted}</span>
+              <span class="diff-mode-pill">${uncommittedCount}</span>
             </button>
             <button class="diff-mode-btn ${effectiveMode === 'all' ? 'active' : ''} ${isModeDisabled('all') ? 'disabled' : ''}" ${isModeDisabled('all') ? 'disabled' : ''} data-action="diff-mode" data-mode="all" title="${isModeDisabled('all') ? modeDisabledTitle('all') : '全量对比：已提交分支修改 + 本地未提交改动'}">
               <span>📦 全量变更</span>
-              <span class="diff-mode-pill">${counts.all}</span>
+              <span class="diff-mode-pill">${allCount}</span>
             </button>
             <button class="diff-mode-btn ${effectiveMode === 'committed' ? 'active' : ''} ${isModeDisabled('committed') ? 'disabled' : ''}" ${isModeDisabled('committed') ? 'disabled' : ''} data-action="diff-mode" data-mode="committed" title="${isModeDisabled('committed') ? modeDisabledTitle('committed') : '仅查看已提交的代码修改，忽略未提交'}">
               <span>📌 仅已提交</span>
-              <span class="diff-mode-pill">${counts.committed}</span>
+              <span class="diff-mode-pill">${committedCount}</span>
             </button>
           </div>
           <div class="diff-mode-tip">${modeTipText}</div>
@@ -3332,7 +3340,9 @@
     function renderCommitsFooter(data) {
       const footer = document.getElementById('commitsDrawerFooter');
       const btn = document.getElementById('loadMoreCommitsBtn');
-      const { loadedCount, totalCommits } = commitsDrawerState;
+      // 服务端返回的总数收敛为数字后再参与插值，防止异常响应注入标记
+      const loadedCount = Number(commitsDrawerState.loadedCount) || 0;
+      const totalCommits = Number(commitsDrawerState.totalCommits) || 0;
       footer.style.display = 'block';
       if (data.hasMore) {
         btn.textContent = `加载更多 (剩余 ${totalCommits - loadedCount} 条)`;
