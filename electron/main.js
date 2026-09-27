@@ -55,6 +55,9 @@ const SERVICE_SIGKILL_GRACE_MS = 2000;
 const WINDOW_STATE_FILE = 'window-state.json';
 const WINDOW_STATE_SAVE_DEBOUNCE_MS = 500;
 
+/** 恢复兜底检查延迟：给页面自身遮罩（onServiceState 驱动）的接管窗口 */
+const RECOVERY_FALLBACK_DELAY_MS = 1200;
+
 /** 各平台 git 常见安装目录；GUI 启动的 PATH 通常不含 Homebrew，需要增补探测 */
 const GIT_SEARCH_DIRS = {
   darwin: ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'],
@@ -99,6 +102,8 @@ let serviceProcess = null;
 let servicePid = null;
 /** 服务实际监听端口（就绪消息回传） */
 let servicePort = null;
+/** 最近一次服务实际端口；崩溃重启时优先复用，保证页面同源 reload（DEF-002） */
+let lastServicePort = null;
 /** 服务状态：starting | ready | restarting | crashed | stopped */
 let serviceState = 'starting';
 /** 连续重启计数，重启成功后清零 */
@@ -110,6 +115,8 @@ let lastServiceFailure = null;
 let appEverLoaded = false;
 /** 是否进入退出流程（避免关闭协议与监督逻辑互相触发） */
 let shuttingDown = false;
+/** 恢复遮罩兜底注入的延迟定时器（页面自身遮罩未接管时才注入） */
+let recoveryFallbackTimer = null;
 /** 目录选择桥接的主进程侧端口（与当前服务进程配对） */
 let serviceDialogPort = null;
 /** Git 发现结果（found/path/version），不阻塞启动 */
@@ -276,9 +283,15 @@ function buildServiceEnv() {
  * 每次启动新建目录选择 MessageChannel：旧通道随旧进程一起废弃。
  */
 function startService() {
+  const env = buildServiceEnv();
+  // 崩溃重启时优先复用原端口：同端口让页面 reload 保持同源，sessionStorage
+  // 不因跨源导航丢失（DEF-002 修复的另一半）；端口被抢占由服务侧回退随机端口
+  if (lastServicePort) {
+    env.GIT_LENS_DESKTOP_PREFERRED_PORT = String(lastServicePort);
+  }
   const child = utilityProcess.fork(path.join(__dirname, 'service-main.js'), [], {
     serviceName: 'git-lens-service',
-    env: buildServiceEnv(),
+    env,
   });
   serviceProcess = child;
   child.on('message', (message) => onServiceMessage(child, message));
@@ -330,24 +343,25 @@ function onServiceMessage(child, message) {
 }
 
 /**
- * 服务就绪：记录端口与 pid、注入凭据过滤、首次则创建窗口，重启则重新加载应用页。
+ * 服务就绪：记录端口与 pid、注入凭据过滤、把应用文档带回窗口（首次创建，
+ * 重启后同文档 reload），并按契约 §13 在重启成功时重写就绪文件。
  * @param {{port: number, pid: number}} message - ready 消息
  */
 function onServiceReady(message) {
   const isFirstReady = !appEverLoaded;
+  const previousPort = servicePort;
   servicePort = message.port;
   servicePid = message.pid;
+  lastServicePort = message.port;
   serviceState = 'ready';
   restartAttempts = 0;
   lastServiceFailure = null;
+  cancelRecoveryFallback();
   registerTokenFilter();
   broadcastServiceState();
   log(`本地服务已就绪：http://127.0.0.1:${servicePort}（pid ${servicePid}）`);
-  if (isFirstReady) {
-    createMainWindow(appUrl());
-  } else {
-    // 重启成功：窗口当前展示恢复页，直接加载（可能已变化的）新端口应用页
-    loadAppIntoMainWindow();
+  ensureAppDocument(previousPort);
+  if (!isFirstReady) {
     // 契约 §13：服务重启成功后按基础形态重写就绪文件
     void writeE2eReadyFile();
   }
@@ -371,6 +385,33 @@ function onServiceExit(child, exitCode) {
 }
 
 /**
+ * 把应用文档带回主窗口（DEF-002 修复的关键路径）：
+ * - 应用页已加载且端口未变：用 reload() 同文档同源重载——不交换 browsing
+ *   context group，同源 sessionStorage 完整保留，用户选中状态不丢失；
+ * - 端口变更（重启复用端口被抢占的罕见回退）：只能跨源导航，会话状态丢失，
+ *   记日志说明；
+ * - 窗口还在但只展示过首启恢复页：无会话状态可丢，直接换地址加载应用页；
+ * - 窗口不存在：创建并加载应用页。
+ * @param {number|null} previousPort - 重启前的服务端口（null 表示首次就绪）
+ */
+function ensureAppDocument(previousPort) {
+  if (mainWindow && !mainWindow.isDestroyed() && appEverLoaded) {
+    if (previousPort === null || previousPort === servicePort) {
+      mainWindow.webContents.reload();
+    } else {
+      log(`服务端口由 ${previousPort} 变为 ${servicePort}，页面跨源导航，崩溃前的会话状态无法保留`);
+      mainWindow.loadURL(appUrl());
+    }
+    return;
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.loadURL(appUrl());
+    return;
+  }
+  createMainWindow(appUrl());
+}
+
+/**
  * 意外退出后的监督决策：指数退避自动重启，连续失败达到上限后放弃并保持恢复页。
  */
 function scheduleRestart() {
@@ -381,7 +422,7 @@ function scheduleRestart() {
   if (restartAttempts >= SERVICE_RESTART_MAX_ATTEMPTS) {
     serviceState = 'crashed';
     broadcastServiceState();
-    showRecoveryPage('crashed', `${reason}；自动恢复已达上限（${SERVICE_RESTART_MAX_ATTEMPTS} 次）`, false);
+    presentRecoveryUx('crashed', `${reason}；自动恢复已达上限（${SERVICE_RESTART_MAX_ATTEMPTS} 次）`, false);
     return;
   }
   restartAttempts += 1;
@@ -389,7 +430,7 @@ function scheduleRestart() {
   serviceState = 'restarting';
   broadcastServiceState();
   log(`将在 ${delayMs}ms 后进行第 ${restartAttempts}/${SERVICE_RESTART_MAX_ATTEMPTS} 次自动重启：${reason}`);
-  showRecoveryPage('restarting', reason, true);
+  presentRecoveryUx('restarting', reason, true);
   restartTimer = setTimeout(() => {
     restartTimer = null;
     startService();
@@ -400,6 +441,7 @@ function scheduleRestart() {
  * 优雅关闭服务：请求 close → 等待退出 → 超时 SIGKILL 兜底，保证无孤儿服务。
  */
 async function shutdownService() {
+  cancelRecoveryFallback();
   if (restartTimer) {
     clearTimeout(restartTimer);
     restartTimer = null;
@@ -683,23 +725,73 @@ function createMainWindow(initialUrl) {
 }
 
 /**
- * 把应用页面加载进主窗口；窗口不存在（被关闭）时重建。
+ * 恢复期 UX 入口（DEF-002 修复）：崩溃/重启期间绝不导航离开应用页文档。
+ *
+ * 页面自身已实现深色服务遮罩（public/app.js 的 #serviceStateOverlay，经
+ * 契约 §6 onServiceState 即时驱动，配色取 app.css :root 变量），文档不销毁
+ * 时它自然接管；这里只安排一次兜底检查——短暂宽限后页面遮罩仍不可见
+ * （渲染层早退、页面脚本未就绪等），才向当前文档注入等价的深色遮罩。
+ * 应用页尚未加载（首启即失败）时没有会话状态可丢，直接使用内联恢复页。
+ * @param {'restarting'|'crashed'} state - 恢复状态
+ * @param {string} reason - 失败原因（中文）
+ * @param {boolean} autoRecover - 是否仍在自动恢复
  */
-function loadAppIntoMainWindow() {
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    createMainWindow(appUrl());
-    return;
+function presentRecoveryUx(state, reason, autoRecover) {
+  cancelRecoveryFallback();
+  recoveryFallbackTimer = setTimeout(() => {
+    recoveryFallbackTimer = null;
+    armRecoveryFallback(state, reason, autoRecover);
+  }, RECOVERY_FALLBACK_DELAY_MS);
+}
+
+/** 取消尚未触发的兜底注入检查（服务已就绪或应用退出时） */
+function cancelRecoveryFallback() {
+  if (recoveryFallbackTimer) {
+    clearTimeout(recoveryFallbackTimer);
+    recoveryFallbackTimer = null;
   }
-  mainWindow.loadURL(appUrl());
 }
 
 /**
- * 在窗口中展示恢复页（服务启动中/重启中/恢复失败）。
+ * 兜底检查：页面自身遮罩可见则不干预；否则按窗口状态选择注入遮罩或展示恢复页。
+ */
+async function armRecoveryFallback(state, reason, autoRecover) {
+  if (mainWindow && !mainWindow.isDestroyed() && appEverLoaded) {
+    let pageOverlayVisible = false;
+    try {
+      // 只读探测页面自身遮罩的显示状态，不触碰页面数据
+      pageOverlayVisible = await mainWindow.webContents.executeJavaScript(
+        `(function () { var el = document.getElementById('serviceStateOverlay'); return !!(el && el.style.display !== 'none'); })()`,
+      );
+    } catch {
+      // 渲染层异常时按遮罩不可见处理，尝试注入兜底
+    }
+    if (pageOverlayVisible) return;
+    injectRecoveryOverlay(state, reason, autoRecover);
+    return;
+  }
+  showStandaloneRecoveryPage(state, reason, autoRecover);
+}
+
+/**
+ * 向当前应用文档注入全屏深色恢复遮罩（主进程 executeJavaScript，不受页面
+ * CSP 约束）。遮罩拦截指针与键盘输入，避免旧数据可交互；服务恢复后的
+ * 同文档 reload 会自然清除注入内容。
+ */
+function injectRecoveryOverlay(state, reason, autoRecover) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.executeJavaScript(buildRecoveryOverlayScript(state, reason, autoRecover))
+    .catch((err) => log(`注入恢复遮罩失败：${err && err.message ? err.message : err}`));
+}
+
+/**
+ * 展示独立恢复页：仅用于应用页从未加载（首启失败）或窗口刚重建的场景，
+ * 此时无任何会话状态可丢，data: URL 导航无副作用。
  * @param {'restarting'|'crashed'} state - 恢复页状态
  * @param {string} reason - 失败原因（中文）
  * @param {boolean} autoRecover - 是否仍在自动恢复
  */
-function showRecoveryPage(state, reason, autoRecover) {
+function showStandaloneRecoveryPage(state, reason, autoRecover) {
   const url = buildRecoveryPageUrl(state, reason, autoRecover);
   if (!mainWindow || mainWindow.isDestroyed()) {
     createMainWindow(url);
@@ -718,42 +810,125 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
+/** 恢复状态对应的标题与说明文案（与页面自身遮罩语义一致） */
+function recoveryCopy(state, autoRecover) {
+  return {
+    heading: state === 'restarting' ? '本地服务正在恢复' : '本地服务已停止',
+    description: autoRecover
+      ? '本地服务出现异常，应用正在自动重启服务，恢复完成后将自动返回页面。'
+      : '本地服务多次自动恢复失败，已停止重启。您可以退出应用后重新启动，若反复出现请通过「帮助 → 复制诊断信息」反馈问题。',
+  };
+}
+
 /**
- * 构造内联恢复页（data: URL，中文状态说明 + 倒计时 + 退出按钮）。
- * 页面不含任何特权 API；"退出应用"经 window.close() 触发 window-all-closed 退出。
+ * 构造注入当前文档的恢复遮罩脚本。
+ * 配色取 public/app.css :root 既有变量值（--card-bg/--border/--text 系列与
+ * .service-overlay 的遮罩底色），与应用深色主题一致；描述文案限宽并
+ * word-break，避免词组中间断行。全部动态文案经 JSON.stringify 字面量化，
+ * 不拼接 HTML，防注入。
+ * @param {'restarting'|'crashed'} state - 恢复状态
+ * @param {string} reason - 失败原因
+ * @param {boolean} autoRecover - 是否显示自动恢复倒计时
+ */
+function buildRecoveryOverlayScript(state, reason, autoRecover) {
+  const { heading, description } = recoveryCopy(state, autoRecover);
+  const data = JSON.stringify({ heading, description, reason: reason || '', autoRecover: Boolean(autoRecover) });
+  return `(function () {
+  var data = ${data};
+  var OVERLAY_ID = 'git-lens-recovery-fallback';
+  if (window.__gitLensRecoveryTeardown) { try { window.__gitLensRecoveryTeardown(); } catch (e) {} }
+  var old = document.getElementById(OVERLAY_ID);
+  if (old) { old.remove(); }
+  var overlay = document.createElement('div');
+  overlay.id = OVERLAY_ID;
+  overlay.setAttribute('role', 'alertdialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;'
+    + 'background:rgba(1,4,9,0.72);backdrop-filter:blur(2px);font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;';
+  var card = document.createElement('div');
+  card.style.cssText = 'max-width:440px;margin:0 16px;padding:28px 32px;text-align:center;word-break:break-word;'
+    + 'background:#161b22;border:1px solid #30363d;border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,0.4);color:#c9d1d9;';
+  var title = document.createElement('h2');
+  title.textContent = data.heading;
+  title.style.cssText = 'font-size:17px;margin:0 0 8px;color:#f0f6fc;';
+  var desc = document.createElement('p');
+  desc.textContent = data.description;
+  desc.style.cssText = 'font-size:13px;line-height:1.7;margin:8px 0;color:#8b949e;word-break:break-word;';
+  var reasonEl = document.createElement('p');
+  reasonEl.textContent = data.reason;
+  reasonEl.style.cssText = 'font-size:12px;margin:8px 0;color:#8b949e;word-break:break-word;';
+  var countdown = document.createElement('p');
+  countdown.style.cssText = 'font-size:13px;margin:14px 0 0;color:#58a6ff;';
+  var button = document.createElement('button');
+  button.textContent = '退出应用';
+  button.style.cssText = 'margin-top:16px;padding:7px 22px;font-size:13px;border-radius:6px;cursor:pointer;'
+    + 'background:transparent;border:1px solid #30363d;color:#c9d1d9;';
+  button.addEventListener('click', function () { window.close(); });
+  card.appendChild(title);
+  card.appendChild(desc);
+  if (data.reason) { card.appendChild(reasonEl); }
+  card.appendChild(countdown);
+  card.appendChild(button);
+  overlay.appendChild(card);
+  (document.body || document.documentElement).appendChild(overlay);
+
+  // 阻断输入：不透明遮罩挡住指针，捕获阶段拦截键盘事件，焦点移入遮罩
+  function blockEvent(e) { e.stopPropagation(); }
+  document.addEventListener('keydown', blockEvent, true);
+  document.addEventListener('keypress', blockEvent, true);
+  overlay.tabIndex = -1;
+  overlay.focus();
+
+  var remain = 10;
+  function render() {
+    countdown.textContent = data.autoRecover ? (remain > 0 ? '自动恢复倒计时：' + remain + ' 秒' : '即将重试…') : '';
+  }
+  render();
+  var timer = data.autoRecover ? setInterval(function () { remain = remain > 0 ? remain - 1 : 10; render(); }, 1000) : null;
+  // 重复注入（状态切换）时清理旧副作用；页面 reload 后一切自然重置
+  window.__gitLensRecoveryTeardown = function () {
+    if (timer) { clearInterval(timer); }
+    document.removeEventListener('keydown', blockEvent, true);
+    document.removeEventListener('keypress', blockEvent, true);
+    try { delete window.__gitLensRecoveryTeardown; } catch (e) {}
+  };
+})();`;
+}
+
+/**
+ * 构造独立内联恢复页（data: URL，仅用于应用页未加载的兜底场景）。
+ * 深色主题与应用一致（取 app.css :root 变量值）；文案容器限宽 + word-break。
  * @param {'restarting'|'crashed'} state - 恢复页状态
  * @param {string} reason - 失败原因
  * @param {boolean} autoRecover - 是否显示自动恢复倒计时
  */
 function buildRecoveryPageUrl(state, reason, autoRecover) {
-  const heading = state === 'restarting' ? '本地服务正在恢复' : '本地服务已停止';
-  const description = autoRecover
-    ? '本地服务出现异常，应用正在自动重启服务，恢复完成后将自动返回页面。'
-    : '本地服务多次自动恢复失败，已停止重启。您可以退出应用后重新启动，若反复出现请通过「帮助 → 复制诊断信息」反馈问题。';
+  const { heading, description } = recoveryCopy(state, autoRecover);
   const html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <title>Git Lens Web</title>
 <style>
+  /* 深色主题与应用一致：取 public/app.css :root 既有变量值 */
   body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-         font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f5f6f8; color: #1f2328; }
-  .card { max-width: 460px; padding: 32px 36px; background: #fff; border-radius: 12px;
-          box-shadow: 0 8px 30px rgba(0,0,0,.08); text-align: center; }
-  h1 { font-size: 20px; margin: 0 0 12px; }
-  p { font-size: 14px; line-height: 1.7; color: #57606a; margin: 8px 0; }
-  .reason { font-size: 12px; color: #9198a1; word-break: break-all; }
-  .countdown { font-size: 14px; color: #1f6feb; margin-top: 16px; }
-  button { margin-top: 20px; padding: 8px 24px; font-size: 14px; border: 1px solid #d0d7de;
-           border-radius: 6px; background: #f6f8fa; cursor: pointer; }
-  button:hover { background: #eef1f4; }
+         font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #0d1117; color: #c9d1d9; }
+  .card { max-width: 440px; margin: 0 16px; padding: 28px 32px; background: #161b22; border: 1px solid #30363d;
+          border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.4); text-align: center; word-break: break-word; }
+  h1 { font-size: 17px; margin: 0 0 8px; color: #f0f6fc; }
+  p { font-size: 13px; line-height: 1.7; color: #8b949e; margin: 8px 0; word-break: break-word; }
+  .reason { font-size: 12px; }
+  .countdown { font-size: 13px; color: #58a6ff; margin-top: 14px; }
+  button { margin-top: 16px; padding: 7px 22px; font-size: 13px; border: 1px solid #30363d;
+           border-radius: 6px; background: transparent; color: #c9d1d9; cursor: pointer; }
+  button:hover { background: #21262d; }
 </style>
 </head>
 <body>
 <div class="card">
   <h1>${escapeHtml(heading)}</h1>
   <p>${escapeHtml(description)}</p>
-  <p class="reason">${escapeHtml(reason || '')}</p>
+  ${reason ? `<p class="reason">${escapeHtml(reason)}</p>` : ''}
   <p class="countdown" id="countdown"></p>
   <button id="quit">退出应用</button>
 </div>
@@ -954,8 +1129,8 @@ if (!gotSingleInstanceLock) {
 } else {
   app.on('second-instance', () => {
     if (!mainWindow || mainWindow.isDestroyed()) {
-      // 已有实例窗口被关闭到托盘之外的场景：重建窗口即可
-      createMainWindow(servicePort ? appUrl() : undefined);
+      // 已有实例窗口被关闭的场景：服务就绪则直接回应用页，否则进恢复流程
+      createMainWindow(serviceState === 'ready' ? appUrl() : undefined);
       return;
     }
     if (mainWindow.isMinimized()) mainWindow.restore();
@@ -990,7 +1165,7 @@ app.on('before-quit', (event) => {
 // macOS 点击 Dock 图标时恢复窗口
 app.on('activate', () => {
   if (!mainWindow || mainWindow.isDestroyed()) {
-    createMainWindow(servicePort ? appUrl() : undefined);
+    createMainWindow(serviceState === 'ready' ? appUrl() : undefined);
   } else {
     mainWindow.show();
   }
