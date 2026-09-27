@@ -1,6 +1,6 @@
 # Electron 桌面版 G0 契约冻结
 
-> 状态：已冻结（G0）。本文是 `codex/electron-*` 各工作流的唯一契约来源；修改必须由协调 Agent 提交并通知所有受影响工作流。基线 `main@1cc3e1f`，协调分支 `codex/electron-coordination`。
+> 状态：已冻结（G0）+ 2026-09-27 第一次修订（握手/端口回报/415 例外条款）。本文是 `codex/electron-*` 各工作流的唯一契约来源；修改必须由协调 Agent 提交并通知所有受影响工作流。基线 `main@1cc3e1f`，协调分支 `codex/electron-coordination`。
 
 ## 1. 支持平台矩阵（G0 冻结）
 
@@ -45,6 +45,8 @@ export function createGitLensServer(options) { ... }
 
 `src/server.js` 改为薄 CLI：解析 `PORT`（默认 9527）、`GIT_LENS_CONFIG_DIR`（默认 `~/.config/git-lens-web`）、`GIT_LENS_GIT_PATH`，以 browser 模式调用工厂并监听。**`npm start` 对外语义不变**：默认 9527、真实配置目录、打印 `Git Lens Web running on http://127.0.0.1:9527`。禁止任何代码通过 `import` 现有 `server.js` 启动桌面服务。
 
+**（第一次修订）端口回报格式**：`PORT=0` 时 CLI 必须在 ready 后立即向 stdout 打印同一格式行，携带实际分配端口：`Git Lens Web running on http://127.0.0.1:<实际端口>`。QA 启动器按该行（正则 `(?:127\.0\.0\.1|localhost):(\d+)`）解析端口，此格式为冻结接口。
+
 ### 2.3 git 路径注入
 
 `src/git-inspector.js` 的 git 调用改为可注入 `gitPath`（默认值解析顺序：显式参数 > `GIT_LENS_GIT_PATH` > `'git'`），行为默认不变。`src/merge-request-service.js` 若直接调用 git，同样注入。
@@ -52,7 +54,8 @@ export function createGitLensServer(options) { ... }
 ## 3. 测试模式与握手契约（Runtime 实现，QA 消费）
 
 - 仅当进程环境 `GIT_LENS_TEST_MODE=1` 且工厂传入 `handshake.runId` 时，启用 `GET /api/test-handshake`；两个条件缺一返回 404（生产实例不可探测）。
-- 响应 `200 {"ok":true,"runId":"<runId>","configDir":"<realpath 后的配置目录>","host":"127.0.0.1","port":<实际端口>,"pid":<进程号>}`。
+- **（第一次修订）CLI 环境变量接线**：CLI 以 `GIT_LENS_TEST_MODE=1` 启动时，必须读取环境变量 `GIT_LENS_TEST_RUN_ID` 作为 `handshake.runId` 传入工厂（QA 启动器经 CLI spawn，无法直接传工厂参数）。未设置 `GIT_LENS_TEST_RUN_ID` 时握手保持关闭（404）。
+- 响应 `200 {"ok":true,"runId":"<runId>","configDir":"<realpath 后的配置目录>","host":"127.0.0.1","port":<实际端口>,"pid":<进程号>}`；**`pid` 必须是服务进程自身的 pid**（QA 启动器以其与 spawn 子进程 pid 比对）。
 - QA 启动器在**发出任何其他请求前**必须完成握手，并核对 `runId`、`configDir` 与本轮 manifest 完全一致；`/api/projects` 成功不构成身份验证。
 
 ## 4. 本地 API 访问边界契约
@@ -63,7 +66,7 @@ export function createGitLensServer(options) { ... }
 2. **Origin 校验**：携带 `Origin` 的请求仅接受 `http://127.0.0.1:<port>`、`http://localhost:<port>`；`Origin: null`、`file://`、其他站点一律 403。
 3. **移除宽松 CORS**：不再发送 `Access-Control-Allow-Origin: *`；预检仅对本机同源来源放行。
 4. **请求体限制**：JSON 请求体超过 `requestBodyLimit` 返回 413；非 JSON `Content-Type` 的 POST 返回 415。
-5. **写接口**（POST）逐个保留既有参数校验；`/api/raw-file` 的工作区/仓库路径关系按 §7 复核。
+5. **写接口**（POST）逐个保留既有参数校验；`/api/raw-file` 的工作区/仓库路径关系按 §7 复核（见 DEF-001）。
 
 desktop 模式追加：
 
@@ -71,6 +74,8 @@ desktop 模式追加：
 7. **加载方式冻结**：桌面窗口加载 `http://127.0.0.1:<随机端口>/`（同源相对 `/api`），不使用 `file://`。
 
 browser 模式不要求凭据（无主进程可托管 token），但保留 1–5。
+
+**（第一次修订）已批准偏差**：`/api/choose-scan-directory` 在缺失 `Content-Type` 头时放行（既有前端调用未带该头，public/** 归 UI 工作流）；显式提供非 JSON Content-Type 仍 415。UI 工作流为该调用补齐 `'Content-Type': 'application/json'` 后，此偏差在后续门禁中收紧。
 
 ## 5. 配置与迁移契约
 
@@ -124,7 +129,7 @@ window.gitLens = {
 
 ### 8.2 fail-closed 守卫（任何写操作前强制通过）
 
-1. base-url 仅接受 `http://127.0.0.1:<实际端口>`，端口不得为 9527；拒绝 `localhost` 域名形式以外的主机名、代理与路径前缀。
+1. base-url 仅接受 `http://127.0.0.1:<实际端口>` 字面形态（无路径、查询、尾斜杠、其他主机名），端口不得为 9527。
 2. `configDir`、扫描目录、userData、git 写目标经 `realpath` 后必须位于 qa-root 内；拒绝符号链接逃逸、空值、`~/.config/git-lens-web`、仓库源码目录。
 3. 握手（§3）成功且三方一致后才放行后续请求。
 4. 启动扫描目录为空或仅含本轮 fixture 路径。
@@ -132,7 +137,7 @@ window.gitLens = {
 
 ### 8.3 验收命令入口
 
-QA 提供单一入口（G0 起为 `npm run test:isolated`；G4 前扩展 `npm run test:desktop:isolated`）：自动建 qa-root、注入环境、启动服务/应用、执行测试、产出 `artifacts/report.json` 与截图。协调 Agent 只调用该入口或其明确定义的阶段参数。既有 `scripts/verify-mr-branch-diff.mjs` 在 G0 改造为 fail-closed 版本（强制握手、拒绝 9527、拒绝非环回、仅接受显式且位于 qa-root 的 `--config-dir`）之前，禁止用于桌面版验收。
+QA 提供单一入口（G0 起为 `npm run test:isolated`；G4 前扩展 `npm run test:desktop:isolated`）：自动建 qa-root、注入环境、启动服务/应用、执行测试、产出 `artifacts/report.json` 与截图。协调 Agent 只调用该入口或其明确定义的阶段参数。既有 `scripts/verify-mr-branch-diff.mjs` 已改造为 fail-closed 版本（强制握手、拒绝 9527、拒绝非环回、仅接受显式且与握手一致的 `--config-dir`、强制 `--run-id`）。
 
 ## 9. 文件所有权与本地环境分配
 
