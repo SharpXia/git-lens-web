@@ -186,3 +186,17 @@ QA 提供单一入口（G0 起为 `npm run test:isolated`；G4 前扩展 `npm ru
 
 - E2E 启动器只从 ready 文件获取端口，**禁止猜测端口**（契约 §8.3）；文件写入用临时文件 + rename 原子替换。
 - `app.quit()` 必须请求服务正常关闭并等待（超时才 SIGKILL），保证 QA 进程组退出后无孤儿服务、端口释放。
+
+## 14. CSP 策略（G3 冻结，Runtime 实现响应头，UI 负责页面合规）
+
+静态页与 API 同源响应统一携带：
+
+```
+Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'none'
+```
+
+- `script-src 'self'` 意味着**禁止内联 `<script>` 与内联事件处理器（onclick 等）**：UI 工作流须把 index.html 的内联脚本外置为 `public/app.js`、内联事件迁移为 addEventListener/事件委托；外置后加载顺序与执行时序保持等价。
+- `style-src 'unsafe-inline'` 暂保留内联样式；UI 外置 CSS 后可由协调 Agent 决定收紧。
+- `/api/raw-file` 以 `Content-Type` 呈现图片，页面不得引入远程资源。验收：任何 CSP 违规（console 报警）视为 G3 失败项。
+
+E2E 工具锁定：`playwright`（devDependency，协调分支持有；Electron 以 `_electron.launch` + `executablePath` 驱动 node_modules 内二进制，不下载浏览器）。
