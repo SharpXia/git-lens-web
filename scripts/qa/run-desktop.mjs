@@ -250,15 +250,25 @@ async function main() {
     record('e1-crash-detected', 'kill -9 服务进程后就绪文件标记 state:crashed', crashedReady ? 'pass' : 'fail',
       crashedReady ? '已捕获 crashed 形态' : '未在超时内观察到 crashed 形态');
 
-    // 恢复遮罩：Shell 的实现是崩溃即把窗口整页切换为 data: URL 恢复页
-    // （标题「本地服务正在恢复」+ 自动恢复倒计时），而不是 app 页内覆盖层
+    // 恢复遮罩（DEF-002 修复后形态）：主路径为应用页自带 #serviceStateOverlay 遮罩，
+    // 兜底为主进程注入的 #git-lens-recovery-fallback；页面保持同文档，不再丢会话状态。
+    // data: 分支仅为兼容旧实现的形态兜底
     const recoveryShown = await pollPage(page, () => {
       if (location.protocol === 'data:') return true;
-      return Boolean(document.body) && document.body.textContent.includes('本地服务正在恢复');
+      const overlay = document.getElementById('serviceStateOverlay');
+      if (overlay && overlay.style.display !== 'none' && overlay.style.display !== '') return true;
+      return Boolean(document.getElementById('git-lens-recovery-fallback'))
+        || (Boolean(document.body) && document.body.textContent.includes('本地服务正在恢复'));
     }, null, RESTART_TIMEOUT_MS);
-    const recoveryUrl = page.url().slice(0, 60);
-    record('e2-recovery-overlay', '页面出现服务恢复遮罩（崩溃 → 恢复页 → onServiceState 端到端）', recoveryShown ? 'pass' : 'fail',
-      recoveryShown ? `恢复页已呈现（url 前缀=${recoveryUrl}…）` : '未在超时内观察到恢复页');
+    const overlayKind = await page.evaluate(() => {
+      if (location.protocol === 'data:') return 'data: 恢复页（旧实现）';
+      const overlay = document.getElementById('serviceStateOverlay');
+      if (overlay && overlay.style.display !== 'none' && overlay.style.display !== '') return '应用遮罩 #serviceStateOverlay';
+      if (document.getElementById('git-lens-recovery-fallback')) return '兜底遮罩 #git-lens-recovery-fallback';
+      return '未观察到';
+    });
+    record('e2-recovery-overlay', '页面出现服务恢复遮罩（崩溃 → 遮罩 → onServiceState 端到端）', recoveryShown ? 'pass' : 'fail',
+      recoveryShown ? `遮罩形态=${overlayKind}` : '未在超时内观察到恢复遮罩');
     await screenshotFile(page, qaRoot, 'e', 'recovery-overlay').catch(() => {});
 
     // 自动重启成功：就绪文件回到基础形态（新 port/servicePid），恢复后数据可重载

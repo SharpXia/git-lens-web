@@ -37,6 +37,7 @@ import { GUARD_ERROR_CODES, assertPathInsideRoot, performHandshake } from './gua
 import { buildFixtures, createQaRoot, makeRunId, updateManifest } from './fixtures.mjs';
 import {
   attachCspCollector,
+  captureBaseline,
   closeAndVerify,
   createResults,
   parseDesktopArgs,
@@ -44,7 +45,6 @@ import {
   pollUntil,
   readReadyFile,
   requestJson,
-  screenshotFile,
   startDesktopApp,
   validateReady,
   writeServiceScanConfig
@@ -115,7 +115,13 @@ async function main() {
     ({ baseUrl } = validateReady(ready));
     await updateManifest(qaRoot, { service: { port: ready.port, pid: ready.servicePid } });
     await page.waitForTimeout(500);
-    await screenshotFile(page, qaRoot, 'a', 'first-screen');
+    // 首屏基线：标题与仓库下拉就绪后才出图
+    await captureBaseline(app, page, qaRoot, 'a', 'first-screen', () => {
+      const h1 = document.querySelector('header h1');
+      const options = document.querySelectorAll('#repoSelect option');
+      const tabs = document.getElementById('tabOverview');
+      return Boolean(h1 && tabs?.offsetParent) && options.length > 0;
+    });
 
     token = (await fs.readFile(launched.env.GIT_LENS_E2E_TOKEN_FILE, 'utf8')).trim();
     const cspCollector = attachCspCollector(page);
@@ -161,7 +167,18 @@ async function main() {
     };
 
     // ================= 1. Diff 视图 =================
+    // Inspect 基线（总览视图）：worktree/分支列表渲染完成后出图
     await waitInspect(mainRepo);
+    await captureBaseline(app, page, qaRoot, 'd', 'inspect-view', () => {
+      const overviewVisible = document.getElementById('viewOverview')?.style.display !== 'none';
+      const rows = document.querySelectorAll('#wtList .list-item').length;
+      return overviewVisible && rows > 0;
+    });
+    // 进入 Diff 视图：后续 Diff 场景的渲染断言与截图都以「Diff 视图可见」为前提
+    await page.evaluate(() => { window.switchTab('diff'); });
+    await page.waitForTimeout(400);
+    // 页面内「Diff 视图可见」断言必须自包含（assertPageFn 会被序列化进页面执行，
+    // 不能引用 Node 侧闭包）；此处仅为可读性注释。
     // API 矩阵：三组合 × 三模式（结构 + 关键数值断言）
     const combos = [
       { name: 'worktree↔worktree', base: { type: 'worktree', value: wt.dirty }, target: { type: 'worktree', value: wt.clean } },
@@ -208,7 +225,15 @@ async function main() {
       const ok = text.includes(combo.expectFile);
       if (!ok) uiDiffOk = false;
       uiDiffDetail.push(`${combo.name}:${ok ? '命中' : '未命中'}${combo.expectFile}`);
-      if (combo.name === 'ww') await screenshotFile(page, qaRoot, 'd', 'diff-text');
+      if (combo.name === 'ww') {
+        // Diff 视图基线（文本差异态）：视图可见 + 模式切换条出现 + 文件命中后才出图
+        await captureBaseline(app, page, qaRoot, 'd', 'diff-text', () => {
+          const view = document.getElementById('viewDiff');
+          return Boolean(view) && view.style.display !== 'none' && Boolean(view.offsetParent)
+            && Boolean(document.getElementById('diffModeControl'))
+            && document.getElementById('diffResultsContainer').textContent.includes('many/commit-01.txt');
+        });
+      }
     }
     record('d2-diff-ui-combos', 'UI 三组合 committed 渲染命中预期文件', uiDiffOk ? 'pass' : 'fail', uiDiffDetail.join('；'));
 
@@ -272,11 +297,18 @@ async function main() {
     const uncommittedOk = ['notes.txt', 'staged-file.txt', 'untracked-file.txt'].every((f) => uncommittedText.includes(f));
     record('d5-uncommitted-view', '未提交改动视图含修改/staged/untracked 三类文件', uncommittedOk ? 'pass' : 'fail',
       uncommittedOk ? '' : uncommittedText.slice(0, 200));
-    await screenshotFile(page, qaRoot, 'd', 'diff-uncommitted');
+    // Diff 视图基线（未提交态）：三类文件可见后才出图
+    await captureBaseline(app, page, qaRoot, 'd', 'diff-uncommitted', () => {
+      const view = document.getElementById('viewDiff');
+      return Boolean(view) && view.style.display !== 'none' && Boolean(view.offsetParent)
+        && ['notes.txt', 'staged-file.txt', 'untracked-file.txt'].every((f) => document.getElementById('diffResultsContainer').textContent.includes(f));
+    });
 
     // ================= 2. 提交抽屉 =================
+    // Inspect 视图在此前的基线出图（g4-d-inspect-view）；此处切回总览确保上下文一致
     await waitInspect(mainRepo);
-    await screenshotFile(page, qaRoot, 'd', 'inspect-view');
+    await page.evaluate(() => { window.switchTab('overview'); });
+    await page.waitForTimeout(300);
     // 打开长列表 worktree（35 提交 > 分页 30）的提交抽屉
     await page.evaluate((wtPath) => {
       const row = Array.from(document.querySelectorAll('#wtList .list-item')).find((el) => el.textContent.includes('wt-many-commits'));
@@ -366,7 +398,12 @@ async function main() {
       shaLike
         ? `clipboard=${JSON.stringify(clipboardText.slice(0, 45))}`
         : `clicked=${copyState.clicked} clipboard 为空（无头焦点限制，降级断言按钮已绑定且点击无异常），剪贴板内容留人工复核`);
-    await screenshotFile(page, qaRoot, 'c', 'commits-drawer');
+    // 提交抽屉基线：抽屉可见且分页卡片 ≥30 后才出图
+    await captureBaseline(app, page, qaRoot, 'c', 'commits-drawer', () => {
+      const drawer = document.getElementById('commitsDrawer');
+      return Boolean(drawer) && drawer.style.display !== 'none'
+        && document.querySelectorAll('#commitsDrawerBody .commit-item').length >= 30;
+    });
     await page.evaluate(() => window.closeCommitsDrawer?.());
 
     // ================= 3. URL/会话恢复（reload 后同视图） =================
@@ -424,7 +461,11 @@ async function main() {
       const ok = overflow.doc <= 2 && overflow.body <= 2;
       if (!ok) zoomOk = false;
       zoomDetail.push(`${factor}x 溢出=${overflow.doc}/${overflow.body}`);
-      await screenshotFile(page, qaRoot, 'z', `zoom-${String(factor).replace('.', '_')}`);
+      // 缩放基线：以窗口 capturePage 完整捕获（视口截图在放大内容时会裁切），出图前断言 Diff 视图可见
+      await captureBaseline(app, page, qaRoot, 'z', `zoom-${String(factor).replace('.', '_')}`, () => {
+        const view = document.getElementById('viewDiff');
+        return Boolean(view) && view.style.display !== 'none' && Boolean(view.offsetParent);
+      });
     }
     record('z1-zoom-levels', '缩放 1.0/1.25/1.5 关键容器无横向溢出', zoomOk ? 'pass' : 'fail', zoomDetail.join('；'));
 
@@ -441,7 +482,13 @@ async function main() {
       footerVisible: Boolean(document.querySelector('footer.app-footer')?.offsetParent),
       overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
     }));
-    await screenshotFile(page, qaRoot, 'z', 'narrow-960x600');
+    // 窄窗基线：断言关键元素可见且无溢出后，按窗口完整捕获出图
+    await captureBaseline(app, page, qaRoot, 'z', 'narrow-960x600', () => {
+      const tabs = document.getElementById('tabOverview');
+      const footer = document.querySelector('footer.app-footer');
+      return Boolean(tabs?.offsetParent) && Boolean(footer?.offsetParent)
+        && document.documentElement.scrollWidth - document.documentElement.clientWidth <= 2;
+    });
     const narrowOk = narrow.w <= 962 && narrow.h <= 602 && narrow.tabsVisible && narrow.footerVisible && narrow.overflow <= 2;
     record('z2-narrow-window', '窄窗 960×600 关键元素可见且无布局崩坏', narrowOk ? 'pass' : 'fail', JSON.stringify(narrow));
     await app.evaluate(({ BrowserWindow }) => {
@@ -614,15 +661,88 @@ async function main() {
     record('w5-mr-conflict-rollback', '冲突 MR merge 409→服务端 abort→MR 保持 open→cancel 终态；重复创建 409', w5Ok ? 'pass' : 'fail',
       `beta 先行=${betaMergedOk} create=${mrAlpha.status} 重复=${mrDuplicate.status} merge=${mrAlphaMerge.status} status空=${alphaAbort.status === ''} MERGE_HEAD=${alphaAbort.mergeHead} 终态=${alphaFinal.body?.mergeRequest?.status}`);
 
-    // MR 列表 + 详情截图（G4 视觉基线：此时有 merged 与 canceled 数据）
-    await page.evaluate(() => { window.switchTab('mr'); });
-    await pollPage(page, () => document.getElementById('mrList')?.textContent?.includes('G4'), null, 20000);
-    await screenshotFile(page, qaRoot, 'm', 'mr-list');
-    await page.evaluate(() => {
-      document.querySelector('[data-action="mr-open-detail"]')?.click();
+    // MR 列表 + 详情截图（G4 视觉基线）。列表按当前选中仓库过滤，需先切到 MR 所在仓库；
+    // 预置一个 open MR（含标题/描述，alpha 已 cancel 可重建），列表含 open 与终态两类数据
+    const mrOpenPreset = await api('/api/merge-requests', {
+      method: 'POST',
+      body: {
+        repoPath: fixture.mr.repo, sourceBranch: fixture.mr.branches.alpha, targetBranch: 'main',
+        title: 'G4: 待审阅的开放 MR', description: '视觉基线预置：open 状态样例，含完整描述文本与审阅按钮。'
+      }
     });
-    await page.waitForTimeout(500);
-    await screenshotFile(page, qaRoot, 'm', 'mr-detail');
+    const mrOpenTitle = 'G4: 待审阅的开放 MR';
+    const openPresetOk = mrOpenPreset.status === 200 && mrOpenPreset.body?.mergeRequest?.status === 'open';
+    // 列表基线：先切到 MR 所在仓库并进入 MR 视图（列表按当前选中仓库过滤），
+    // 再断言 MR 视图可见、列表含 open 预置行与 merged 终态行、无空态文案
+    // （断言函数会被序列化进页面执行，标题用字面量、不得引用 Node 侧闭包）
+    await waitInspect(fixture.mr.repo);
+    await page.evaluate(() => { window.switchTab('mr'); });
+    try {
+      await captureBaseline(app, page, qaRoot, 'm', 'mr-list', () => {
+        const view = document.getElementById('viewMr');
+        const list = document.getElementById('mrList');
+        return Boolean(view) && view.style.display !== 'none' && Boolean(list)
+          && list.textContent.includes('G4: 待审阅的开放 MR')
+          && list.textContent.includes('G4: MR 生命周期验证')
+          && !list.textContent.includes('暂无 Merge Request');
+      });
+    } catch (err) {
+      // 诊断信息：断言未过时输出列表实际内容与过滤状态，并强制刷新一次对比
+      const diagBefore = await page.evaluate(() => ({
+        viewMr: document.getElementById('viewMr')?.style.display,
+        list: document.getElementById('mrList')?.textContent?.slice(0, 300),
+        repo: document.getElementById('repoSelect')?.value
+      }));
+      await page.evaluate(() => window.refreshMergeRequests?.());
+      await page.waitForTimeout(1200);
+      // 页面进程内直接请求 API，并输出列表全量的命中布尔（不截断），区分「服务返回」与「渲染层」
+      const apiFromPage = await page.evaluate(async (repo) => {
+        const res = await fetch(`/api/merge-requests?repoPath=${encodeURIComponent(repo)}`);
+        const d = await res.json();
+        const items = (d.mergeRequests || []).map((m) => ({ status: m.status, title: m.title }));
+        const listText = document.getElementById('mrList')?.textContent || '';
+        return {
+          apiCount: items.length,
+          items,
+          domCount: document.querySelectorAll('#mrList .list-item').length,
+          domLength: listText.length,
+          domHasOpen: listText.includes('G4: 待审阅的开放 MR'),
+          domHasMerged: listText.includes('G4: MR 生命周期验证'),
+          domHasEmptyHint: listText.includes('暂无 Merge Request')
+        };
+      }, fixture.mr.repo);
+      record('m1-mr-list-shot', 'MR 列表基线截图', 'fail', `${err.message}；诊断=${JSON.stringify(apiFromPage)}`);
+      throw err;
+    }
+    // 详情基线：打开预置 open MR 的详情抽屉，断言标题与描述渲染后才出图
+    await page.evaluate(() => {
+      const row = Array.from(document.querySelectorAll('#mrList .list-item'))
+        .find((el) => el.textContent.includes('G4: 待审阅的开放 MR'));
+      row?.querySelector('[data-action="mr-open-detail"]')?.click();
+    });
+    try {
+      await captureBaseline(app, page, qaRoot, 'm', 'mr-detail', () => {
+        const drawer = document.getElementById('mrDrawer');
+        // 标题渲染在抽屉头（mrDrawerTitle），描述/状态渲染在 body
+        const title = document.getElementById('mrDrawerTitle')?.textContent || '';
+        const body = document.getElementById('mrDrawerBody');
+        return Boolean(drawer) && drawer.style.display !== 'none'
+          && title.includes('G4: 待审阅的开放 MR') && title.includes('MR #')
+          && Boolean(body) && body.textContent.includes('视觉基线预置')
+          && body.textContent.includes('开启');
+      });
+    } catch (err) {
+      const diag = await page.evaluate(() => ({
+        drawer: document.getElementById('mrDrawer')?.style.display,
+        body: document.getElementById('mrDrawerBody')?.textContent?.slice(0, 200)
+      }));
+      record('m3-mr-detail-shot', 'MR 详情基线截图', 'fail', `${err.message}；诊断=${JSON.stringify(diag)}`);
+      throw err;
+    }
+    await page.evaluate(() => window.closeMrDrawer?.());
+    if (!openPresetOk) {
+      record('m2-mr-preset', '预置 open MR（含标题/描述）供视觉基线', 'fail', `HTTP ${mrOpenPreset.status}`);
+    }
 
     // W6 分支清理：单项删除已合入分支 + 批量清理已合入未绑定分支
     const mergedBefore = await gitSnap(qaRoot, mainRepo, 'branch', '--list', br.merged);
@@ -690,11 +810,30 @@ async function main() {
       const value = readReadyFile(readyFile);
       return value && value.state === 'crashed' ? value : null;
     }, RESTART_TIMEOUT_MS, { describe: '就绪文件并入 state:crashed' }).catch(() => {});
-    const recoveryShown = await pollPage(page, () => location.protocol === 'data:'
-      || (Boolean(document.body) && document.body.textContent.includes('本地服务正在恢复')), null, RESTART_TIMEOUT_MS);
-    await screenshotFile(page, qaRoot, 'e', 'recovery-page').catch(() => {});
-    record('e1-crash-recovery-page', '崩溃后恢复页呈现并截图', recoveryShown ? 'pass' : 'fail',
-      recoveryShown ? '' : '未观察到恢复页');
+    // 恢复遮罩（DEF-002 修复后形态）：主路径为应用页自带 #serviceStateOverlay 遮罩，
+    // 兜底为主进程注入的 #git-lens-recovery-fallback；页面保持同文档，不再丢会话状态。
+    // data: 分支仅为兼容旧实现的形态兜底
+    const recoveryShown = await pollPage(page, () => {
+      if (location.protocol === 'data:') return true;
+      const overlay = document.getElementById('serviceStateOverlay');
+      if (overlay && overlay.style.display !== 'none' && overlay.style.display !== '') return true;
+      return Boolean(document.getElementById('git-lens-recovery-fallback'))
+        || (Boolean(document.body) && document.body.textContent.includes('本地服务正在恢复'));
+    }, null, RESTART_TIMEOUT_MS);
+    // 恢复遮罩基线：拍摄应用同文档遮罩态（深色主题变量样式由视觉审阅复核）
+    try {
+      await captureBaseline(app, page, qaRoot, 'e', 'recovery-page', () => {
+        if (location.protocol === 'data:') return true;
+        const overlay = document.getElementById('serviceStateOverlay');
+        return (overlay && overlay.style.display !== 'none' && overlay.style.display !== '')
+          || Boolean(document.getElementById('git-lens-recovery-fallback'))
+          || (Boolean(document.body) && document.body.textContent.includes('本地服务正在恢复'));
+      });
+    } catch (err) {
+      record('e1b-recovery-shot', '恢复页基线截图', 'fail', err.message);
+    }
+    record('e1-crash-recovery-page', '崩溃后恢复遮罩呈现并截图', recoveryShown ? 'pass' : 'fail',
+      recoveryShown ? '' : '未观察到恢复遮罩');
     let restartedReady = null;
     try {
       restartedReady = await pollUntil(() => {
@@ -722,11 +861,11 @@ async function main() {
     // 是 data: URL，导航会触发 browsing context group swap，sessionStorage 被丢弃。
     record('e2a-crash-restart-app', '自动重启后切回应用页且数据可重载', appBack && restartedReady ? 'pass' : 'fail',
       `重启=${Boolean(restartedReady)} 应用页=${appBack}`);
-    record('e2b-crash-session-restore', '崩溃重启后选中仓库经 sessionStorage 恢复（G2 恢复语义）',
+    record('e2b-crash-session-restore', '崩溃重启后选中仓库经 sessionStorage 恢复（DEF-002 修复验收）',
       !sameOrigin ? 'skip' : (repoRestored ? 'pass' : 'fail'),
       repoRestored
-        ? `仓库已恢复=${repoAfterCrash}`
-        : `同端口=${sameOrigin}；崩溃前会话存储=${JSON.stringify(sessionBeforeCrash).slice(0, 240)}；恢复后=${JSON.stringify(sessionAfterCrash).slice(0, 240)}、实际选中=${repoAfterCrash}。疑似 data: URL 恢复页触发 browsing context group swap 丢弃 sessionStorage（DEF 候选，责任 Shell）`);
+        ? `选中仓库已恢复=${repoAfterCrash}（端口 ${restartedReady?.port} 与重启前一致，同源会话保持）`
+        : `同端口=${sameOrigin}；崩溃前会话存储=${JSON.stringify(sessionBeforeCrash).slice(0, 240)}；恢复后=${JSON.stringify(sessionAfterCrash).slice(0, 240)}、实际选中=${repoAfterCrash}。DEF-002 修复已合入仍丢失，说明修复不完整，需立即上报`);
     void sameOrigin;
 
     // ================= 7. strict CSP 与退出协议 =================

@@ -286,6 +286,38 @@ export async function screenshotFile(page, qaRoot, scenarioId, name) {
   return file;
 }
 
+/**
+ * 捕获完整窗口内容为 PNG（主进程 capturePage）。
+ * 与 page.screenshot 的视口截图不同，capturePage 与实际窗口内容一致，
+ * 页面缩放（zoom）放大内容时不会产生裁切，适合作视觉基线来源。
+ */
+export async function captureWindowPng(app) {
+  return app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents
+    .capturePage()
+    .then((img) => img.toPNG()));
+}
+
+/**
+ * 视觉基线截图：先轮询断言目标视图的 DOM 标记已出现，断言失败不出图（抛错）；
+ * 通过后以 capturePage 捕获完整窗口内容写入 artifacts。
+ * @param {object} app - Playwright ElectronApp 句柄
+ * @param {object} page - Playwright Page 句柄
+ * @param {string} qaRoot
+ * @param {string} id 场景编号（入文件名）
+ * @param {string} name 场景名（入文件名）
+ * @param {(arg: null) => boolean} assertPageFn 页面内断言函数（page.evaluate 语义）
+ */
+export async function captureBaseline(app, page, qaRoot, id, name, assertPageFn) {
+  const ok = await pollPage(page, assertPageFn, null, 12000);
+  if (!ok) {
+    throw new Error(`视觉基线截图 g4-${id}-${name} 的视图断言未通过，拒绝出图`);
+  }
+  const file = path.join(qaRoot, 'artifacts', `g4-${id}-${name}.png`);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, await captureWindowPng(app));
+  return file;
+}
+
 /** 校验就绪文件：端口合法、≠9527，并返回规范化 baseUrl */
 export function validateReady(ready) {
   if (!ready || !Number.isInteger(ready.port) || ready.port < 1) {
