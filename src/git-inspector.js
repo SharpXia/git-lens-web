@@ -757,6 +757,31 @@ export async function getBranches(repoPath) {
 }
 
 /**
+ * 获取可批量清理的 Worktree 与分支。
+ * Worktree 必须仍在磁盘、未加锁且无未提交修改；分支必须已合入或已交付，
+ * 并且不能被任何 Worktree 绑定。失联 Worktree 由 prune 单独处理。
+ * @param {string} repoPath 仓库路径
+ * @returns {Promise<{worktrees: Array<object>, branches: Array<object>}>} 可清理候选
+ */
+export async function getCleanupCandidates(repoPath) {
+  const worktrees = await getWorktrees(repoPath);
+  const branchData = await getBranches(repoPath);
+  annotateWorktreesFromBranches(worktrees, branchData.branches);
+  await annotateDeliveredViaWorktrees(repoPath, worktrees, branchData.branches);
+
+  return {
+    worktrees: worktrees
+      .filter(wt => !wt.isMain && wt.existsOnDisk && !wt.isPrunable && !wt.isDirty && !wt.isLocked
+        && (wt.isContentEqualToMain || wt.deliveredViaBranch))
+      .map(wt => ({ path: wt.path, branch: wt.branch || '', mergeType: wt.mergeType || null })),
+    branches: branchData.branches
+      .filter(branch => !branch.isMain && !branch.inUseByWorktree
+        && (branch.isMerged || branch.deliveredViaBranch))
+      .map(branch => ({ name: branch.name, mergeType: branch.mergeType || null }))
+  };
+}
+
+/**
  * 清理冗余分支
  */
 export async function deleteBranch(repoPath, branchName, force = false) {

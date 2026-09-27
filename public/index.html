@@ -122,6 +122,13 @@
       margin-bottom: 20px;
       align-items: center;
     }
+    .cleanup-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: -8px 0 20px;
+    }
     select, button, input {
       background: var(--card-bg);
       border: 1px solid var(--border);
@@ -224,17 +231,47 @@
       gap: 8px;
       align-items: center;
     }
+    .search-input-wrap {
+      position: relative;
+      flex: 1 1 auto;
+      min-width: 0;
+    }
     .repo-search-input {
-      flex: 1;
+      width: 100%;
+      box-sizing: border-box;
       background: #0d1117;
       border: 1px solid var(--border);
       color: var(--text-bright);
-      padding: 6px 10px;
+      padding: 6px 30px 6px 10px;
       font-size: 13px;
       border-radius: 6px;
     }
     .repo-search-input:focus {
       border-color: var(--accent);
+    }
+    .search-clear-btn {
+      position: absolute;
+      top: 50%;
+      right: 4px;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      transform: translateY(-50%);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 17px;
+      font-weight: 400;
+      line-height: 1;
+    }
+    .search-clear-btn:hover {
+      border: 0;
+      background: var(--card-alt);
+      color: var(--text-bright);
     }
     .filter-starred-btn {
       padding: 6px 10px;
@@ -608,10 +645,27 @@
       gap: 8px;
       margin-left: auto;
     }
-    .diff-stash-actions > button, .stash-menu > summary {
+    .diff-stash-actions > button,
+    .stash-menu > summary,
+    .stash-cleanup-menu > button {
+      min-height: 30px;
+      box-sizing: border-box;
       font-size: 12px;
-      padding: 4px 10px;
+      font-weight: 500;
+      line-height: 1.2;
+      padding: 6px 12px;
       white-space: nowrap;
+    }
+    .stash-action-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .stash-action-button.btn-danger {
+      border-color: rgba(248, 81, 73, 0.4);
+      color: var(--danger);
     }
     .stash-menu { position: relative; }
     .stash-menu > summary { list-style: none; cursor: pointer; }
@@ -643,6 +697,10 @@
       display: grid;
       gap: 8px;
       min-width: 220px;
+    }
+    .stash-cleanup-menu > button {
+      width: 100%;
+      justify-content: flex-start;
     }
 
     /* 文件列表与手风琴 Diff 组件 */
@@ -1053,6 +1111,9 @@
       font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
       font-size: 12px;
       overflow-wrap: anywhere;
+      white-space: pre-line;
+      max-height: 240px;
+      overflow-y: auto;
     }
     .worktree-remove-option {
       display: flex;
@@ -1629,7 +1690,6 @@
     </button>
     <div class="tab-bar-actions">
       <button id="newMrBtn" class="btn-primary" onclick="openCreateMrModal()" title="基于当前仓库的两个本地分支发起 Merge Request">新建 MR</button>
-      <button id="pruneBtn" class="btn-primary">一键 Prune 无效引用</button>
     </div>
   </div>
 
@@ -1647,7 +1707,10 @@
 
       <div class="repo-dropdown" id="repoDropdown">
         <div class="repo-search-box">
-          <input type="text" id="repoFilterInput" class="repo-search-input" placeholder="模糊搜索仓库名或路径..." autocomplete="off">
+          <div class="search-input-wrap">
+            <input type="text" id="repoFilterInput" class="repo-search-input" placeholder="模糊搜索仓库名或路径..." autocomplete="off">
+            <button type="button" class="search-clear-btn" id="repoFilterClearBtn" aria-label="清除仓库搜索" title="清除搜索">×</button>
+          </div>
           <button type="button" id="starredFilterBtn" class="btn-outline filter-starred-btn" onclick="toggleStarredOnlyFilter()">
             <span>⭐ 只看星标</span>
           </button>
@@ -1668,6 +1731,11 @@
 
   <!-- TAB 1: 仓库透视与管理面板 -->
   <div id="viewOverview">
+    <div class="cleanup-toolbar" aria-label="仓库清理操作">
+      <button id="pruneBtn" class="btn-outline" type="button" title="清理已经失联的 Worktree 引用">Prune 无效引用</button>
+      <button id="cleanupWorktreesBtn" class="btn-outline" type="button" onclick="runBulkCleanup('worktrees')">移除已同步 Worktree</button>
+      <button id="cleanupBranchesBtn" class="btn-outline" type="button" onclick="runBulkCleanup('branches')">删除无效分支</button>
+    </div>
     <div class="metrics-grid">
       <div class="metric-card">
         <div class="metric-title">总 Worktree 数</div>
@@ -1749,7 +1817,10 @@
             </div>
             <div class="repo-dropdown" id="diffBasePickerDropdown">
               <div class="repo-search-box">
-                <input type="text" id="diffBasePickerSearch" class="repo-search-input" placeholder="搜索 Worktree 或分支..." autocomplete="off">
+                <div class="search-input-wrap">
+                  <input type="text" id="diffBasePickerSearch" class="repo-search-input" placeholder="搜索 Worktree 或分支..." autocomplete="off">
+                  <button type="button" class="search-clear-btn" id="diffBasePickerSearchClearBtn" aria-label="清除基准搜索" title="清除搜索">×</button>
+                </div>
               </div>
               <div class="repo-list-container" id="diffBasePickerList"></div>
             </div>
@@ -1771,7 +1842,10 @@
             </div>
             <div class="repo-dropdown" id="diffTargetPickerDropdown">
               <div class="repo-search-box">
-                <input type="text" id="diffTargetPickerSearch" class="repo-search-input" placeholder="搜索 Worktree 或分支..." autocomplete="off">
+                <div class="search-input-wrap">
+                  <input type="text" id="diffTargetPickerSearch" class="repo-search-input" placeholder="搜索 Worktree 或分支..." autocomplete="off">
+                  <button type="button" class="search-clear-btn" id="diffTargetPickerSearchClearBtn" aria-label="清除对比对象搜索" title="清除搜索">×</button>
+                </div>
               </div>
               <div class="repo-list-container" id="diffTargetPickerList"></div>
             </div>
@@ -1837,7 +1911,7 @@
       <div class="worktree-remove-body">
         <h2 id="worktreeRemoveModalTitle">移除 Worktree</h2>
         <div id="worktreeRemovePath" class="worktree-remove-path"></div>
-        <label class="worktree-remove-option" for="deleteBoundBranchCheckbox">
+        <label id="deleteBoundBranchOption" class="worktree-remove-option" for="deleteBoundBranchCheckbox">
           <input id="deleteBoundBranchCheckbox" type="checkbox">
           <span class="worktree-remove-option-text">
             <strong id="deleteBoundBranchLabel">同步删除强绑定分支</strong>
@@ -1869,7 +1943,10 @@
             </div>
             <div class="repo-dropdown" id="mrSourcePickerDropdown">
               <div class="repo-search-box">
-                <input type="text" id="mrSourcePickerSearch" class="repo-search-input" placeholder="搜索分支..." autocomplete="off">
+                <div class="search-input-wrap">
+                  <input type="text" id="mrSourcePickerSearch" class="repo-search-input" placeholder="搜索分支..." autocomplete="off">
+                  <button type="button" class="search-clear-btn" id="mrSourcePickerSearchClearBtn" aria-label="清除源分支搜索" title="清除搜索">×</button>
+                </div>
               </div>
               <div class="repo-list-container" id="mrSourcePickerList"></div>
             </div>
@@ -1886,7 +1963,10 @@
             </div>
             <div class="repo-dropdown" id="mrTargetPickerDropdown">
               <div class="repo-search-box">
-                <input type="text" id="mrTargetPickerSearch" class="repo-search-input" placeholder="搜索分支..." autocomplete="off">
+                <div class="search-input-wrap">
+                  <input type="text" id="mrTargetPickerSearch" class="repo-search-input" placeholder="搜索分支..." autocomplete="off">
+                  <button type="button" class="search-clear-btn" id="mrTargetPickerSearchClearBtn" aria-label="清除目标分支搜索" title="清除搜索">×</button>
+                </div>
               </div>
               <div class="repo-list-container" id="mrTargetPickerList"></div>
             </div>
@@ -1929,6 +2009,7 @@
     let searchKeyword = '';
     let repoFilterKeyword = '';
     let filterStarredOnly = false;
+    const repoPickerState = { open: false, visible: [], rowEls: [], highlight: -1 };
     let activeTab = 'overview';
 
     // Diff 状态持久化跟踪与恢复
@@ -2109,16 +2190,23 @@
       }
     }
 
-    function requestWorktreeRemoval(worktreePath, branchName) {
+    function requestWorktreeRemoval(worktreePath, branchName, options = {}) {
       return new Promise((resolve) => {
         worktreeRemoveRequest = resolve;
         const checkbox = document.getElementById('deleteBoundBranchCheckbox');
         const label = document.getElementById('deleteBoundBranchLabel');
         const hint = document.getElementById('deleteBoundBranchHint');
+        const allowBranchDelete = options.allowBranchDelete ?? Boolean(branchName);
+        document.getElementById('worktreeRemoveModalTitle').textContent = options.title || '移除 Worktree';
         document.getElementById('worktreeRemovePath').textContent = worktreePath;
         checkbox.checked = false;
-        checkbox.disabled = !branchName;
-        if (branchName) {
+        checkbox.disabled = !allowBranchDelete;
+        if (options.batch) {
+          label.textContent = '同步删除候选 Worktree 的绑定分支';
+          hint.textContent = allowBranchDelete
+            ? '默认不勾选；勾选后只删除仍与这些 Worktree 绑定的分支。'
+            : '候选 Worktree 都没有可同步删除的分支。';
+        } else if (branchName) {
           label.textContent = `同步删除强绑定分支「${branchName}」`;
           hint.textContent = '默认不勾选；勾选后会在移除 Worktree 后强制删除该分支。';
         } else {
@@ -2126,8 +2214,85 @@
           hint.textContent = '当前操作只会移除 Worktree。';
         }
         document.getElementById('worktreeRemoveModal').style.display = 'flex';
-        setTimeout(() => (branchName ? checkbox : document.querySelector('#worktreeRemoveModal button')).focus(), 0);
+        setTimeout(() => (allowBranchDelete ? checkbox : document.querySelector('#worktreeRemoveModal button')).focus(), 0);
       });
+    }
+
+    async function fetchCleanupCandidates() {
+      const res = await fetch(`/api/cleanup-candidates?path=${encodeURIComponent(currentRepo)}`);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || '获取清理候选失败');
+      return data;
+    }
+
+    async function runBulkCleanup(kind) {
+      const buttonId = kind === 'worktrees' ? 'cleanupWorktreesBtn' : 'cleanupBranchesBtn';
+      const button = document.getElementById(buttonId);
+      if (!currentRepo || !button) return;
+      button.disabled = true;
+      const originalText = button.textContent;
+      button.textContent = '检查中...';
+      try {
+        const candidates = await fetchCleanupCandidates();
+        if (kind === 'worktrees') {
+          const items = candidates.worktrees || [];
+          if (!items.length) {
+            alert('没有符合条件的已同步 Worktree。失联引用请使用 Prune。');
+            return;
+          }
+          const hasBranches = items.some(item => item.branch);
+          const summary = items.map(item => `• ${item.path}${item.branch ? `（${item.branch}）` : ''}`).join('\n');
+          const options = await requestWorktreeRemoval(
+            `将移除以下 ${items.length} 个已同步 Worktree：\n${summary}`,
+            '',
+            { batch: true, allowBranchDelete: hasBranches, title: '批量移除已同步 Worktree' }
+          );
+          if (!options) return;
+
+          button.textContent = '移除中...';
+          const res = await fetch('/api/cleanup-synced-worktrees', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              repoPath: currentRepo,
+              paths: items.map(item => item.path),
+              deleteBoundBranches: options.deleteBranch
+            })
+          });
+          const data = await res.json();
+          if (!data.ok) throw new Error(data.error || '批量移除失败');
+          const successCount = (data.results || []).filter(item => item.removed).length;
+          const failed = (data.results || []).filter(item => !item.removed);
+          await inspectRepo(currentRepo);
+          alert(`已移除 ${successCount} 个 Worktree${failed.length ? `，${failed.length} 个因状态变化未处理` : ''}。`);
+        } else {
+          const items = candidates.branches || [];
+          if (!items.length) {
+            alert('没有符合条件的无效分支。');
+            return;
+          }
+          const names = items.map(item => item.name);
+          if (!confirm(`确认删除以下 ${names.length} 个已同步且未绑定的分支？\n\n${names.join('\n')}`)) return;
+
+          button.textContent = '删除中...';
+          const res = await fetch('/api/cleanup-redundant-branches', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ repoPath: currentRepo, names })
+          });
+          const data = await res.json();
+          if (!data.ok) throw new Error(data.error || '批量删除分支失败');
+          const successCount = (data.results || []).filter(item => item.deleted).length;
+          const failed = (data.results || []).filter(item => !item.deleted);
+          await inspectRepo(currentRepo);
+          alert(`已删除 ${successCount} 个分支${failed.length ? `，${failed.length} 个因状态变化未处理` : ''}。`);
+        }
+      } catch (err) {
+        alert(`清理失败：${err.message}`);
+      } finally {
+        button.disabled = false;
+        button.textContent = originalText;
+      }
     }
 
     function closeWorktreeRemoveModal(confirmed) {
@@ -2351,20 +2516,49 @@
 
     function toggleRepoDropdown() {
       const dd = document.getElementById('repoDropdown');
-      const isShow = dd.classList.contains('show');
-      if (isShow) {
+      if (repoPickerState.open) {
         dd.classList.remove('show');
-      } else {
-        dd.classList.add('show');
-        const inp = document.getElementById('repoFilterInput');
-        setTimeout(() => inp.focus(), 50);
+        repoPickerState.open = false;
+        return;
       }
+      // 每次展开都从完整列表开始，避免上次筛选条件造成误选。
+      clearRepoFilter();
+      dd.classList.add('show');
+      repoPickerState.open = true;
+      const inp = document.getElementById('repoFilterInput');
+      setTimeout(() => inp.focus(), 50);
+    }
+
+    function applyRepoHighlightClasses() {
+      repoPickerState.rowEls.forEach((el, i) => {
+        el.classList.toggle('highlight', i === repoPickerState.highlight);
+      });
+      const el = repoPickerState.rowEls[repoPickerState.highlight];
+      if (el) el.scrollIntoView({ block: 'nearest' });
+    }
+
+    function moveRepoHighlight(delta) {
+      if (repoPickerState.visible.length === 0) return;
+      const total = repoPickerState.visible.length;
+      let idx = repoPickerState.highlight;
+      if (idx < 0) idx = delta > 0 ? -1 : 0;
+      repoPickerState.highlight = (idx + delta + total) % total;
+      applyRepoHighlightClasses();
+    }
+
+    function clearRepoFilter(shouldFocus = false) {
+      repoFilterKeyword = '';
+      const input = document.getElementById('repoFilterInput');
+      if (input) input.value = '';
+      renderRepoDropdownList();
+      if (shouldFocus && input) input.focus();
     }
 
     document.addEventListener('click', (e) => {
       const wrapper = document.getElementById('repoPickerWrapper');
       if (wrapper && !wrapper.contains(e.target)) {
         document.getElementById('repoDropdown').classList.remove('show');
+        repoPickerState.open = false;
       }
     });
 
@@ -2396,6 +2590,7 @@
       const textEl = document.getElementById(cfg.triggerTextId);
       const dropdown = document.getElementById(cfg.dropdownId);
       const input = document.getElementById(cfg.searchInputId);
+      const clearButton = input?.parentElement?.querySelector('.search-clear-btn');
       const listEl = document.getElementById(cfg.listId);
       const state = { open: false, keyword: '', visible: [], rowEls: [], highlight: -1 };
 
@@ -2491,8 +2686,18 @@
         const sel = document.getElementById(cfg.selectId);
         if (sel) sel.value = item.identity;
         updateTriggerText();
+        // 选择完成后清空筛选条件，下一次打开时始终展示完整候选列表。
+        state.keyword = '';
+        input.value = '';
         closeDropdown();
         if (cfg.onSelect) cfg.onSelect(item.identity);
+      }
+
+      function clearSearch() {
+        state.keyword = '';
+        input.value = '';
+        renderList();
+        input.focus();
       }
 
       function openDropdown() {
@@ -2534,6 +2739,11 @@
           closeDropdown();
         }
       });
+      clearButton?.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        clearSearch();
+      });
       trigger.addEventListener('click', toggleDropdown);
 
       const picker = {
@@ -2561,6 +2771,10 @@
       const kw = repoFilterKeyword.trim().toLowerCase();
       const starred = getStarredRepos();
       const pinnedRepo = allRepos.find(r => r.path === currentRepo) || null;
+
+      repoPickerState.visible = [];
+      repoPickerState.rowEls = [];
+      repoPickerState.highlight = -1;
 
       let filtered = allRepos.filter(r => {
         const matchesKw = !kw || r.name.toLowerCase().includes(kw) || r.path.toLowerCase().includes(kw) || (r.group && r.group.toLowerCase().includes(kw));
@@ -2627,14 +2841,24 @@
           container.appendChild(createRepoItemDom(r, false));
         });
       });
+
+      repoPickerState.rowEls = [...container.querySelectorAll('.repo-item')];
+      repoPickerState.visible = repoPickerState.rowEls
+        .map(row => allRepos.find(repo => repo.path === row.dataset.repoPath))
+        .filter(Boolean);
+      repoPickerState.highlight = repoPickerState.visible.length > 0 ? 0 : -1;
+      applyRepoHighlightClasses();
     }
 
     function createRepoItemDom(repo, isStarred) {
       const item = document.createElement('div');
       item.className = 'repo-item' + (repo.path === currentRepo ? ' selected' : '');
+      item.dataset.repoPath = repo.path;
       item.onclick = () => {
         selectRepo(repo.path);
+        clearRepoFilter();
         document.getElementById('repoDropdown').classList.remove('show');
+        repoPickerState.open = false;
       };
 
       item.innerHTML = `
@@ -3736,17 +3960,17 @@
       const stashActionsHtml = stashWorktreePath ? `
         <div class="diff-stash-actions">
           ${counts.uncommitted > 0 ? `
-            <button class="btn-outline" title="将全部未提交修改（含未跟踪文件）存入暂存记录" onclick="stashActionWithConfirm('push', '', this)">暂存</button>
+            <button class="btn-outline stash-action-button" title="将全部未提交修改（含未跟踪文件）存入暂存记录" onclick="stashActionWithConfirm('push', '', this)">暂存</button>
             <details class="stash-menu">
-              <summary class="btn-outline">处理未提交</summary>
+              <summary class="btn-outline stash-action-button">处理未提交</summary>
               <div class="stash-popover stash-cleanup-menu">
-                <button class="btn-outline" onclick="stashActionWithConfirm('restore', '', this)">还原已跟踪</button>
-                <button class="btn-outline" onclick="stashActionWithConfirm('clean', '', this)">删除未跟踪</button>
-                <button class="btn-danger" onclick="stashActionWithConfirm('discard', '', this)">全部丢弃</button>
+                <button class="btn-outline stash-action-button" onclick="stashActionWithConfirm('restore', '', this)">还原已跟踪</button>
+                <button class="btn-outline stash-action-button" onclick="stashActionWithConfirm('clean', '', this)">删除未跟踪</button>
+                <button class="btn-danger stash-action-button" onclick="stashActionWithConfirm('discard', '', this)">全部丢弃</button>
               </div>
             </details>` : ''}
           <details class="stash-menu">
-            <summary class="btn-outline">历史暂存</summary>
+            <summary class="btn-outline stash-action-button">历史暂存</summary>
             <div class="stash-popover" id="stashListContainer"><div class="loading">正在加载历史暂存...</div></div>
           </details>
         </div>
@@ -5551,6 +5775,33 @@
     document.getElementById('repoFilterInput').addEventListener('input', (e) => {
       repoFilterKeyword = e.target.value;
       renderRepoDropdownList();
+    });
+    document.getElementById('repoFilterInput').addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        moveRepoHighlight(1);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        moveRepoHighlight(-1);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const repo = repoPickerState.visible[repoPickerState.highlight];
+        if (repo) {
+          selectRepo(repo.path);
+          clearRepoFilter();
+          document.getElementById('repoDropdown').classList.remove('show');
+          repoPickerState.open = false;
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        document.getElementById('repoDropdown').classList.remove('show');
+        repoPickerState.open = false;
+      }
+    });
+    document.getElementById('repoFilterClearBtn').addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      clearRepoFilter(true);
     });
     document.getElementById('scanDirectoryInput').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
