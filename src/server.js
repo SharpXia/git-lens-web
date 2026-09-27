@@ -25,7 +25,9 @@ import {
   commitAction,
   getStashList,
   stashAction,
-  getRefDiff
+  getRefDiff,
+  annotateWorktreesFromBranches,
+  annotateDeliveredViaWorktrees
 } from './git-inspector.js';
 import {
   listMergeRequests,
@@ -228,6 +230,12 @@ const server = http.createServer(async (req, res) => {
         getWorktrees(repoPath),
         getBranches(repoPath)
       ]);
+
+      // 传递吸收判定收尾：worktree 自身的四方判定没有全局分支视图。
+      // 先同步分支侧结论（含历史整合推断覆盖的场景），再对 worktree 直接探测载体——
+      // squash/PR 合并后的开发分支在分支面板常已显示合入，worktree 面板却仍显示领先
+      annotateWorktreesFromBranches(worktrees, branchData.branches);
+      await annotateDeliveredViaWorktrees(repoPath, worktrees, branchData.branches);
 
       const staleWorktrees = worktrees.filter(w => !w.isMain && (!w.existsOnDisk || w.isPrunable));
       const redundantBranches = branchData.branches.filter(b => b.redundancyReason);

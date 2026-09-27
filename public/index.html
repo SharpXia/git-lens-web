@@ -2875,7 +2875,12 @@
         if (!wt.existsOnDisk) tags.push('<span class="badge badge-danger">磁盘已失联</span>');
         if (wt.isDirty) tags.push(`<span class="badge badge-warning">⚡ 未提交修改 (${wt.dirtyCount})</span>`);
         if (wt.aheadCount > 0) {
-          tags.push(`<span class="badge badge-success" title="分支文件内容相对 Main 仍有实际差异，提交历史领先 ${wt.historyAheadCount || wt.aheadCount} 个提交">🚀 领先 ${wt.aheadCount} 提交</span>`);
+          if (wt.deliveredViaBranch) {
+            // 传递吸收判定命中：提交的机械领先是过时快照，成果已经由载体分支进入主干
+            tags.push(`<span class="badge badge-success" title="提交历史领先 ${wt.historyAheadCount || wt.aheadCount} 个提交，但这些提交已全部包含在已合入主干的分支 ${escapeHtml(wt.deliveredViaBranch)} 中，成果已经交付。本 Worktree 为过时快照：合并会带回旧内容，确认后可直接移除">✓ 成果已经由 ${escapeHtml(wt.deliveredViaBranch)} 进入主干</span>`);
+          } else {
+            tags.push(`<span class="badge badge-success" title="分支文件内容相对 Main 仍有实际差异，提交历史领先 ${wt.historyAheadCount || wt.aheadCount} 个提交">🚀 领先 ${wt.aheadCount} 提交</span>`);
+          }
         } else if (wt.isContentEqualToMain && (wt.historyAheadCount || 0) > 0) {
           tags.push(`<span class="badge badge-success" title="提交历史领先 ${wt.historyAheadCount} 个提交，但分支改动已被主干吸收（revert 抵消 / cherry-pick / squash 合入等），合入主干不会产生实际变化">内容已与主干同步</span>`);
         }
@@ -2923,6 +2928,10 @@
       if (b.inUseByWorktree) tags.push('<span class="badge">🌳 Worktree 绑定中</span>');
       if (b.isMerged) {
         tags.push(`<span class="badge" title="${b.isDirectlyMerged ? '分支提交已直接进入主分支历史' : '分支改动已通过内容或协调分支进入主分支'}">${b.isDirectlyMerged ? '已合入主干' : '内容已合入主干'}</span>`);
+      } else if (b.deliveredViaBranch) {
+        // 传递吸收判定命中：原始提交不再是主干祖先（如 squash 合并后的开发分支快照），
+        // 但成果已经由载体分支进入主干，展示交付事实并引导删除而非合并
+        tags.push(`<span class="badge badge-success" title="分支提交已全部包含在已合入主干的分支 ${escapeHtml(b.deliveredViaBranch)} 中，成果已经交付。本分支为过时快照：合并会带回旧内容，建议直接删除">成果已经由 ${escapeHtml(b.deliveredViaBranch)} 合入主干（过时快照）</span>`);
       }
 
       div.innerHTML = `
@@ -2946,7 +2955,7 @@
         <div class="item-actions">
           <button class="btn-outline" onclick="openBranchCommitsDrawer('${escapeHtml(b.name)}')" title="${b.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>
           ${!b.isMain ? `<button class="btn-outline" onclick="viewBranchDiffAgainstMain('${escapeHtml(b.name)}')" title="以「仅已提交」模式对比该分支与主分支（仅比较已提交内容，无 Worktree 的分支也可用）">与主分支对比</button>` : ''}
-          ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${escapeHtml(b.name)}', ${!b.isMerged})">删除</button>` : ''}
+          ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${escapeHtml(b.name)}', ${!(b.isMerged || b.deliveredViaBranch)})">删除</button>` : ''}
         </div>
       `;
       return div;
