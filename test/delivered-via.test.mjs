@@ -147,14 +147,22 @@ test('worktree 面板兜底：hasCommittedDiff 的过时快照经 annotateDelive
   try {
     const worktrees = await getWorktrees(repo);
     const { branches } = await getBranches(repo);
-    // worktree 面板判定：feature-base 相对 main 四方判定未吸收 → hasCommittedDiff=true（复现「领先」显示）
+    const branch = branches.find(b => b.name === 'feature-base');
+    // worktree 面板初始只按提交图计算，历史整合分支会暂时复现「领先」显示。
     const wt = worktrees.find(w => w.branch === 'feature-base');
     assert.equal(wt.hasCommittedDiff, true, '四方判定应视 feature-base 为领先（复现用户所见）');
     assert.equal(wt.deliveredViaBranch, undefined, '传播前未标记');
 
-    await annotateWorktreesFromBranches(worktrees, branches);
+    annotateWorktreesFromBranches(worktrees, branches);
+    if (branch.mergeType === 'historical') {
+      assert.equal(wt.aheadCount, 0, '历史整合分支不应继续显示机械领先提交数');
+      assert.equal(wt.hasCommittedDiff, false, '历史整合分支不应继续显示已提交差异');
+      assert.equal(wt.isContentEqualToMain, true, '历史整合结论应同步到 Worktree');
+    }
     await annotateDeliveredViaWorktrees(repo, worktrees, branches);
-    assert.equal(wt.deliveredViaBranch, 'carrier', '兜底探测应识别载体 carrier');
+    if (branch.mergeType !== 'historical') {
+      assert.equal(wt.deliveredViaBranch, 'carrier', '兜底探测应识别载体 carrier');
+    }
 
     // 对照：真实领先的 worktree（unrelated）不得被标记
     git(repo, ['worktree', 'add', path.join(fixtureRoot, 'wt-unrelated'), 'unrelated']);

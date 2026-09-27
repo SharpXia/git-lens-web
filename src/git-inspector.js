@@ -407,12 +407,24 @@ export async function annotateDeliveredViaBranches(repoPath, branchList) {
  * @param {Array<object>} branches getBranches 输出（已经过 annotateDeliveredViaBranches）
  */
 export function annotateWorktreesFromBranches(worktrees, branches) {
-  const byName = new Map(
-    branches.filter(b => b.deliveredViaBranch).map(b => [b.name, b.deliveredViaBranch])
-  );
+  const byName = new Map(branches.map(branch => [branch.name, branch]));
   for (const wt of worktrees) {
-    if (wt.branch && byName.has(wt.branch)) {
-      wt.deliveredViaBranch = byName.get(wt.branch);
+    const branch = wt.branch ? byName.get(wt.branch) : null;
+    if (!branch) continue;
+
+    if (branch.deliveredViaBranch) {
+      wt.deliveredViaBranch = branch.deliveredViaBranch;
+    }
+
+    // squash 合并后，分支的原始提交仍会机械领先主干；分支列表已通过
+    // historicalIntegration 证明这些路径均被主干后续提交解释，Worktree 也必须复用该结论。
+    if (branch.mergeType === 'historical'
+      && branch.historicalIntegration
+      && branch.historicalIntegration.unexplainedPaths.length === 0) {
+      wt.isContentEqualToMain = true;
+      wt.hasCommittedDiff = false;
+      wt.aheadCount = 0;
+      wt.hasDiff = Boolean(wt.isDirty);
     }
   }
 }
