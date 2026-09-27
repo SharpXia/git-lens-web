@@ -1670,9 +1670,117 @@
       width: 100%;
     }
 
+    /* ---- 页脚：帮助/关于入口与桌面运行时信息 ---- */
+    .app-footer {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 24px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border-muted);
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .app-footer-link {
+      color: var(--text-muted);
+      text-decoration: none;
+    }
+    .app-footer-link:hover {
+      color: var(--accent);
+      text-decoration: underline;
+    }
+    .app-footer-runtime {
+      margin-left: auto;
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    /* ---- 桌面模式服务状态覆盖层与静默提示条（浏览器模式不出现） ----
+       颜色全部取自 :root 既有变量，与页面深色设计语言保持一致 */
+    .service-overlay {
+      position: fixed;
+      inset: 0;
+      /* 高于提交/MR 抽屉(z-index 1000)：服务不可用时覆盖一切交互 */
+      z-index: 2000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(1, 4, 9, 0.72);
+      backdrop-filter: blur(2px);
+    }
+    .service-overlay-card {
+      max-width: 440px;
+      margin: 0 16px;
+      padding: 28px 32px;
+      text-align: center;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+    }
+    .service-overlay-card h2 {
+      font-size: 17px;
+      margin-bottom: 8px;
+      color: var(--text-bright);
+    }
+    .service-overlay-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      word-break: break-word;
+    }
+    .service-overlay-spinner {
+      width: 28px;
+      height: 28px;
+      margin: 0 auto 14px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: service-spin 0.9s linear infinite;
+    }
+    .service-overlay-spinner[data-hidden="1"] {
+      display: none;
+    }
+    @keyframes service-spin {
+      to { transform: rotate(360deg); }
+    }
+    .service-overlay-actions {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .service-stopped-bar {
+      position: fixed;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 2000;
+      padding: 6px 16px;
+      font-size: 13px;
+      color: var(--warning);
+      background: var(--card-bg);
+      border: 1px solid var(--warning);
+      border-radius: 999px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    }
+
   </style>
 </head>
 <body>
+  <!-- 桌面模式服务状态覆盖层：仅在 window.gitLens 存在时由脚本驱动（契约 §6 onServiceState），
+       浏览器模式永不显示 -->
+  <div id="serviceStateOverlay" class="service-overlay" style="display:none" role="alertdialog" aria-modal="true" aria-labelledby="serviceStateTitle" aria-describedby="serviceStateDesc">
+    <div class="service-overlay-card">
+      <div id="serviceStateSpinner" class="service-overlay-spinner" aria-hidden="true"></div>
+      <h2 id="serviceStateTitle">服务正在重启…</h2>
+      <p id="serviceStateDesc" class="service-overlay-desc"></p>
+      <div id="serviceStateActions" class="service-overlay-actions"></div>
+    </div>
+  </div>
+  <!-- 桌面模式「服务已停止」静默提示条（非阻断，不遮蔽页面内容） -->
+  <div id="serviceStoppedBar" class="service-stopped-bar" style="display:none" role="status">⏹ 本地服务已停止</div>
+
   <header>
     <h1>🔍 Git Lens <span class="badge">Worktree & Branch Guard + Code Diff Inspector</span></h1>
     <span id="headerPath" style="font-size: 13px; color: var(--text-muted);"></span>
@@ -2001,6 +2109,12 @@
     <div class="commits-drawer-body" id="mrDrawerBody"></div>
   </div>
 
+  <!-- 页脚：帮助/关于入口；桌面模式由脚本追加运行时版本信息（浏览器模式保持隐藏） -->
+  <footer class="app-footer">
+    <a id="helpAboutLink" class="app-footer-link" href="https://github.com/SharpXia/git-lens-web" target="_blank" rel="noopener noreferrer">帮助 / 关于（GitHub README）</a>
+    <span id="desktopRuntimeInfo" class="app-footer-runtime" style="display:none;"></span>
+  </footer>
+
   <script>
     let allRepos = [];
     let currentRepo = '';
@@ -2026,6 +2140,10 @@
     let scanDirectoryConfig = { customDirectories: [] };
     let scanDirectoryDraft = [];
     let worktreeRemoveRequest = null;
+
+    // 桌面运行时判定：Electron Shell 经 preload 注入 window.gitLens（契约 §6）。
+    // 浏览器模式无该全局，isDesktop 恒为 false，所有桌面分支均不生效、行为保持零变化。
+    const isDesktop = Boolean(window.gitLens && window.gitLens.isDesktop);
 
     const TAB_TITLE_LABELS = {
       overview: '仓库总览',
@@ -2192,19 +2310,32 @@
       button.textContent = '正在打开…';
       error.textContent = '';
       try {
-        const res = await fetch('/api/choose-scan-directory', { method: 'POST' });
-        const data = await res.json();
-        if (!data.ok) throw new Error(data.error || '打开目录选择器失败');
-        if (data.directory) {
-          if (scanDirectoryDraft.includes(data.directory)) {
+        let directory = null;
+        if (isDesktop && typeof window.gitLens?.chooseDirectory === 'function') {
+          // 桌面模式：经 preload 直连原生目录对话框（契约 §6）；用户取消时返回 null
+          directory = await window.gitLens.chooseDirectory();
+        } else {
+          // 浏览器模式：沿用服务端系统选择器
+          const res = await fetch('/api/choose-scan-directory', {
+            method: 'POST',
+            // 契约 §4 已批准偏差：此前该调用缺失 Content-Type 被服务放行；
+            // 补齐 JSON 头后 Runtime 侧即可收紧该例外
+            headers: { 'Content-Type': 'application/json' }
+          });
+          const data = await res.json();
+          if (!data.ok) throw new Error(data.error || '打开目录选择器失败');
+          directory = data.directory || null;
+        }
+        if (directory) {
+          if (scanDirectoryDraft.includes(directory)) {
             error.textContent = '这个目录已经添加。';
           } else {
-            scanDirectoryDraft.push(data.directory);
+            scanDirectoryDraft.push(directory);
             renderScanDirectoryList();
           }
         }
       } catch (err) {
-        error.textContent = err.message;
+        error.textContent = toDisplayErrorMessage(err, '无法连接本地服务，打开目录选择器失败');
       } finally {
         button.disabled = false;
         button.textContent = '选择文件夹…';
@@ -2265,7 +2396,7 @@
         closeScanDirectoryModal();
         await loadProjects();
       } catch (err) {
-        error.textContent = err.message;
+        error.textContent = toDisplayErrorMessage(err, '无法连接本地服务，保存扫描目录失败');
       } finally {
         saveButton.disabled = false;
         saveButton.textContent = '保存并扫描';
@@ -2370,7 +2501,7 @@
           alert(`已删除 ${successCount} 个分支${failed.length ? `，${failed.length} 个因状态变化未处理` : ''}。`);
         }
       } catch (err) {
-        alert(`清理失败：${err.message}`);
+        alert(`清理失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`);
       } finally {
         button.disabled = false;
         button.textContent = originalText;
@@ -2948,7 +3079,7 @@
           <span class="repo-item-name">${escapeHtml(repo.name)}</span>
           <span class="repo-item-group">${escapeHtml(repo.group || '')}</span>
         </div>
-        <span class="star-icon ${isStarred ? 'starred' : ''}" title="${isStarred ? '取消收藏' : '加入星标'}" onclick="toggleStarRepo('${escapeHtml(repo.path)}', event)">
+        <span class="star-icon ${isStarred ? 'starred' : ''}" title="${isStarred ? '取消收藏' : '加入星标'}" onclick="toggleStarRepo('${escapeJsAttr(repo.path)}', event)">
           ${isStarred ? '★' : '☆'}
         </span>
       `;
@@ -3007,6 +3138,27 @@
       syncStateToUrl(pushHistory);
     }
 
+    /**
+     * 仓库列表加载失败的错误态渲染：下拉列表、触发器与两个概览面板统一给出
+     * 中文提示与重试入口，避免服务不可达时页面停留在“加载中”假死。
+     * @param {string} message - 可展示的中文错误文案
+     */
+    function renderProjectsLoadError(message) {
+      currentRepo = '';
+      allRepos = [];
+      const escaped = escapeHtml(message);
+      const retryButton = '<button class="btn-outline" type="button" onclick="loadProjects()">重试</button>';
+      const dropdown = document.getElementById('repoDropdownList');
+      if (dropdown) {
+        dropdown.innerHTML = `<div class="loading" style="color: var(--danger);">仓库列表加载失败：${escaped}</div>${retryButton}`;
+      }
+      document.getElementById('repoTriggerText').textContent = '仓库列表加载失败';
+      document.getElementById('headerPath').textContent = '';
+      document.getElementById('wtList').innerHTML = `<div class="loading" style="color: var(--danger);">仓库列表加载失败：${escaped}</div>${retryButton}`;
+      document.getElementById('brList').innerHTML = `<div class="loading" style="color: var(--danger);">仓库列表加载失败：${escaped}</div>${retryButton}`;
+      updateMetrics();
+    }
+
     async function loadProjects(useStoredState = true) {
       // 提取保存的状态（URL 参数优先，其次 sessionStorage）
       pendingRestoreState = useStoredState ? getStoredState() : getUrlState();
@@ -3020,8 +3172,17 @@
         if (searchInputDom) searchInputDom.value = searchKeyword;
       }
 
-      const res = await fetch('/api/projects');
-      const data = await res.json();
+      let data;
+      try {
+        const res = await fetch('/api/projects');
+        data = await res.json();
+        if (!data.ok) throw new Error(data.error || '读取仓库列表失败');
+      } catch (err) {
+        // 服务不可达或响应异常：渲染中文错误态并提供重试，不中断后续交互
+        renderProjectsLoadError(toDisplayErrorMessage(err, '无法连接本地服务，请确认服务已启动'));
+        isRestoringHistory = false;
+        return;
+      }
       allRepos = data.repos || [];
 
       const sel = document.getElementById('repoSelect');
@@ -3166,7 +3327,7 @@
         populateDiffSelectors();
         refreshMergeRequests();
       } catch (err) {
-        alert('分析失败: ' + err.message);
+        alert('分析失败: ' + toDisplayErrorMessage(err, '无法连接本地服务'));
       }
     }
 
@@ -3267,7 +3428,10 @@
         if (wt.isLocked) tags.push('<span class="badge">已加锁</span>');
 
         const dirName = wt.path.split('/').filter(Boolean).pop() || wt.path;
-        let lastInfo = wt.lastCommit ? `最新提交: ${wt.lastCommit.relativeTime} by ${wt.lastCommit.author} · "${wt.lastCommit.subject}"` : '';
+        // 提交人/提交说明是外部可控的 Git 元数据，必须逐字段转义后再进 HTML
+        let lastInfo = wt.lastCommit
+          ? `最新提交: ${escapeHtml(wt.lastCommit.relativeTime)} by ${escapeHtml(wt.lastCommit.author)} · "${escapeHtml(wt.lastCommit.subject)}"`
+          : '';
 
         div.innerHTML = `
           <div class="item-main">
@@ -3280,18 +3444,18 @@
             </div>
             <div class="item-path-box">
               <span class="item-path-text">${escapeHtml(wt.path)}</span>
-              <button class="copy-path-btn" onclick="copyText('${escapeHtml(wt.path)}', this)" title="复制完整路径">复制</button>
+              <button class="copy-path-btn" onclick="copyText('${escapeJsAttr(wt.path)}', this)" title="复制完整路径">复制</button>
             </div>
             ${lastInfo ? `<div class="item-desc">${lastInfo}</div>` : ''}
             ${!wt.existsOnDisk || wt.isPrunable ? '<div class="item-alert">⚠️ 该 Worktree 已损坏或可被安全 prune 清理</div>' : ''}
           </div>
           <div class="item-actions">
             <div class="item-actions-diff-group">
-              ${wt.isDirty ? `<button class="btn-outline" onclick="viewUncommittedDiff('${escapeHtml(wt.path)}')" style="color: var(--warning); border-color: rgba(210, 153, 34, 0.4);">未提交 Diff (${wt.dirtyCount})</button>` : ''}
-              ${wt.existsOnDisk ? `<button class="btn-outline" onclick="openCommitsDrawer('${escapeHtml(wt.path)}')" title="${wt.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>` : ''}
-              <button class="btn-outline" onclick="viewDiffAgainstMain('${escapeHtml(wt.path)}')">与主干对比</button>
+              ${wt.isDirty ? `<button class="btn-outline" onclick="viewUncommittedDiff('${escapeJsAttr(wt.path)}')" style="color: var(--warning); border-color: rgba(210, 153, 34, 0.4);">未提交 Diff (${wt.dirtyCount})</button>` : ''}
+              ${wt.existsOnDisk ? `<button class="btn-outline" onclick="openCommitsDrawer('${escapeJsAttr(wt.path)}')" title="${wt.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>` : ''}
+              <button class="btn-outline" onclick="viewDiffAgainstMain('${escapeJsAttr(wt.path)}')">与主干对比</button>
             </div>
-            ${!isSafeMain ? `<button class="btn-danger btn-remove-wt" id="btn-rm-wt-${encodeURIComponent(wt.path).replace(/%/g, '_')}" onclick="removeWt('${escapeHtml(wt.path)}')">移除</button>` : ''}
+            ${!isSafeMain ? `<button class="btn-danger btn-remove-wt" id="btn-rm-wt-${encodeURIComponent(wt.path).replace(/%/g, '_')}" onclick="removeWt('${escapeJsAttr(wt.path)}')">移除</button>` : ''}
           </div>
         `;
         container.appendChild(div);
@@ -3323,7 +3487,7 @@
             </div>
             <div class="item-tags">${tags.join(' ')}</div>
           </div>
-          <div class="item-desc">${b.relativeTime} 由 ${escapeHtml(b.author)} 提交: "${escapeHtml(b.subject || '-')}"</div>
+          <div class="item-desc">${escapeHtml(b.relativeTime)} 由 ${escapeHtml(b.author)} 提交: "${escapeHtml(b.subject || '-')}"</div>
           ${b.redundancyReason ? `<div class="item-alert">⚠️ ${escapeHtml(b.redundancyReason)}${b.isStaleOnly ? ' <span class="stale-delete-hint">（谨慎删除）</span>' : ''}</div>` : ''}
           ${b.historicalIntegration && b.historicalIntegration.currentDifferencePaths.length
             ? `<div class="item-desc" title="${escapeHtml(b.historicalIntegration.currentDifferencePaths.join('\n'))}">历史整合提交后仍有 ${b.historicalIntegration.currentDifferencePaths.length} 个差异文件，均可由后续主分支提交解释（悬停查看路径）。</div>`
@@ -3333,9 +3497,9 @@
             : ''}
         </div>
         <div class="item-actions">
-          <button class="btn-outline" onclick="openBranchCommitsDrawer('${escapeHtml(b.name)}')" title="${b.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>
-          ${!b.isMain ? `<button class="btn-outline" onclick="viewBranchDiffAgainstMain('${escapeHtml(b.name)}')" title="以「仅已提交」模式对比该分支与主分支（仅比较已提交内容，无 Worktree 的分支也可用）">与主分支对比</button>` : ''}
-          ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${escapeHtml(b.name)}', ${!(b.isMerged || b.deliveredViaBranch)})">删除</button>` : ''}
+          <button class="btn-outline" onclick="openBranchCommitsDrawer('${escapeJsAttr(b.name)}')" title="${b.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>
+          ${!b.isMain ? `<button class="btn-outline" onclick="viewBranchDiffAgainstMain('${escapeJsAttr(b.name)}')" title="以「仅已提交」模式对比该分支与主分支（仅比较已提交内容，无 Worktree 的分支也可用）">与主分支对比</button>` : ''}
+          ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${escapeJsAttr(b.name)}', ${!(b.isMerged || b.deliveredViaBranch)})">删除</button>` : ''}
         </div>
       `;
       return div;
@@ -3459,7 +3623,7 @@
           }
         }
       } catch (err) {
-        alert('移除失败: ' + err.message);
+        alert('移除失败: ' + toDisplayErrorMessage(err, '无法连接本地服务'));
         if (btn) {
           btn.disabled = false;
           btn.textContent = '移除';
@@ -3513,7 +3677,7 @@
           }
         }
       } catch (err) {
-        alert('删除失败: ' + err.message);
+        alert('删除失败: ' + toDisplayErrorMessage(err, '无法连接本地服务'));
         if (btn) {
           btn.disabled = false;
           btn.textContent = '删除';
@@ -3782,7 +3946,7 @@
         renderDiffView(diff, preserveShell);
       } catch (err) {
         if (seq !== diffRequestSeq) return;
-        const errorHtml = `<div class="empty-diff-box" style="color: var(--danger);">Diff 计算失败: ${escapeHtml(err.message)}</div>`;
+        const errorHtml = `<div class="empty-diff-box" style="color: var(--danger);">Diff 计算失败: ${escapeHtml(toDisplayErrorMessage(err, '无法连接本地服务'))}</div>`;
         if (preserveShell) container.querySelector('#diffFileListContent').innerHTML = errorHtml;
         else container.innerHTML = errorHtml;
       }
@@ -3852,6 +4016,36 @@
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+    }
+
+    /**
+     * 把字符串安全嵌入「内联 onclick 等属性内的 JS 单引号字符串」：
+     * 仅 escapeHtml 不够——浏览器解码属性后 &#039; 会还原成单引号，可打断 JS 字符串造成注入
+     * （Worktree 路径中的撇号即真实触发样本）。这里先做 JS 字符串层转义
+     * （反斜杠/单引号/换行），再叠加 HTML 属性转义，形成双上下文防护。
+     * @param {string} value - 任意 Git 元数据（Worktree 路径、分支名、MR id 等）
+     * @returns {string} 可安全放入 onclick="fn('...')" 的文本
+     */
+    function escapeJsAttr(value) {
+      const js = String(value ?? '')
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/\r/g, '\\r')
+        .replace(/\n/g, '\\n');
+      return escapeHtml(js);
+    }
+
+    /**
+     * 把 fetch 异常转成可展示的中文错误文案。
+     * 网络层失败（服务未启动、连接被拒等）抛出的 TypeError 其 message 是浏览器英文原文，
+     * 统一替换为中文兜底；API 业务错误沿用服务端返回的 message。
+     * @param {unknown} err - catch 到的异常
+     * @param {string} fallback - 网络层失败或异常无 message 时展示的中文文案
+     * @returns {string}
+     */
+    function toDisplayErrorMessage(err, fallback) {
+      if (err instanceof TypeError) return fallback; // fetch 网络层失败
+      return (err && err.message) || fallback;
     }
 
     /* 格式化代码块 */
@@ -4269,7 +4463,7 @@
           ${rows}
         `;
       } catch (err) {
-        el.innerHTML = `<div class="stash-item" style="color: var(--danger);">历史暂存加载失败：${escapeHtml(err.message)}</div>`;
+        el.innerHTML = `<div class="stash-item" style="color: var(--danger);">历史暂存加载失败：${escapeHtml(toDisplayErrorMessage(err, '无法连接本地服务'))}</div>`;
       }
     }
 
@@ -4335,7 +4529,7 @@
         if (!data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
         await refreshCurrentDiff();
       } catch (err) {
-        alert(`操作失败：${err.message}`);
+        alert(`操作失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`);
         if (btn && btn.isConnected) btn.disabled = false;
       }
     }
@@ -4578,7 +4772,7 @@
           btn.textContent = '加载失败，点击重试';
           btn.disabled = false;
         } else {
-          renderCommitsError(err.message);
+          renderCommitsError(toDisplayErrorMessage(err, '无法连接本地服务'));
         }
       }
     }
@@ -4846,7 +5040,7 @@
         }
       } catch (err) {
         if (panel.isConnected) {
-          renderCommitDetail(panel, null, err.message);
+          renderCommitDetail(panel, null, toDisplayErrorMessage(err, '无法连接本地服务'));
         }
       }
     }
@@ -4993,7 +5187,7 @@
         // 外层 worktree 列表的领先/同步徽标同样受写操作影响，同步刷新保持两处一致
         await refreshRepoInspectData();
       } catch (err) {
-        alert(`${actionLabel} 失败：${err.message}`);
+        alert(`${actionLabel} 失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`);
       } finally {
         // 重载会整体重建列表 DOM，旧按钮多已离线；仅在按钮仍连着文档时恢复可点
         if (btn && btn.isConnected) btn.disabled = false;
@@ -5069,7 +5263,7 @@
       } catch (err) {
         if (!section.isConnected) return;
         section.innerHTML = `
-          <div class="commit-detail-error">加载 Diff 失败：${escapeHtml(err.message)}</div>
+          <div class="commit-detail-error">加载 Diff 失败：${escapeHtml(toDisplayErrorMessage(err, '无法连接本地服务'))}</div>
           <button type="button" class="btn-outline commit-diff-toggle-btn" onclick="retryCommitDiff(this, '${sha}')">重试</button>`;
       }
     }
@@ -5250,7 +5444,7 @@
       } catch (err) {
         if (seq !== mrListReqSeq) return;
         document.getElementById('mrList').innerHTML =
-          `<div class="loading" style="color: var(--danger);">MR 列表加载失败：${escapeHtml(err.message)}</div>`;
+          `<div class="loading" style="color: var(--danger);">MR 列表加载失败：${escapeHtml(toDisplayErrorMessage(err, '无法连接本地服务'))}</div>`;
       }
     }
 
@@ -5268,7 +5462,7 @@
         return;
       }
       container.innerHTML = mergeRequestsCache.map(mr => `
-        <div class="list-item" style="cursor: pointer;" onclick="openMrDetail('${escapeHtml(String(mr.id))}')">
+        <div class="list-item" style="cursor: pointer;" onclick="openMrDetail('${escapeJsAttr(String(mr.id))}')">
           <div class="item-main">
             <div class="item-header-row">
               <div class="item-name"><span>🔀</span><span>${escapeHtml(mr.title)}</span></div>
@@ -5280,7 +5474,7 @@
             </div>
           </div>
           <div class="item-actions">
-            <button class="btn-outline" onclick="event.stopPropagation(); openMrDetail('${escapeHtml(String(mr.id))}')">查看详情</button>
+            <button class="btn-outline" onclick="event.stopPropagation(); openMrDetail('${escapeJsAttr(String(mr.id))}')">查看详情</button>
           </div>
         </div>
       `).join('');
@@ -5382,7 +5576,7 @@
           openMrDetail(data.mergeRequest.id); // 直接打开新 MR 详情
         }
       } catch (err) {
-        errEl.textContent = err.message;
+        errEl.textContent = toDisplayErrorMessage(err, '无法连接本地服务，创建 MR 失败');
       } finally {
         btn.disabled = false;
         btn.textContent = '创建 Merge Request';
@@ -5442,7 +5636,7 @@
         loadMrCommits();
       } catch (err) {
         if (seq !== mrDetailReqSeq) return;
-        renderMrDetail(null, err.message, true);
+        renderMrDetail(null, toDisplayErrorMessage(err, '无法连接本地服务'), true);
       }
     }
 
@@ -5627,7 +5821,7 @@
         }
       } catch (err) {
         const errEl = document.getElementById('mrDrawerActionError');
-        if (errEl) errEl.textContent = `操作失败：${err.message}`;
+        if (errEl) errEl.textContent = `操作失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`;
         setMrActionButtonsDisabled(false);
         loadMrAheadBehind(); // 静默刷新一次 ahead/behind，冲突破坏提交关系时能及时反映
       }
@@ -5652,7 +5846,7 @@
         return data;
       } catch (err) {
         if (!mrDrawerState.isOpen || mrDrawerState.id !== String(mr.id)) return null;
-        lineEl.innerHTML = `<span style="font-size: 12px; color: var(--text-muted);">提交差异统计不可用：${escapeHtml(err.message)}</span>`;
+        lineEl.innerHTML = `<span style="font-size: 12px; color: var(--text-muted);">提交差异统计不可用：${escapeHtml(toDisplayErrorMessage(err, '无法连接本地服务'))}</span>`;
         return null;
       }
     }
@@ -5702,7 +5896,7 @@
         container.innerHTML = html;
       } catch (err) {
         if (seq !== mrCommitsReqSeq) return;
-        container.innerHTML = `<div class="commit-detail-error">提交列表加载失败：${escapeHtml(err.message)}</div>`;
+        container.innerHTML = `<div class="commit-detail-error">提交列表加载失败：${escapeHtml(toDisplayErrorMessage(err, '无法连接本地服务'))}</div>`;
       }
     }
 
@@ -5929,17 +6123,22 @@
       syncStateToUrl();
     });
     document.getElementById('pruneBtn').addEventListener('click', async () => {
-      const res = await fetch('/api/prune-worktrees', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repoPath: currentRepo })
-      });
-      const data = await res.json();
-      if (data.ok) {
-        alert('Worktrees prune 执行成功！');
-        inspectRepo(currentRepo);
-      } else {
-        alert('Prune 失败: ' + data.error);
+      try {
+        const res = await fetch('/api/prune-worktrees', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoPath: currentRepo })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          alert('Worktrees prune 执行成功！');
+          inspectRepo(currentRepo);
+        } else {
+          alert('Prune 失败: ' + data.error);
+        }
+      } catch (err) {
+        // 网络层失败（服务不可达）同样给出中文提示，避免按钮点击后无任何反馈
+        alert('Prune 失败: ' + toDisplayErrorMessage(err, '无法连接本地服务'));
       }
     });
 
@@ -6002,8 +6201,149 @@
       onSelect: () => fetchAndRenderRefDiff(null, true)
     });
 
-    loadProjects();
+    /* ---- 桌面运行时适配层（契约 §6；浏览器模式以下逻辑全部不生效） ---- */
 
+    // 外链统一出口：桌面模式下页面内 http/https 链接一律交系统浏览器打开，
+    // 并阻止窗口内导航（契约 §6 openExternal，仅 http/https 由主进程校验）；
+    // 浏览器模式保持默认跳转行为
+    document.addEventListener('click', (e) => {
+      if (!isDesktop) return;
+      const anchor = e.target instanceof Element ? e.target.closest('a[href]') : null;
+      if (!anchor) return;
+      const url = anchor.getAttribute('href') || '';
+      if (!/^https?:\/\//i.test(url)) return;
+      e.preventDefault();
+      window.gitLens.openExternal(url).catch((err) => console.warn('打开外部链接失败:', err && err.message));
+    });
+
+    // 桌面模式在页脚展示运行时版本信息（appVersion/electronVersion/platform/arch）；
+    // 浏览器模式元素保持隐藏，避免暴露无意义的 Node 运行时细节
+    let desktopRuntimeInfo = null;
+    if (isDesktop && typeof window.gitLens.getRuntimeInfo === 'function') {
+      window.gitLens.getRuntimeInfo().then((info) => {
+        desktopRuntimeInfo = info || null;
+        const el = document.getElementById('desktopRuntimeInfo');
+        if (el) {
+          el.textContent = `v${info.appVersion || '-'} · Electron ${info.electronVersion || '-'} · ${info.platform || '-'} / ${info.arch || '-'}`;
+          el.style.display = '';
+        }
+      }).catch((err) => console.warn('读取桌面运行时信息失败:', err && err.message));
+    }
+
+    /* ---- 桌面模式服务状态覆盖层（契约 §6 onServiceState；浏览器模式全部不生效） ---- */
+    let lastServiceState = null;     // 最近一次收到的服务状态；重复事件不重复处理
+    let serviceRestartTimer = null;  // 「正在重启」已等待秒数计时器
+    let serviceOverlayShown = false; // 覆盖层当前是否可见（区分首启 ready 与恢复 ready）
+
+    function setServiceOverlay(visible) {
+      document.getElementById('serviceStateOverlay').style.display = visible ? 'flex' : 'none';
+      serviceOverlayShown = visible;
+    }
+
+    /* 覆盖层文案与动作按钮统一入口；actionsHtml 为页面自身的静态按钮串，不含任何外部数据 */
+    function setServiceOverlayContent(title, desc, showSpinner, actionsHtml) {
+      document.getElementById('serviceStateTitle').textContent = title;
+      document.getElementById('serviceStateDesc').textContent = desc;
+      document.getElementById('serviceStateSpinner').dataset.hidden = showSpinner ? '' : '1';
+      document.getElementById('serviceStateActions').innerHTML = actionsHtml || '';
+    }
+
+    function startServiceRestartTimer() {
+      stopServiceRestartTimer();
+      const descEl = document.getElementById('serviceStateDesc');
+      const startedAt = Date.now();
+      descEl.textContent = '已等待 0 秒…';
+      serviceRestartTimer = setInterval(() => {
+        descEl.textContent = `已等待 ${Math.floor((Date.now() - startedAt) / 1000)} 秒…`;
+      }, 1000);
+    }
+
+    function stopServiceRestartTimer() {
+      if (serviceRestartTimer) {
+        clearInterval(serviceRestartTimer);
+        serviceRestartTimer = null;
+      }
+    }
+
+    function hideServiceStoppedBar() {
+      document.getElementById('serviceStoppedBar').style.display = 'none';
+    }
+
+    /* crashed 态「复制诊断信息」：写入运行时信息与时间戳，便于用户粘贴反馈；
+       剪贴板 API 不可用时回退到隐藏 textarea 方案（与 copyText 一致） */
+    async function copyServiceDiagnostics() {
+      const payload = JSON.stringify({
+        state: 'crashed',
+        time: new Date().toISOString(),
+        href: window.location.href,
+        userAgent: navigator.userAgent,
+        runtime: desktopRuntimeInfo || null
+      }, null, 2);
+      const btn = document.getElementById('copyServiceDiagnosticsBtn');
+      try {
+        await navigator.clipboard.writeText(payload);
+      } catch (err) {
+        const ta = document.createElement('textarea');
+        ta.value = payload;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      if (btn) {
+        btn.textContent = '已复制诊断信息';
+        setTimeout(() => { btn.textContent = '复制诊断信息'; }, 1500);
+      }
+    }
+
+    function handleServiceState(state) {
+      if (state === lastServiceState) return; // 重复的同状态事件不重复处理
+      lastServiceState = state;
+      switch (state) {
+        case 'restarting':
+          hideServiceStoppedBar();
+          setServiceOverlayContent('服务正在重启…', '', true, '');
+          setServiceOverlay(true);
+          startServiceRestartTimer();
+          break;
+        case 'ready': {
+          stopServiceRestartTimer();
+          hideServiceStoppedBar();
+          const wasShown = serviceOverlayShown;
+          setServiceOverlay(false);
+          // 只有经历过 restarting/crashed 的 ready 才重拉数据，避免与页面首次加载竞态
+          if (wasShown) loadProjects();
+          break;
+        }
+        case 'crashed':
+          stopServiceRestartTimer();
+          hideServiceStoppedBar();
+          // 重连由 Shell 的自动重启完成；「重试」仅重新加载页面恢复视图
+          setServiceOverlayContent(
+            '本地服务意外退出',
+            '后台服务进程已退出，通常会由桌面端自动重启；稍候可点击「重试」重新加载页面。',
+            false,
+            '<button type="button" class="btn-primary" onclick="location.reload()">重试</button>' +
+            '<button type="button" id="copyServiceDiagnosticsBtn" class="btn-outline" onclick="copyServiceDiagnostics()">复制诊断信息</button>'
+          );
+          setServiceOverlay(true);
+          break;
+        case 'stopped':
+          stopServiceRestartTimer();
+          setServiceOverlay(false);
+          document.getElementById('serviceStoppedBar').style.display = 'block';
+          break;
+        default:
+          break;
+      }
+    }
+
+    // 仅桌面模式订阅服务状态；浏览器模式无 window.gitLens，覆盖层与提示条永不出现
+    if (isDesktop && typeof window.gitLens?.onServiceState === 'function') {
+      window.gitLens.onServiceState(handleServiceState);
+    }
+
+    loadProjects();
     // 回到顶部逻辑
     function scrollToTop() {
       window.scrollTo({
