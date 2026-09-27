@@ -91,7 +91,7 @@ preload 暴露且仅暴露以下对象（`contextIsolation: true`、`nodeIntegra
 ```js
 window.gitLens = {
   isDesktop: true,
-  getRuntimeInfo(),   // Promise<{ appVersion, electronVersion, platform, arch, configDir }>
+  getRuntimeInfo(),   // Promise<{ appVersion, electronVersion, platform, arch, configDir, git?: { found, path, version, source } }>
   chooseDirectory(),  // Promise<string|null>，原生 dialog.showOpenDialog
   onServiceState(cb), // 订阅 'ready'|'restarting'|'crashed'|'stopped'，返回取消订阅函数
   openExternal(url),  // Promise<void>；仅 http/https，主进程校验后交系统浏览器
@@ -99,6 +99,8 @@ window.gitLens = {
 ```
 
 页面通过 `Boolean(window.gitLens?.isDesktop)` 判定桌面模式；所有 IPC 通道名前缀 `git-lens:`，preload 对参数做类型校验。UI 不得假设 `window.gitLens` 在浏览器模式存在。
+
+**（第一次修订）`getRuntimeInfo` 扩展 `git` 字段**（Shell 提议、协调批准）：用于无 `/api/diagnostics` 时的 Git 环境呈现；`source` 取 `env|common-path|path`。既有五个字段签名不变。另确认：`window-all-closed → app.quit()`（全平台），桌面版采用单窗口退出语义。
 
 ## 7. Git 依赖与诊断契约（G2 落地）
 
@@ -139,6 +141,8 @@ window.gitLens = {
 
 QA 提供单一入口（G0 起为 `npm run test:isolated`；G4 前扩展 `npm run test:desktop:isolated`）：自动建 qa-root、注入环境、启动服务/应用、执行测试、产出 `artifacts/report.json` 与截图。协调 Agent 只调用该入口或其明确定义的阶段参数。既有 `scripts/verify-mr-branch-diff.mjs` 已改造为 fail-closed 版本（强制握手、拒绝 9527、拒绝非环回、仅接受显式且与握手一致的 `--config-dir`、强制 `--run-id`）。
 
+**（第一次修订）启动器增补 `--service-url <url>`**：测试专用显式服务地址覆盖，跳过 spawn。约束：地址在任何 qa-root 创建与请求发出前经 fail-closed 白名单校验（仅 `http://127.0.0.1:<port>` 字面形态、非 9527）；外部服务的生命周期管理（spawn/停止/端口释放验证）记 skip。仅供单测与协调 Agent 显式调用，`npm run test:isolated` 默认行为不变。
+
 ## 9. 文件所有权与本地环境分配
 
 | 工作流 | 分支 | worktree | 独占文件 | 手工联调端口 | 手工配置目录 |
@@ -178,6 +182,7 @@ QA 提供单一入口（G0 起为 `npm run test:isolated`；G4 前扩展 `npm ru
 | `GIT_LENS_USER_DATA` | 存在时 `app.setPath('userData', <该目录>)`，且必须先于任何 userData 读写生效；目录不存在由 QA 创建 |
 | `GIT_LENS_TEST_RUN_ID` | 原样透传给服务子进程环境（供 /api/test-handshake 启用与核验） |
 | `GIT_LENS_E2E_READY_FILE` | 存在时：服务就绪且窗口完成首次加载后，向该路径原子写 JSON `{"port":<实际端口>,"servicePid":<服务进程 pid>,"mainPid":<主进程 pid>,"runId":"<透传值或 null>"}`；服务重启成功后重写；服务退出时把 `"state":"crashed"` 并入后重写 |
+| `GIT_LENS_E2E_TOKEN_FILE` | （第一次修订，Shell 提议、协调批准）存在时：主进程把生成的会话凭据原子写入该文件，供 E2E 发起带 `X-Git-Lens-Session` 的认证请求；服务重启换端口/凭据不变，凭据仅在 desktop 模式生成 |
 
 - E2E 启动器只从 ready 文件获取端口，**禁止猜测端口**（契约 §8.3）；文件写入用临时文件 + rename 原子替换。
 - `app.quit()` 必须请求服务正常关闭并等待（超时才 SIGKILL），保证 QA 进程组退出后无孤儿服务、端口释放。
