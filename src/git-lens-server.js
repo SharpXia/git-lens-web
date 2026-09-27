@@ -30,7 +30,8 @@ import {
   getRefDiff,
   annotateWorktreesFromBranches,
   annotateDeliveredViaWorktrees,
-  configureGitPath as configureInspectorGitPath
+  configureGitPath as configureInspectorGitPath,
+  getGitDiagnostics
 } from './git-inspector.js';
 import {
   listMergeRequests,
@@ -47,6 +48,17 @@ const DEFAULT_REQUEST_BODY_LIMIT = 2 * 1024 * 1024;
 
 /** 关闭服务时等待在途请求的最长时间，超时后强制销毁全部连接 */
 const CLOSE_GRACE_PERIOD_MS = 3000;
+
+// CSP 策略（契约 §14 G3 冻结）：静态页与 API 同源响应统一携带，逐字符冻结，
+// 修改必须先经协调 Agent 修订契约。script-src 'self' 禁止内联脚本，
+// style-src 暂保留 'unsafe-inline'，object/frame/form 一律锁死。
+const CONTENT_SECURITY_POLICY = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'none'";
+
+/** 静态资源精确白名单：pathname 相等匹配，天然免疫目录遍历与编码变形 */
+const STATIC_FILE_WHITELIST = {
+  '/app.js': { file: 'app.js', contentType: 'text/javascript; charset=utf-8' },
+  '/app.css': { file: 'app.css', contentType: 'text/css; charset=utf-8' }
+};
 
 /**
  * 调用服务所在电脑的系统目录选择器，取消选择时返回 null。
@@ -243,6 +255,10 @@ function normalizeOptions(options) {
     sessionToken,
     chooseScanDirectory: typeof options.chooseScanDirectory === 'function' ? options.chooseScanDirectory : chooseScanDirectory,
     requestBodyLimit,
+    // 静态根目录：默认与 index.html 同源（public/）；测试可注入临时目录
+    staticRoot: typeof options.staticRoot === 'string' && options.staticRoot.trim() !== ''
+      ? options.staticRoot
+      : path.join(path.dirname(url.fileURLToPath(import.meta.url)), '../public'),
     handshake,
     log: typeof options.log === 'function' ? options.log : null
   };
@@ -261,6 +277,7 @@ function normalizeOptions(options) {
  * @param {string}  [options.gitPath]             git 可执行文件路径；缺省取 GIT_LENS_GIT_PATH，再缺省 'git'
  * @param {number}  [options.requestBodyLimit=2*1024*1024] JSON 请求体字节上限
  * @param {{ runId: string }} [options.handshake] 提供时启用 GET /api/test-handshake（仅测试注入）
+ * @param {string}  [options.staticRoot]          静态资源根目录（index.html/app.js/app.css）；缺省为仓库 public/
  * @param {(level: 'info'|'warn'|'error', message: string) => void} [options.log]
  * @returns {{ server: http.Server, ready: Promise<{host: string, port: number}>, close: () => Promise<void> }}
  */
@@ -356,7 +373,7 @@ export function createGitLensServer(options) {
   }
 
   /**
-   * 发送 JSON 响应（统一中文错误文案与 charset）。
+   * 发送 JSON 响应（统一 charset）。
    * @param {http.ServerResponse} res
    * @param {number} statusCode
    * @param {object} payload
@@ -364,6 +381,20 @@ export function createGitLensServer(options) {
   function sendJson(res, statusCode, payload) {
     res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(payload));
+  }
+
+  /**
+   * 解析 realpath 后的配置目录。首次使用时目录可能尚未创建，创建后取 realpath，
+   * 保证握手与诊断接口始终返回规范路径。
+   * @returns {Promise<string>}
+   */
+  async function resolveRealConfigDir() {
+    try {
+      return await fs.realpath(configDir);
+    } catch {
+      await fs.mkdir(configDir, { recursive: true });
+      return fs.realpath(configDir);
+    }
   }
 
   const server = http.createServer((req, res) => {
@@ -438,6 +469,9 @@ export function createGitLensServer(options) {
     const parsed = url.parse(req.url, true);
     const pathname = parsed.pathname;
 
+    // CSP（契约 §14 G3 冻结）：本实例发出的所有响应统一携带，含静态页、API、静态资源与拒绝响应
+    res.setHeader('Content-Security-Policy', CONTENT_SECURITY_POLICY);
+
     // ---- 访问边界（契约 §4）：所有请求统一执行，先于任何业务逻辑 ----
 
     // 1. Host 校验：防 DNS rebinding。只接受本机主机名 + 本实例实际端口。
@@ -478,13 +512,11 @@ export function createGitLensServer(options) {
     }
 
     // 5. 请求体类型检查：/api 的 POST 必须是 JSON。
-    //    例外：/api/choose-scan-directory 不消费请求体，既有前端调用该接口时不带
-    //    Content-Type（同源简单请求），仅在显式提供了非 JSON 的 Content-Type 时拒绝。
+    //    （契约 §4 第一次修订）choose-scan-directory 的例外已收紧：UI 已为该调用
+    //    补齐 'Content-Type': 'application/json'，现在与其他 /api POST 一律同规则。
     if (req.method === 'POST' && pathname.startsWith('/api/')) {
       const contentType = String(req.headers['content-type'] || '').trim().toLowerCase();
-      const isJson = contentType === '' || contentType.startsWith('application/json');
-      const isDialogEndpoint = pathname === '/api/choose-scan-directory';
-      if (isDialogEndpoint ? (contentType !== '' && !contentType.startsWith('application/json')) : !isJson) {
+      if (!contentType.startsWith('application/json')) {
         return sendJson(res, 415, { ok: false, error: '不支持的请求格式：Content-Type 必须为 application/json' });
       }
     }
@@ -523,18 +555,10 @@ export function createGitLensServer(options) {
       // 生产实例不可探测；不满足时按未知路径处理返回 404。
       if (pathname === '/api/test-handshake' && req.method === 'GET') {
         if (config.handshake && process.env.GIT_LENS_TEST_MODE === '1') {
-          let realConfigDir;
-          try {
-            realConfigDir = await fs.realpath(configDir);
-          } catch {
-            // 首次启动配置目录可能尚未创建：创建后取 realpath，保证握手返回规范路径
-            await fs.mkdir(configDir, { recursive: true });
-            realConfigDir = await fs.realpath(configDir);
-          }
           return sendJson(res, 200, {
             ok: true,
             runId: config.handshake.runId,
-            configDir: realConfigDir,
+            configDir: await resolveRealConfigDir(),
             host: actualHost,
             port: actualPort,
             pid: process.pid
@@ -542,6 +566,19 @@ export function createGitLensServer(options) {
         }
         res.writeHead(404, { 'Content-Type': 'text/plain' });
         return res.end('Not Found');
+      }
+
+      // 12. API: Git 环境诊断（契约 §7）。探测走与业务调用同一解析链的最终 git 路径，
+      // git 缺失/超时时 found:false 且 ok 仍为 true——诊断接口自身绝不能因环境损坏而 500。
+      if (pathname === '/api/diagnostics' && req.method === 'GET') {
+        const git = await getGitDiagnostics();
+        return sendJson(res, 200, {
+          ok: true,
+          git,
+          configDir: await resolveRealConfigDir(),
+          platform: process.platform,
+          node: process.version
+        });
       }
 
       // 1. API: 发现项目列表
@@ -990,9 +1027,27 @@ export function createGitLensServer(options) {
         return res.end(JSON.stringify({ ok: true, output: out }));
       }
 
+      // 静态资源白名单（UI 已将内联脚本/样式外置）：仅 pathname 精确相等命中，
+      // /app.js/、/app.js%00、/app.js/../ 等一切变形都不匹配白名单自然落入 404；
+      // 文件缺失同样 404。凭据策略与静态页一致（desktop 模式不校验 token）。
+      if (req.method === 'GET' && STATIC_FILE_WHITELIST[pathname]) {
+        const entry = STATIC_FILE_WHITELIST[pathname];
+        try {
+          const content = await fs.readFile(path.join(config.staticRoot, entry.file));
+          res.writeHead(200, {
+            'Content-Type': entry.contentType,
+            'Cache-Control': 'no-cache'
+          });
+          return res.end(content);
+        } catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain' });
+          return res.end('Not Found');
+        }
+      }
+
       // 静态首页 HTML
       if (pathname === '/' || pathname === '/index.html') {
-        const html = await fs.readFile(path.join(path.dirname(url.fileURLToPath(import.meta.url)), '../public/index.html'), 'utf-8');
+        const html = await fs.readFile(path.join(config.staticRoot, 'index.html'), 'utf-8');
         res.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
           'Cache-Control': 'no-cache, no-store, must-revalidate'

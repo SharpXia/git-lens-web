@@ -31,6 +31,26 @@ export function getGitPath() {
 }
 
 /**
+ * 探测当前生效的 git 可执行文件并读取版本，供 GET /api/diagnostics 使用（契约 §7）。
+ * 探测走模块解析链得到的最终路径（configureGitPath 显式传入 > GIT_LENS_GIT_PATH > 'git'），
+ * 与业务 git 调用完全同源——诊断结论即真实运行时依赖。
+ * 任何失败形态（ENOENT、权限不足、非零退出、超时）一律降级为 found:false，
+ * 绝不抛错，保证诊断接口本身可用（ok 恒为 true）。
+ * @param {number} [timeoutMs=5000] - git --version 的超时毫秒数，超时按未找到处理
+ * @returns {Promise<{found: boolean, path: string|null, version: string|null}>}
+ */
+export async function getGitDiagnostics(timeoutMs = 5000) {
+  try {
+    const { stdout } = await exec(gitExecutable, ['--version'], { timeout: timeoutMs, maxBuffer: 1024 * 1024 });
+    // "git version 2.50.1 (Apple Git-155)" → "2.50.1 (Apple Git-155)"；异常输出保留原文不硬解
+    const version = String(stdout).trim().replace(/^git version\s*/i, '') || null;
+    return { found: true, path: gitExecutable, version };
+  } catch {
+    return { found: false, path: null, version: null };
+  }
+}
+
+/**
  * 执行 git 命令辅助函数 (返回字符串)
  */
 async function runGit(cwd, args) {
