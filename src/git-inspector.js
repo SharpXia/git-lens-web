@@ -5,12 +5,37 @@ import fs from 'node:fs/promises';
 
 const exec = promisify(execFile);
 
+// git 可执行文件路径。解析优先级：configureGitPath 显式传入 > GIT_LENS_GIT_PATH 环境变量 > 'git'。
+// 桌面版安装包不自带 Git，macOS 图形应用的 PATH 可能找不到命令行 git，
+// 因此允许服务工厂把解析到的绝对路径注入进来，默认行为保持与原来一致。
+let gitExecutable = process.env.GIT_LENS_GIT_PATH || 'git';
+
+/**
+ * 配置本模块全部 git 调用使用的可执行文件路径。
+ * @param {string} [gitPath] - git 可执行文件路径；为空时保持当前配置不变
+ * @returns {string} 配置后的实际路径（供诊断接口展示）
+ */
+export function configureGitPath(gitPath) {
+  if (typeof gitPath === 'string' && gitPath.trim() !== '') {
+    gitExecutable = gitPath;
+  }
+  return gitExecutable;
+}
+
+/**
+ * 读取当前生效的 git 可执行文件路径。
+ * @returns {string}
+ */
+export function getGitPath() {
+  return gitExecutable;
+}
+
 /**
  * 执行 git 命令辅助函数 (返回字符串)
  */
 async function runGit(cwd, args) {
   try {
-    const { stdout } = await exec('git', args, { cwd, maxBuffer: 20 * 1024 * 1024 });
+    const { stdout } = await exec(gitExecutable, args, { cwd, maxBuffer: 20 * 1024 * 1024 });
     return stdout.trim();
   } catch (err) {
     throw new Error(`Git error in ${cwd}: ${err.message}`);
@@ -22,7 +47,7 @@ async function runGit(cwd, args) {
  */
 function runGitRaw(cwd, args) {
   return new Promise((resolve, reject) => {
-    execFile('git', args, { cwd, encoding: 'buffer', maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(gitExecutable, args, { cwd, encoding: 'buffer', maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) return reject(new Error(stderr.toString() || err.message));
       resolve(stdout);
     });
@@ -34,7 +59,7 @@ function runGitRaw(cwd, args) {
  */
 function runGitResult(cwd, args) {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(gitExecutable, args, { cwd, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 }, (err, stdout, stderr) => {
       resolve({
         ok: !err,
         stdout: stdout || '',
