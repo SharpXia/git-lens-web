@@ -6,7 +6,7 @@ import os from 'node:os';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-import { parseDesktopArgs, buildDesktopEnv } from '../scripts/qa/run-desktop.mjs';
+import { parseDesktopArgs, buildDesktopEnv } from '../scripts/qa/desktop-shared.mjs';
 
 const execFileAsync = promisify(execFile);
 const WORKTREE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
