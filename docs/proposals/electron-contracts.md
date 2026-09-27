@@ -163,3 +163,8 @@ QA 提供单一入口（G0 起为 `npm run test:isolated`；G4 前扩展 `npm ru
 - 基线提交：`main@1cc3e1f`（协调分支 2da6ca3 与其同源）。基线测试结果见 `electron-g0-baseline.md`。
 - 工具链：Node v24.21.0、git 2.50.1（Apple Git-155）、macOS 25.4.0 arm64。
 - Electron 版本在 Shell 开工时锁定并记入本文附录，lockfile 由协调分支冻结。
+
+## 12. 附录：依赖锁定与已知环境坑
+
+- **Electron 44.4.5**（2026-09-27 锁定，latest stable；升级需协调 Agent 修订本条）；electron-builder 待 Release 开工时锁定。
+- 本机 npm 启用了 install-scripts 审批，`npm ci`/`npm install` 可能跳过 electron 的 postinstall 导致二进制缺失。各 worktree 安装依赖后必须验证：`ls node_modules/electron/dist/Electron.app`（macOS）；缺失时执行 `node node_modules/electron/install.js` 手动补齐，禁止提交 node_modules。
