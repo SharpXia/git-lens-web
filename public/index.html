@@ -3079,7 +3079,7 @@
           <span class="repo-item-name">${escapeHtml(repo.name)}</span>
           <span class="repo-item-group">${escapeHtml(repo.group || '')}</span>
         </div>
-        <span class="star-icon ${isStarred ? 'starred' : ''}" title="${isStarred ? '取消收藏' : '加入星标'}" onclick="toggleStarRepo('${escapeHtml(repo.path)}', event)">
+        <span class="star-icon ${isStarred ? 'starred' : ''}" title="${isStarred ? '取消收藏' : '加入星标'}" onclick="toggleStarRepo('${escapeJsAttr(repo.path)}', event)">
           ${isStarred ? '★' : '☆'}
         </span>
       `;
@@ -3398,7 +3398,10 @@
         if (wt.isLocked) tags.push('<span class="badge">已加锁</span>');
 
         const dirName = wt.path.split('/').filter(Boolean).pop() || wt.path;
-        let lastInfo = wt.lastCommit ? `最新提交: ${wt.lastCommit.relativeTime} by ${wt.lastCommit.author} · "${wt.lastCommit.subject}"` : '';
+        // 提交人/提交说明是外部可控的 Git 元数据，必须逐字段转义后再进 HTML
+        let lastInfo = wt.lastCommit
+          ? `最新提交: ${escapeHtml(wt.lastCommit.relativeTime)} by ${escapeHtml(wt.lastCommit.author)} · "${escapeHtml(wt.lastCommit.subject)}"`
+          : '';
 
         div.innerHTML = `
           <div class="item-main">
@@ -3411,18 +3414,18 @@
             </div>
             <div class="item-path-box">
               <span class="item-path-text">${escapeHtml(wt.path)}</span>
-              <button class="copy-path-btn" onclick="copyText('${escapeHtml(wt.path)}', this)" title="复制完整路径">复制</button>
+              <button class="copy-path-btn" onclick="copyText('${escapeJsAttr(wt.path)}', this)" title="复制完整路径">复制</button>
             </div>
             ${lastInfo ? `<div class="item-desc">${lastInfo}</div>` : ''}
             ${!wt.existsOnDisk || wt.isPrunable ? '<div class="item-alert">⚠️ 该 Worktree 已损坏或可被安全 prune 清理</div>' : ''}
           </div>
           <div class="item-actions">
             <div class="item-actions-diff-group">
-              ${wt.isDirty ? `<button class="btn-outline" onclick="viewUncommittedDiff('${escapeHtml(wt.path)}')" style="color: var(--warning); border-color: rgba(210, 153, 34, 0.4);">未提交 Diff (${wt.dirtyCount})</button>` : ''}
-              ${wt.existsOnDisk ? `<button class="btn-outline" onclick="openCommitsDrawer('${escapeHtml(wt.path)}')" title="${wt.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>` : ''}
-              <button class="btn-outline" onclick="viewDiffAgainstMain('${escapeHtml(wt.path)}')">与主干对比</button>
+              ${wt.isDirty ? `<button class="btn-outline" onclick="viewUncommittedDiff('${escapeJsAttr(wt.path)}')" style="color: var(--warning); border-color: rgba(210, 153, 34, 0.4);">未提交 Diff (${wt.dirtyCount})</button>` : ''}
+              ${wt.existsOnDisk ? `<button class="btn-outline" onclick="openCommitsDrawer('${escapeJsAttr(wt.path)}')" title="${wt.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>` : ''}
+              <button class="btn-outline" onclick="viewDiffAgainstMain('${escapeJsAttr(wt.path)}')">与主干对比</button>
             </div>
-            ${!isSafeMain ? `<button class="btn-danger btn-remove-wt" id="btn-rm-wt-${encodeURIComponent(wt.path).replace(/%/g, '_')}" onclick="removeWt('${escapeHtml(wt.path)}')">移除</button>` : ''}
+            ${!isSafeMain ? `<button class="btn-danger btn-remove-wt" id="btn-rm-wt-${encodeURIComponent(wt.path).replace(/%/g, '_')}" onclick="removeWt('${escapeJsAttr(wt.path)}')">移除</button>` : ''}
           </div>
         `;
         container.appendChild(div);
@@ -3454,7 +3457,7 @@
             </div>
             <div class="item-tags">${tags.join(' ')}</div>
           </div>
-          <div class="item-desc">${b.relativeTime} 由 ${escapeHtml(b.author)} 提交: "${escapeHtml(b.subject || '-')}"</div>
+          <div class="item-desc">${escapeHtml(b.relativeTime)} 由 ${escapeHtml(b.author)} 提交: "${escapeHtml(b.subject || '-')}"</div>
           ${b.redundancyReason ? `<div class="item-alert">⚠️ ${escapeHtml(b.redundancyReason)}${b.isStaleOnly ? ' <span class="stale-delete-hint">（谨慎删除）</span>' : ''}</div>` : ''}
           ${b.historicalIntegration && b.historicalIntegration.currentDifferencePaths.length
             ? `<div class="item-desc" title="${escapeHtml(b.historicalIntegration.currentDifferencePaths.join('\n'))}">历史整合提交后仍有 ${b.historicalIntegration.currentDifferencePaths.length} 个差异文件，均可由后续主分支提交解释（悬停查看路径）。</div>`
@@ -3464,9 +3467,9 @@
             : ''}
         </div>
         <div class="item-actions">
-          <button class="btn-outline" onclick="openBranchCommitsDrawer('${escapeHtml(b.name)}')" title="${b.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>
-          ${!b.isMain ? `<button class="btn-outline" onclick="viewBranchDiffAgainstMain('${escapeHtml(b.name)}')" title="以「仅已提交」模式对比该分支与主分支（仅比较已提交内容，无 Worktree 的分支也可用）">与主分支对比</button>` : ''}
-          ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${escapeHtml(b.name)}', ${!(b.isMerged || b.deliveredViaBranch)})">删除</button>` : ''}
+          <button class="btn-outline" onclick="openBranchCommitsDrawer('${escapeJsAttr(b.name)}')" title="${b.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>
+          ${!b.isMain ? `<button class="btn-outline" onclick="viewBranchDiffAgainstMain('${escapeJsAttr(b.name)}')" title="以「仅已提交」模式对比该分支与主分支（仅比较已提交内容，无 Worktree 的分支也可用）">与主分支对比</button>` : ''}
+          ${!b.isMain && !b.inUseByWorktree ? `<button class="btn-danger" id="btn-del-br-${encodeURIComponent(b.name).replace(/%/g, '_')}" onclick="delBranch('${escapeJsAttr(b.name)}', ${!(b.isMerged || b.deliveredViaBranch)})">删除</button>` : ''}
         </div>
       `;
       return div;
@@ -3983,6 +3986,23 @@
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+    }
+
+    /**
+     * 把字符串安全嵌入「内联 onclick 等属性内的 JS 单引号字符串」：
+     * 仅 escapeHtml 不够——浏览器解码属性后 &#039; 会还原成单引号，可打断 JS 字符串造成注入
+     * （Worktree 路径中的撇号即真实触发样本）。这里先做 JS 字符串层转义
+     * （反斜杠/单引号/换行），再叠加 HTML 属性转义，形成双上下文防护。
+     * @param {string} value - 任意 Git 元数据（Worktree 路径、分支名、MR id 等）
+     * @returns {string} 可安全放入 onclick="fn('...')" 的文本
+     */
+    function escapeJsAttr(value) {
+      const js = String(value ?? '')
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/\r/g, '\\r')
+        .replace(/\n/g, '\\n');
+      return escapeHtml(js);
     }
 
     /* 格式化代码块 */
@@ -5399,7 +5419,7 @@
         return;
       }
       container.innerHTML = mergeRequestsCache.map(mr => `
-        <div class="list-item" style="cursor: pointer;" onclick="openMrDetail('${escapeHtml(String(mr.id))}')">
+        <div class="list-item" style="cursor: pointer;" onclick="openMrDetail('${escapeJsAttr(String(mr.id))}')">
           <div class="item-main">
             <div class="item-header-row">
               <div class="item-name"><span>🔀</span><span>${escapeHtml(mr.title)}</span></div>
@@ -5411,7 +5431,7 @@
             </div>
           </div>
           <div class="item-actions">
-            <button class="btn-outline" onclick="event.stopPropagation(); openMrDetail('${escapeHtml(String(mr.id))}')">查看详情</button>
+            <button class="btn-outline" onclick="event.stopPropagation(); openMrDetail('${escapeJsAttr(String(mr.id))}')">查看详情</button>
           </div>
         </div>
       `).join('');
