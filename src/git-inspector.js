@@ -1948,15 +1948,20 @@ export async function getStashList(worktreePath) {
  * - pop：git stash pop [stash@{n}]；冲突时 git 会保留该 stash，返回 409 并说明
  * - drop：git stash drop stash@{n}，stashRef 必须匹配 stash@{数字}
  * - discard：restore --staged + restore + clean -fd，丢弃全部未提交修改（含未跟踪文件），不可恢复
+ * - restore：只还原已跟踪文件的暂存与工作区修改，保留未跟踪文件
+ * - clean：只删除未跟踪文件，保留已跟踪文件的修改
  * @param {string} worktreePath - worktree 绝对路径
- * @param {string} action - 仅允许 'push' | 'pop' | 'drop' | 'discard'
+ * @param {string} action - 仅允许 'push' | 'pop' | 'drop' | 'discard' | 'restore' | 'clean'
  * @param {object} [extra]
  * @param {string} [extra.message] - push 的可选备注（禁换行/NUL、禁 '-' 开头、≤200 字符）
  * @param {string} [extra.stashRef] - pop/drop 的目标 stash 引用（格式 stash@{n}）
+ * @param {string} [extra.targetWorktree] - pop 的目标 Worktree 路径
+ * @param {string} [extra.targetBranch] - pop 的目标本地分支
+ * @param {string} [extra.newWorktreePath] - 目标分支尚无 Worktree 时新建目录的绝对路径
  * @returns {Promise<object>} { ok, action, ... }
  */
 export async function stashAction(worktreePath, action, extra = {}) {
-  if (!['push', 'pop', 'drop', 'discard'].includes(action)) {
+  if (!['push', 'pop', 'drop', 'discard', 'restore', 'clean'].includes(action)) {
     throw Object.assign(new Error('action 参数不合法'), { statusCode: 400 });
   }
   if (!worktreePath || !path.isAbsolute(worktreePath)) {
@@ -2003,18 +2008,66 @@ export async function stashAction(worktreePath, action, extra = {}) {
   }
 
   if (action === 'pop') {
+    if (extra.targetWorktree && extra.targetBranch) {
+      throw Object.assign(new Error('只能选择一个恢复目标'), { statusCode: 400 });
+    }
+    const sourceRoot = await runGit(worktreePath, ['rev-parse', '--show-toplevel']);
+    const worktrees = await getWorktrees(worktreePath);
+    let targetPath = worktreePath;
+    let createdWorktree = false;
+    if (extra.targetWorktree) {
+      if (typeof extra.targetWorktree !== 'string' || !path.isAbsolute(extra.targetWorktree)) {
+        throw Object.assign(new Error('目标 Worktree 路径必须为绝对路径'), { statusCode: 400 });
+      }
+      const targetRealPath = await toRealPathSafe(extra.targetWorktree);
+      const target = await Promise.all(worktrees.map(async wt => ({ wt, realPath: await toRealPathSafe(wt.path) })))
+        .then(entries => entries.find(entry => entry.realPath === targetRealPath)?.wt);
+      if (!target || !target.existsOnDisk || target.isPrunable) {
+        throw Object.assign(new Error('目标 Worktree 不属于当前仓库或已失联'), { statusCode: 404 });
+      }
+      targetPath = target.path;
+    } else if (extra.targetBranch) {
+      if (typeof extra.targetBranch !== 'string' || extra.targetBranch.startsWith('-') || /[\r\n\0]/.test(extra.targetBranch)) {
+        throw Object.assign(new Error('目标分支参数不合法'), { statusCode: 400 });
+      }
+      const exists = await runGitResult(worktreePath, ['show-ref', '--verify', '--quiet', `refs/heads/${extra.targetBranch}`]);
+      if (!exists.ok) throw Object.assign(new Error('目标本地分支不存在'), { statusCode: 404 });
+      const bound = worktrees.find(wt => wt.branch === extra.targetBranch && wt.existsOnDisk && !wt.isPrunable);
+      if (bound) {
+        if (extra.newWorktreePath) throw Object.assign(new Error('目标分支已有 Worktree，无需指定新目录'), { statusCode: 400 });
+        targetPath = bound.path;
+      } else {
+        const newPath = extra.newWorktreePath;
+        if (typeof newPath !== 'string' || !path.isAbsolute(newPath) || newPath === path.parse(newPath).root) {
+          throw Object.assign(new Error('未绑定的分支需要指定新 Worktree 的绝对目录'), { statusCode: 400 });
+        }
+        const existing = await fs.stat(newPath).then(() => true, () => false);
+        if (existing) throw Object.assign(new Error('新 Worktree 目录已存在，请选择不存在的目录'), { statusCode: 409 });
+        try {
+          await runGit(sourceRoot, ['worktree', 'add', newPath, extra.targetBranch]);
+        } catch (err) {
+          throw Object.assign(new Error(`创建目标 Worktree 失败：${summarizeGitFailure(err.message)}`), { statusCode: 409 });
+        }
+        targetPath = newPath;
+        createdWorktree = true;
+      }
+    }
+    if (!createdWorktree) {
+      const dirty = await runGit(targetPath, ['status', '--porcelain']);
+      if (dirty) throw Object.assign(new Error('目标 Worktree 存在未提交修改，请先处理后再恢复 Stash'), { statusCode: 409 });
+    }
     const args = ['stash', 'pop'];
     if (extra.stashRef) args.push(extra.stashRef);
     try {
-      await runGit(worktreePath, args);
+      await runGit(targetPath, args);
     } catch (err) {
       // pop 冲突时 git 不会删除该 stash，现场保留在冲突状态由用户解决
       throw Object.assign(
-        new Error(`Stash pop 失败（发生冲突时该 stash 仍会保留在列表中，可手工解决后再 drop）：${summarizeGitFailure(err.message)}`),
+        new Error(`Stash pop 失败，目标 Worktree：${targetPath}。该 stash 仍会保留；若发生冲突，请在目标 Worktree 解决：${summarizeGitFailure(err.message)}`),
         { statusCode: 409 }
       );
     }
-    return { ok: true, action };
+    return { ok: true, action, targetWorktree: targetPath, createdWorktree };
   }
 
   if (action === 'drop') {
@@ -2029,9 +2082,11 @@ export async function stashAction(worktreePath, action, extra = {}) {
     return { ok: true, action };
   }
 
-  // discard：不可恢复，前端必须二次确认后才允许触发
-  await runGit(worktreePath, ['restore', '--staged', '.']);
-  await runGit(worktreePath, ['restore', '.']);
-  await runGit(worktreePath, ['clean', '-fd']);
+  // 三种清理范围分开执行，避免仅想还原已跟踪修改时误删未跟踪文件。
+  if (action === 'discard' || action === 'restore') {
+    await runGit(worktreePath, ['restore', '--staged', '.']);
+    await runGit(worktreePath, ['restore', '.']);
+  }
+  if (action === 'discard' || action === 'clean') await runGit(worktreePath, ['clean', '-fd']);
   return { ok: true, action };
 }

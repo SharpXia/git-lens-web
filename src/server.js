@@ -519,13 +519,12 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // 11.2 API: 对指定 Worktree 执行 stash 写操作（push/pop/drop/discard）。
-    // 请求体 { worktree, action, message?, stashRef? }；校验与 commitAction 同样收敛在
-    // stashAction 内，discard 为不可恢复操作，前端必须二次确认后才调用。
+    // 11.2 API: 对指定 Worktree 执行 stash 与未提交修改操作。
+    // pop 可另选同仓库的目标 Worktree 或分支；未绑定的分支需指定新 Worktree 目录。
     if (pathname === '/api/stash-action' && req.method === 'POST') {
-      const { worktree, action, message, stashRef } = await readJson();
+      const { worktree, action, message, stashRef, targetWorktree, targetBranch, newWorktreePath } = await readJson();
       try {
-        const result = await stashAction(worktree, action, { message, stashRef });
+        const result = await stashAction(worktree, action, { message, stashRef, targetWorktree, targetBranch, newWorktreePath });
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         return res.end(JSON.stringify(result));
       } catch (err) {
