@@ -400,7 +400,7 @@ async function main() {
     console.log('1. 应用菜单：刷新(Cmd+R)、返回/前进、缩放(Cmd+=/-/0)、复制/粘贴、帮助(关于/复制诊断信息) 均生效且作用于页面；');
     console.log('2. 「帮助 → 复制诊断信息」剪贴板内容完整（含 git 版本与服务状态）；');
     console.log('3. 原生目录选择对话框（页面添加扫描目录 / window.gitLens.chooseDirectory()）可选目录、取消返回空；');
-    console.log('4. 服务崩溃恢复页中文文案、倒计时与「退出应用」按钮表现；');
+    console.log('4. 服务崩溃恢复遮罩：深色中文文案、倒计时与「退出应用」按钮表现；恢复期间应用文档不导航（sessionStorage 保留），重启后同端口 reload；');
     console.log('5. 窗口拖动/缩放后重开位置尺寸恢复；外接显示器拔除后窗口自动回到可见区域；');
     console.log('6. 页面内外链点击经系统浏览器打开且不产生新应用窗口；');
     console.log('7. 未设置 GIT_LENS_DEVTOOLS 时 F12/Cmd+Shift+I 不唤起 devtools；设置后可用。');
