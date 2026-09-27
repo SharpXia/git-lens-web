@@ -65,6 +65,27 @@ const GIT_SEARCH_DIRS = {
 // 应用名先于任何窗口/菜单创建设置，macOS 菜单栏与 userData 默认名都依赖它
 app.setName('Git Lens Web');
 
+// ---- E2E 钩子（契约 §13）：全部可选，生产用户不设置时零影响 ----
+// GIT_LENS_USER_DATA 必须先于任何 userData 读写重定向，因此固定放在模块顶部；
+// 就绪文件/token 文件路径在此只做解析，实际写入发生在服务就绪之后。
+
+const e2eUserDataDir = process.env.GIT_LENS_USER_DATA
+  ? path.resolve(process.env.GIT_LENS_USER_DATA)
+  : null;
+if (e2eUserDataDir) {
+  app.setPath('userData', e2eUserDataDir);
+}
+
+const e2eReadyFile = process.env.GIT_LENS_E2E_READY_FILE
+  ? path.resolve(process.env.GIT_LENS_E2E_READY_FILE)
+  : null;
+
+// 测试专用：把会话凭据写入该文件供 E2E 启动器发起带凭据请求（冻结契约暂未包含，
+// 属 Shell 提议的补充钩子，见交付报告；不设置时完全无影响）
+const e2eTokenFile = process.env.GIT_LENS_E2E_TOKEN_FILE
+  ? path.resolve(process.env.GIT_LENS_E2E_TOKEN_FILE)
+  : null;
+
 // ---- 运行期状态 ----
 
 /** 仅存主进程的本地 API 会话凭据（契约 §4.6：crypto 随机 ≥32 字节，不暴露给页面） */
@@ -138,6 +159,41 @@ function broadcastServiceState() {
     if (!win.isDestroyed()) {
       win.webContents.send('git-lens:service-state', rendererServiceState());
     }
+  }
+}
+
+// ---- E2E 就绪文件写入（契约 §13） ----
+
+/**
+ * 原子写入文本文件：先写同目录临时文件再 rename 替换。
+ * @param {string} filePath - 目标文件路径
+ * @param {string} content - 写入内容
+ */
+async function atomicWriteFile(filePath, content) {
+  const tmpPath = `${filePath}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+  await fsp.writeFile(tmpPath, content, 'utf-8');
+  await fsp.rename(tmpPath, filePath);
+}
+
+/**
+ * 写 E2E 就绪文件：`{port, servicePid, mainPid, runId}`，
+ * 服务重启成功重写（恢复基础形态），服务退出时并入 `"state":"crashed"`。
+ * 未设置 GIT_LENS_E2E_READY_FILE 时不产生任何文件。
+ * @param {{state?: string}} [extra] - 并入的额外字段（如崩溃状态）
+ */
+async function writeE2eReadyFile(extra = {}) {
+  if (!e2eReadyFile) return;
+  const payload = {
+    port: servicePort,
+    servicePid,
+    mainPid: process.pid,
+    runId: process.env.GIT_LENS_TEST_RUN_ID || null,
+    ...extra,
+  };
+  try {
+    await atomicWriteFile(e2eReadyFile, `${JSON.stringify(payload, null, 2)}\n`);
+  } catch (err) {
+    log(`写入 E2E 就绪文件失败：${err.message}`);
   }
 }
 
@@ -280,6 +336,8 @@ function onServiceReady(message) {
   } else {
     // 重启成功：窗口当前展示恢复页，直接加载（可能已变化的）新端口应用页
     loadAppIntoMainWindow();
+    // 契约 §13：服务重启成功后按基础形态重写就绪文件
+    void writeE2eReadyFile();
   }
 }
 
@@ -306,6 +364,8 @@ function onServiceExit(child, exitCode) {
 function scheduleRestart() {
   const reason = lastServiceFailure || '服务进程意外退出';
   lastServiceFailure = null;
+  // 契约 §13：服务退出即并入 state:crashed 重写就绪文件（重启成功后会被基础形态覆盖）
+  void writeE2eReadyFile({ state: 'crashed' });
   if (restartAttempts >= SERVICE_RESTART_MAX_ATTEMPTS) {
     serviceState = 'crashed';
     broadcastServiceState();
@@ -480,6 +540,14 @@ function attachWindowGuards(win) {
   webContents.on('before-input-event', (event, input) => {
     if (process.env.GIT_LENS_DEVTOOLS === '1') return;
     if (isDevtoolsShortcut(input)) event.preventDefault();
+  });
+
+  // 应用页面首次加载完成：记录标记（区分首启与重启恢复）并按契约 §13
+  // 在「服务就绪且窗口完成首次加载」后写入就绪文件
+  webContents.on('did-finish-load', () => {
+    if (!isSameOriginAppUrl(webContents.getURL())) return;
+    appEverLoaded = true;
+    void writeE2eReadyFile();
   });
 }
 
@@ -832,6 +900,15 @@ function registerIpc() {
  * Git 发现不阻塞服务启动，仅影响诊断展示。
  */
 async function bootstrap() {
+  // 测试专用：会话凭据落盘供 E2E 启动器核验（未设置 GIT_LENS_E2E_TOKEN_FILE 时跳过）
+  if (e2eTokenFile) {
+    try {
+      await atomicWriteFile(e2eTokenFile, `${sessionToken}\n`);
+    } catch (err) {
+      log(`写入 E2E 凭据文件失败：${err.message}`);
+    }
+  }
+
   gitInfo = await discoverGit();
   if (!gitInfo.found) {
     log('未找到可用的 git 可执行文件，仓库分析功能不可用；可在窗口内查看修复建议');
