@@ -289,7 +289,8 @@ function startService() {
   port1.start();
   serviceDialogPort = port1;
   child.postMessage({ type: 'dialog-port' }, [port2]);
-  log(`已启动服务子进程（pid ${child.pid}）`);
+  // fork 返回时 child.pid 可能尚未就绪，真实 pid 以 ready 消息回传为准
+  log('已启动服务子进程');
 }
 
 /**
