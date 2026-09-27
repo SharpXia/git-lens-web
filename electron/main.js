@@ -148,6 +148,11 @@ function appOrigin() {
   return `http://127.0.0.1:${servicePort}`;
 }
 
+/** 当前应用页面地址（加载与同源判断统一走这里） */
+function appUrl() {
+  return `${appOrigin()}/`;
+}
+
 /** 渲染层可见的服务状态（契约 §6 只有四种取值） */
 function rendererServiceState() {
   return serviceState === 'starting' ? 'restarting' : serviceState;
@@ -295,7 +300,10 @@ function startService() {
 function onServiceMessage(child, message) {
   // 旧进程的迟到消息一律忽略，避免干扰新监督周期
   if (child !== serviceProcess || !message || typeof message !== 'object') return;
-  switch (message.type) {
+  // 实测 Electron 会静默吞掉消息回调里的异常（如引用错误），
+  // 必须自行兜底记录，否则窗口创建等关键路径故障无任何痕迹
+  try {
+    switch (message.type) {
     case 'ready':
       onServiceReady(message);
       break;
@@ -314,6 +322,9 @@ function onServiceMessage(child, message) {
       break;
     default:
       break;
+    }
+  } catch (err) {
+    log(`处理服务消息 ${message.type} 时发生异常：${err && err.stack ? err.stack : err}`);
   }
 }
 
@@ -548,6 +559,16 @@ function attachWindowGuards(win) {
     if (!isSameOriginAppUrl(webContents.getURL())) return;
     appEverLoaded = true;
     void writeE2eReadyFile();
+  });
+
+  // 加载失败与渲染进程异常退出必须有日志，否则恢复页之外的问题无从排查
+  webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    // -3 (ABORTED) 是导航被取消的正常噪音（如加载中途切换页面）
+    if (errorCode === -3) return;
+    log(`页面加载失败（${errorDescription}，code ${errorCode}）：${validatedURL}`);
+  });
+  webContents.on('render-process-gone', (_event, details) => {
+    log(`渲染进程异常退出：${details.reason}`);
   });
 }
 
