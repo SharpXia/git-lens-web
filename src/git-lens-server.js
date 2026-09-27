@@ -42,38 +42,11 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-/** JSON 请求体默认字节上限：2MB，与契约 §4 请求体限制一致 */
+/** JSON 请求体默认字节上限：2MB，与契约 §2.1 保持一致 */
 const DEFAULT_REQUEST_BODY_LIMIT = 2 * 1024 * 1024;
 
 /** 关闭服务时等待在途请求的最长时间，超时后强制销毁全部连接 */
 const CLOSE_GRACE_PERIOD_MS = 3000;
-
-/**
- * 构造带 statusCode 的错误对象，供顶层统一按状态码返回中文错误。
- * @param {string} message - 中文错误信息
- * @param {number} statusCode - HTTP 状态码
- * @returns {Error}
- */
-function httpError(message, statusCode) {
-  return Object.assign(new Error(message), { statusCode });
-}
-
-/**
- * 以常数时间比较两个会话凭据字符串，避免逐字节比较造成的时序侧信道。
- * @param {string} actual - 请求携带的凭据
- * @param {string} expected - 服务实例持有的凭据
- * @returns {boolean} 两者一致时返回 true
- */
-function timingSafeEqual(actual, expected) {
-  const a = Buffer.from(String(actual), 'utf-8');
-  const b = Buffer.from(String(expected), 'utf-8');
-  if (a.length !== b.length) {
-    // 长度不同时仍执行一次比较，保持耗时与命中场景接近
-    crypto.timingSafeEqual(b, b);
-    return false;
-  }
-  return crypto.timingSafeEqual(a, b);
-}
 
 /**
  * 调用服务所在电脑的系统目录选择器，取消选择时返回 null。
@@ -195,6 +168,33 @@ async function removeWorktreeWithBranch(repoPath, worktreePath, force, branchNam
 }
 
 /**
+ * 构造带 statusCode 的错误对象，供顶层统一按状态码返回中文错误。
+ * @param {string} message - 中文错误信息
+ * @param {number} statusCode - HTTP 状态码
+ * @returns {Error}
+ */
+function httpError(message, statusCode) {
+  return Object.assign(new Error(message), { statusCode });
+}
+
+/**
+ * 以常数时间比较两个会话凭据字符串，避免逐字节比较造成的时序侧信道。
+ * @param {string} actual - 请求携带的凭据
+ * @param {string} expected - 服务实例持有的凭据
+ * @returns {boolean} 两者一致时返回 true
+ */
+function timingSafeEqual(actual, expected) {
+  const a = Buffer.from(String(actual), 'utf-8');
+  const b = Buffer.from(String(expected), 'utf-8');
+  if (a.length !== b.length) {
+    // 长度不同时仍执行一次比较，保持耗时与命中场景接近
+    crypto.timingSafeEqual(b, b);
+    return false;
+  }
+  return crypto.timingSafeEqual(a, b);
+}
+
+/**
  * 校验工厂参数并填充默认值。
  * @param {object} options - createGitLensServer 的原始参数
  * @returns {object} 归一化后的配置
@@ -230,6 +230,11 @@ function normalizeOptions(options) {
     throw new TypeError(`创建 Git Lens 服务失败：requestBodyLimit 必须为正整数，收到「${options.requestBodyLimit}」`);
   }
 
+  const handshake = options.handshake && typeof options.handshake === 'object' ? options.handshake : null;
+  if (handshake && (typeof handshake.runId !== 'string' || handshake.runId === '')) {
+    throw new TypeError('创建 Git Lens 服务失败：handshake.runId 必须为非空字符串');
+  }
+
   return {
     configDir,
     host: options.host || '127.0.0.1',
@@ -237,7 +242,9 @@ function normalizeOptions(options) {
     mode,
     sessionToken,
     chooseScanDirectory: typeof options.chooseScanDirectory === 'function' ? options.chooseScanDirectory : chooseScanDirectory,
-    requestBodyLimit
+    requestBodyLimit,
+    handshake,
+    log: typeof options.log === 'function' ? options.log : null
   };
 }
 
@@ -253,6 +260,7 @@ function normalizeOptions(options) {
  * @param {() => Promise<string|null>} [options.chooseScanDirectory] 覆盖目录选择器；缺省用系统对话框实现
  * @param {string}  [options.gitPath]             git 可执行文件路径；缺省取 GIT_LENS_GIT_PATH，再缺省 'git'
  * @param {number}  [options.requestBodyLimit=2*1024*1024] JSON 请求体字节上限
+ * @param {{ runId: string }} [options.handshake] 提供时启用 GET /api/test-handshake（仅测试注入）
  * @param {(level: 'info'|'warn'|'error', message: string) => void} [options.log]
  * @returns {{ server: http.Server, ready: Promise<{host: string, port: number}>, close: () => Promise<void> }}
  */
@@ -348,7 +356,7 @@ export function createGitLensServer(options) {
   }
 
   /**
-   * 发送 JSON 响应（统一 charset）。
+   * 发送 JSON 响应（统一中文错误文案与 charset）。
    * @param {http.ServerResponse} res
    * @param {number} statusCode
    * @param {object} payload
@@ -421,7 +429,7 @@ export function createGitLensServer(options) {
   }
 
   /**
-   * 逐请求入口：先执行访问边界校验（Host/Origin/会话凭据/请求体类型，契约 §4），
+   * 逐请求入口：先执行访问边界校验（Host/Origin/会话凭据/请求体类型），
    * 再进入既有路由。所有拒绝路径返回中文错误。
    * @param {http.IncomingMessage} req
    * @param {http.ServerResponse} res
@@ -448,7 +456,7 @@ export function createGitLensServer(options) {
       return sendJson(res, 403, { ok: false, error: '拒绝访问：请求来源不在本机允许列表内' });
     }
 
-    // 3. CORS 收紧：移除 Access-Control-Allow-Origin: *，不再向普通响应发送 CORS 头。
+    // 3. CORS 收紧：不再发送 Access-Control-Allow-Origin: *。
     //    预检仅对本机同源来源放行（此时 originAllowed 为真），其余已被上面的 Origin 校验拒绝。
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
@@ -474,11 +482,9 @@ export function createGitLensServer(options) {
     //    Content-Type（同源简单请求），仅在显式提供了非 JSON 的 Content-Type 时拒绝。
     if (req.method === 'POST' && pathname.startsWith('/api/')) {
       const contentType = String(req.headers['content-type'] || '').trim().toLowerCase();
+      const isJson = contentType === '' || contentType.startsWith('application/json');
       const isDialogEndpoint = pathname === '/api/choose-scan-directory';
-      const typeRejected = isDialogEndpoint
-        ? (contentType !== '' && !contentType.startsWith('application/json'))
-        : (contentType === '' || !contentType.startsWith('application/json'));
-      if (typeRejected) {
+      if (isDialogEndpoint ? (contentType !== '' && !contentType.startsWith('application/json')) : !isJson) {
         return sendJson(res, 415, { ok: false, error: '不支持的请求格式：Content-Type 必须为 application/json' });
       }
     }
@@ -512,6 +518,31 @@ export function createGitLensServer(options) {
         });
         req.on('error', reject);
       });
+
+      // 测试模式握手接口：两个条件（测试模式环境变量 + 工厂注入 runId）缺一不可，
+      // 生产实例不可探测；不满足时按未知路径处理返回 404。
+      if (pathname === '/api/test-handshake' && req.method === 'GET') {
+        if (config.handshake && process.env.GIT_LENS_TEST_MODE === '1') {
+          let realConfigDir;
+          try {
+            realConfigDir = await fs.realpath(configDir);
+          } catch {
+            // 首次启动配置目录可能尚未创建：创建后取 realpath，保证握手返回规范路径
+            await fs.mkdir(configDir, { recursive: true });
+            realConfigDir = await fs.realpath(configDir);
+          }
+          return sendJson(res, 200, {
+            ok: true,
+            runId: config.handshake.runId,
+            configDir: realConfigDir,
+            host: actualHost,
+            port: actualPort,
+            pid: process.pid
+          });
+        }
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        return res.end('Not Found');
+      }
 
       // 1. API: 发现项目列表
       if (pathname === '/api/projects' && req.method === 'GET') {
@@ -597,8 +628,7 @@ export function createGitLensServer(options) {
         return sendJson(res, 200, { ok: true, ...config });
       }
 
-      // 系统对话框只接受本机页面的调用（Origin 已在全局边界校验中限制，
-      // 原 /api/choose-scan-directory 的单独 Origin 判断并入全局后删除）。
+      // 系统对话框只接受本机页面的调用（Origin 已在全局边界校验中限制）。
       if (pathname === '/api/choose-scan-directory' && req.method === 'POST') {
         const directory = await config.chooseScanDirectory();
         return sendJson(res, 200, { ok: true, directory });
