@@ -1,17 +1,27 @@
 #!/usr/bin/env node
 /**
- * verify-mr-branch-diff.mjs —— 本地 MR + Branch Diff 的 HTTP 集成验证脚本
+ * verify-mr-branch-diff.mjs —— 本地 MR + Branch Diff 的 HTTP 集成验证脚本（fail-closed 版）
  *
  * 用法:
- *   node scripts/verify-mr-branch-diff.mjs --base-url http://127.0.0.1:9529 \
- *        --config-dir /tmp/glwt-verify-config --stage <full|mr|diff|compat>
+ *   node scripts/verify-mr-branch-diff.mjs --base-url http://127.0.0.1:9530 \
+ *        --config-dir /tmp/glwt-verify-config --run-id <run-id> [--stage <full|mr|diff|compat>]
  *
  * 前置条件:
- *   1. 被测服务已启动，且 GIT_LENS_CONFIG_DIR 必须与 --config-dir 指向同一目录，例如:
- *        PORT=9529 GIT_LENS_CONFIG_DIR=/tmp/glwt-verify-config node src/server.js
+ *   1. 被测服务必须以测试模式启动且实现 /api/test-handshake 握手接口（契约 §3），例如:
+ *        PORT=9530 GIT_LENS_CONFIG_DIR=/tmp/glwt-verify-config \
+ *        GIT_LENS_TEST_MODE=1 GIT_LENS_TEST_RUN_ID=<run-id> node src/server.js
+ *      --run-id 必须与服务进程的 GIT_LENS_TEST_RUN_ID 完全一致。
  *   2. STAGE=mr/diff 依赖服务端已实现 /api/merge-requests* 与 /api/diff-refs 契约；
  *      在未合入新接口的基线（如 main）上运行时这两个阶段会失败并在 404 处给出
  *      「该接口尚未在当前基线实现」提示，属预期现象。STAGE=compat 在基线上即可全绿。
+ *
+ * fail-closed 守卫（契约 §8.2/§8.3，校验逻辑见 scripts/qa/guard.mjs）:
+ *   - 任何业务请求之前必须先 GET /api/test-handshake 并核对 runId 与 configDir（realpath）
+ *     完全一致；404 视为「Runtime 契约未就绪」，脚本直接失败并给出指引。
+ *   - --base-url 仅接受 http://127.0.0.1:<端口> 字面形态（端口不得为 9527）；拒绝 localhost
+ *     等域名形式、其他主机名、路径、查询、hash、凭据与尾斜杠。
+ *   - --config-dir 必须显式提供且真实存在，其 realpath 不得位于 $HOME/.config/git-lens-web 下。
+ *   - 未通过以上任一守卫时，在任何 HTTP 请求与 fixture 写入之前即失败退出。
  *
  * 隔离与清理策略:
  *   - fixture 仓库构建在系统临时目录的 mkdtemp 私有目录下，脚本退出时整体删除；
@@ -30,7 +40,14 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import {
+  GUARD_ERROR_CODES,
+  assertPathNotUnderRealConfig,
+  parseAndValidateBaseUrl,
+  performHandshake
+} from './qa/guard.mjs';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_SCRIPT = path.join(SCRIPT_DIR, 'mr-diff-fixture.sh');
@@ -39,20 +56,24 @@ const STAGES = ['full', 'mr', 'diff', 'compat'];
 
 // ---------- 参数解析 ----------
 
-function printUsage() {
-  console.log(`用法: node scripts/verify-mr-branch-diff.mjs --base-url <url> [--config-dir <dir>] [--stage <full|mr|diff|compat>]
+/** 打印用法说明（导出仅为单测可见性，不承载逻辑） */
+export function printUsage() {
+  console.log(`用法: node scripts/verify-mr-branch-diff.mjs --base-url <url> --config-dir <dir> --run-id <run-id> [--stage <full|mr|diff|compat>]
 
-  --base-url    被测服务地址（必填），如 http://127.0.0.1:9529
-  --config-dir  服务的 GIT_LENS_CONFIG_DIR（mr/full 阶段必填），如 /tmp/glwt-verify-config
+  --base-url    被测服务地址（必填），仅接受 http://127.0.0.1:<端口> 字面形态，端口不得为 9527
+  --config-dir  服务的 GIT_LENS_CONFIG_DIR（必填），必须已存在且不在 \$HOME/.config/git-lens-web 下
+  --run-id      本轮测试运行 ID（必填），必须与服务进程的 GIT_LENS_TEST_RUN_ID 完全一致
   --stage       full=全部 | mr=MR 全链路 | diff=Branch Diff | compat=既有接口回归（默认 full）
 
 示例:
-  PORT=9529 GIT_LENS_CONFIG_DIR=/tmp/glwt-verify-config node src/server.js &
-  node scripts/verify-mr-branch-diff.mjs --base-url http://127.0.0.1:9529 \\
-       --config-dir /tmp/glwt-verify-config --stage full`);
+  PORT=9530 GIT_LENS_CONFIG_DIR=/tmp/glwt-verify-config \\
+    GIT_LENS_TEST_MODE=1 GIT_LENS_TEST_RUN_ID=qa-demo node src/server.js &
+  node scripts/verify-mr-branch-diff.mjs --base-url http://127.0.0.1:9530 \\
+       --config-dir /tmp/glwt-verify-config --run-id qa-demo --stage full`);
 }
 
-function parseArgs(argv) {
+/** 解析命令行参数（导出供单测复用；不做 fail-closed 校验，校验见 validateInvocation） */
+export function parseArgs(argv) {
   const args = { stage: 'full' };
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
@@ -62,6 +83,9 @@ function parseArgs(argv) {
         break;
       case '--config-dir':
         args.configDir = argv[++i];
+        break;
+      case '--run-id':
+        args.runId = argv[++i];
         break;
       case '--stage':
         args.stage = argv[++i];
@@ -75,6 +99,42 @@ function parseArgs(argv) {
     }
   }
   return args;
+}
+
+// ---------- 调用参数 fail-closed 校验（导出供单测复用） ----------
+
+/**
+ * 校验一次调用的参数组合（不发起网络请求）。
+ * @param {{ baseUrl?: string, configDir?: string, runId?: string, stage?: string }} args parseArgs 的结果
+ * @param {{ home?: string }} [options] home 注入点，仅供单测使用；缺省取 os.homedir()
+ * @returns {Promise<{ baseUrl: string, configDir: string, runId: string, stage: string }>}
+ *   baseUrl 为规范化后的地址；configDir 为 realpath 后的配置目录
+ */
+export async function validateInvocation(args, { home = os.homedir() } = {}) {
+  if (!args || !args.baseUrl) {
+    throw new Error('缺少 --base-url 参数');
+  }
+  if (!args.runId) {
+    throw new Error('缺少 --run-id 参数（必须与被测服务的 GIT_LENS_TEST_RUN_ID 完全一致）');
+  }
+  if (!args.configDir) {
+    throw new Error('缺少 --config-dir 参数（fail-closed：必须显式提供，且与服务 GIT_LENS_CONFIG_DIR 指向同一目录）');
+  }
+
+  // 地址白名单：只认 127.0.0.1 字面量 + 非 9527 端口，其余形态在解析阶段即拒绝
+  const { baseUrl } = parseAndValidateBaseUrl(args.baseUrl);
+
+  if (!path.isAbsolute(args.configDir)) {
+    throw new Error(`--config-dir 必须是绝对路径，实际: ${args.configDir}`);
+  }
+  const stat = await fs.promises.stat(args.configDir).catch(() => null);
+  if (!stat || !stat.isDirectory()) {
+    throw new Error(`--config-dir 不存在或不是目录（fail-closed 拒绝）: ${args.configDir}`);
+  }
+  // 真实配置保护：realpath 落在 $HOME/.config/git-lens-web 下（含经符号链接抵达）一律拒绝
+  const realConfigDir = await assertPathNotUnderRealConfig(args.configDir, { home });
+
+  return { baseUrl, configDir: realConfigDir, runId: args.runId, stage: args.stage || 'full' };
 }
 
 // ---------- 断言与 HTTP 工具 ----------
@@ -625,38 +685,42 @@ async function main() {
     printUsage();
     process.exit(0);
   }
-  if (!args.baseUrl) {
-    console.error('缺少 --base-url 参数\n');
-    printUsage();
-    process.exit(1);
-  }
   if (!STAGES.includes(args.stage)) {
     console.error(`--stage 仅支持 ${STAGES.join(' | ')}，实际: ${args.stage}\n`);
     process.exit(1);
   }
-  if ((args.stage === 'mr' || args.stage === 'full') && !args.configDir) {
-    console.error('STAGE=mr/full 需要显式指定 --config-dir（用于 MR 配置隔离断言，须与服务 GIT_LENS_CONFIG_DIR 一致）\n');
-    process.exit(1);
-  }
-  const baseUrl = args.baseUrl.replace(/\/+$/, '');
 
-  // 1. 启动自检：服务必须可达
-  let selfCheck;
+  // fail-closed 第 1 步：参数与地址白名单校验（不发起任何网络请求、不写任何文件）
+  let invocation;
   try {
-    selfCheck = await requestJson(baseUrl, '/api/projects');
+    invocation = await validateInvocation(args);
   } catch (err) {
-    console.error(`✗ 启动自检失败：无法访问 ${baseUrl}/api/projects（${err.message}）。`);
-    console.error('  请先启动被测服务，例如:');
-    console.error('  PORT=9529 GIT_LENS_CONFIG_DIR=/tmp/glwt-verify-config node src/server.js');
+    console.error(`✗ 参数校验失败：${err.message}\n`);
+    printUsage();
     process.exit(1);
   }
-  if (selfCheck.status !== 200 || selfCheck.body?.ok !== true) {
-    console.error(`✗ 启动自检失败：/api/projects 返回 HTTP ${selfCheck.status}，服务未就绪。`);
-    process.exit(1);
-  }
-  console.log(`✓ 启动自检通过：${baseUrl}/api/projects 可达`);
+  const { baseUrl, configDir, runId } = invocation;
+  console.log(`✓ 参数校验通过：base-url=${baseUrl} config-dir=${configDir} run-id=${runId}`);
 
-  // 2. 构建 fixture 并注册扫描目录（compat 阶段只用本地路径，无需注册）
+  // fail-closed 第 2 步：握手优先于一切业务请求（契约 §8.3）；/api/projects 成功不构成身份验证
+  try {
+    const handshake = await performHandshake(baseUrl, { runId, configDir });
+    console.log(`✓ 握手通过：runId=${handshake.runId} configDir=${handshake.configDir} port=${handshake.port} pid=${handshake.pid}`);
+  } catch (err) {
+    if (err && err.code === GUARD_ERROR_CODES.HANDSHAKE_NOT_READY) {
+      console.error(`✗ ${err.message}`);
+      console.error('  本脚本已改为 fail-closed 版本（契约 §8.3），握手接口可用前禁止用于桌面版验收。');
+      console.error('  守卫负向用例不依赖服务，可直接运行: node --test test/verify-guard.test.mjs test/qa-guard.test.mjs');
+    } else {
+      console.error(`✗ 握手失败：${err.message}`);
+      console.error('  请以测试模式启动被测服务，例如:');
+      console.error('  PORT=9530 GIT_LENS_CONFIG_DIR=/tmp/glwt-verify-config GIT_LENS_TEST_MODE=1 \\');
+      console.error('  GIT_LENS_TEST_RUN_ID=<run-id> node src/server.js');
+    }
+    process.exit(1);
+  }
+
+  // 握手通过后才允许构建 fixture 并发起业务请求
   let fixture;
   try {
     fixture = buildFixture();
@@ -666,7 +730,7 @@ async function main() {
   }
   console.log(`✓ fixture 构建完成：${fixture.repo}`);
 
-  const ctx = { baseUrl, configDir: args.configDir, fixture };
+  const ctx = { baseUrl, configDir, runId, fixture };
   try {
     if (args.stage !== 'compat') {
       await registerScanDirectory(baseUrl, fixture.repo);
@@ -682,10 +746,14 @@ async function main() {
   process.exit(stats.failed > 0 ? 1 : 0);
 }
 
-process.on('exit', cleanupFixture);
-process.on('unhandledRejection', (err) => {
-  console.error(`✗ 未捕获的异步错误: ${err?.message || err}`);
-  process.exit(1);
-});
-
-main();
+// 仅在直接执行本脚本时安装进程钩子并启动主流程；被单测 import 时保持零副作用，
+// 否则 unhandledRejection 钩子会干扰 node --test 的失败上报
+const isDirectRun = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isDirectRun) {
+  process.on('exit', cleanupFixture);
+  process.on('unhandledRejection', (err) => {
+    console.error(`✗ 未捕获的异步错误: ${err?.message || err}`);
+    process.exit(1);
+  });
+  main();
+}
