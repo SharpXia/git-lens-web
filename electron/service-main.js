@@ -114,6 +114,19 @@ parentPort.on('message', (event) => {
 });
 
 /**
+ * 解析主进程注入的偏好端口（崩溃重启时复用原端口，保证页面同源 reload，
+ * sessionStorage 不因跨源导航丢失——DEF-002 修复的一部分）。
+ * 非法值一律忽略并回退随机端口。
+ * @param {string|undefined} value - GIT_LENS_DESKTOP_PREFERRED_PORT 环境变量
+ * @returns {number|null}
+ */
+function parsePreferredPort(value) {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return null;
+  return port;
+}
+
+/**
  * 读取环境并启动服务工厂。
  * handshake 仅在 GIT_LENS_TEST_MODE=1 且提供 runId 时注入（契约 §3，
  * 双条件缺一不可，生产实例不可探测）。
@@ -125,10 +138,10 @@ async function main() {
   if (!sessionToken) throw new Error('服务子进程缺少 GIT_LENS_SESSION_TOKEN 环境变量，desktop 模式必须提供会话凭据');
 
   const testRunId = process.env.GIT_LENS_TEST_MODE === '1' ? (process.env.GIT_LENS_TEST_RUN_ID || '') : '';
-  const instance = createGitLensServer({
+  const factoryOptions = (port) => ({
     configDir,
     host: '127.0.0.1',
-    port: 0,
+    port,
     mode: 'desktop',
     sessionToken,
     chooseScanDirectory: chooseDirectoryViaBridge,
@@ -136,6 +149,22 @@ async function main() {
     // 服务日志统一转交主进程输出，便于打包后归集到诊断信息
     log: (level, message) => send({ type: 'log', level, message }),
   });
+
+  // 优先复用崩溃前的端口；被其他进程抢占（或复用失败）时回退系统分配随机端口
+  const preferredPort = parsePreferredPort(process.env.GIT_LENS_DESKTOP_PREFERRED_PORT);
+  if (preferredPort && preferredPort !== 9527) {
+    try {
+      const preferred = createGitLensServer(factoryOptions(preferredPort));
+      const address = await preferred.ready;
+      server = preferred;
+      send({ type: 'ready', host: address.host, port: address.port, pid: process.pid });
+      return;
+    } catch (err) {
+      send({ type: 'log', level: 'warn', message: `复用原端口 ${preferredPort} 失败（${err && err.message ? err.message : err}），回退系统分配端口` });
+    }
+  }
+
+  const instance = createGitLensServer(factoryOptions(0));
   server = instance;
 
   const { host, port } = await instance.ready;
