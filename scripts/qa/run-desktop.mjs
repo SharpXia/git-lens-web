@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 /**
- * run-desktop.mjs —— 桌面端隔离 E2E 快速冒烟入口（契约 §8.3/§13，`npm run test:desktop:isolated`）
+ * run-desktop.mjs —— 桌面端隔离 E2E 快速冒烟入口（契约 §8.3/§13/§15，`npm run test:desktop:isolated`）
  *
- * 流程：mkdtemp qa-root → fixture → 预写扫描目录配置 → 注入 E2E 钩子环境启动应用 →
- * 就绪文件取端口（禁止猜端口）→ 带凭据握手 → 17 项冒烟场景（就绪/桌面标识/仓库发现/
+ * 流程：mkdtemp qa-root → fixture → 预写扫描目录配置 → 注入 E2E 钩子环境启动应用
+ * （含 --remote-debugging-port=0）→ 就绪文件取端口（禁止猜端口）→ CDP 通道读取调试
+ * 端口并枚举应用标签页 → 带凭据握手 → 17 项冒烟场景（就绪/桌面标识/仓库发现/
  * Inspect 转义/凭据边界/导航管控/崩溃恢复/CSP 记录/退出协议）→ report.json + 截图 →
  * 成功清理 qa-root，失败保留。
+ *
+ * 页面通道：多标签架构（§15）下 BrowserWindow 是空壳，应用页经
+ * desktop-shared 的页面级 CDP 会话驱动；`_electron` 句柄仅用于 app 级操作。
  *
  * G4 功能矩阵全量场景见 run-desktop-full.mjs（`npm run test:desktop:full`），
  * 两者共享 scripts/qa/desktop-shared.mjs 基建。
@@ -26,9 +30,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { GUARD_ERROR_CODES, assertPathInsideRoot, performHandshake } from './guard.mjs';
 import { buildFixtures, createQaRoot, makeRunId, updateManifest } from './fixtures.mjs';
 import {
-  attachCspCollector,
   closeAndVerify,
+  createCspRegistry,
   createResults,
+  openDesktopChannel,
   parseDesktopArgs,
   pollPage,
   pollUntil,
@@ -55,6 +60,7 @@ async function main() {
   const startedAt = new Date();
   let qaRoot = null;
   let app = null;
+  let hub = null;
   let latestReady = null;
   let outcome = 'failed';
   let guidance = null;
@@ -84,10 +90,12 @@ async function main() {
     console.log('[qa-desktop] 启动桌面应用…');
     const launched = await startDesktopApp({ qaRoot, runId });
     app = launched.app;
-    const page = launched.page;
+    // CDP 通道尽早就位（调试端口文件早于就绪文件出现），console 收集同步启动，
+    // 尽量覆盖首屏加载期的 CSP 违规
+    const cspRegistry = createCspRegistry();
+    hub = await openDesktopChannel({ env: launched.env, registry: cspRegistry });
     const readyFile = launched.env.GIT_LENS_E2E_READY_FILE;
     const tokenFile = launched.env.GIT_LENS_E2E_TOKEN_FILE;
-    const cspCollector = attachCspCollector(page);
 
     // 场景 a：等待 ready 文件（契约 §13，禁止猜端口）
     let ready = null;
@@ -106,6 +114,12 @@ async function main() {
     record('a1-ready-file', '就绪文件出现且字段完整（port/servicePid/mainPid/runId）', 'pass',
       `port=${ready.port} servicePid=${ready.servicePid} mainPid=${ready.mainPid}`);
     record('a2-port-not-9527', '服务端口不为主实例保留端口 9527', port !== 9527 ? 'pass' : 'fail', `port=${port}`);
+
+    // 页面通道：按服务端口前缀枚举应用标签目标（排除 tabbar file:// 与空壳 about:blank）
+    hub.appPrefix = `${baseUrl}/`;
+    const [appTarget] = await hub.waitForAppTargets(1, 15000);
+    const page = await hub.pageFor(appTarget.id, appTarget.url);
+    console.log(`[qa-desktop] CDP 通道就绪：cdpPort=${hub.cdpPort} 应用目标=${appTarget.url}`);
 
     await page.waitForTimeout(500);
     await screenshotFile(page, qaRoot, 'a', 'first-screen');
@@ -217,14 +231,14 @@ async function main() {
       };
     }, null);
     const windowsBefore = app.windows().length;
-    const urlBefore = page.url();
+    const urlBefore = await page.url();
     await page.evaluate(() => {
       window.open('https://example.com/git-lens-e2e-window-open');
       location.href = 'https://example.com/git-lens-e2e-nav';
     });
     await page.waitForTimeout(800);
     const gState = {
-      urlAfter: page.url(),
+      urlAfter: await page.url(),
       windowCount: app.windows().length,
       openedExternal: await app.evaluate(() => globalThis.__qaOpenedExternal || [])
     };
@@ -310,8 +324,10 @@ async function main() {
     }
     record('e5-data-reloaded', '恢复页切回应用页且仓库数据可重载', recovered ? 'pass' : 'fail', recovered ? '' : '未切回应用页或数据未重载');
 
-    // 场景 h：CSP 记录（默认宽松基线；--strict-csp 时对真实违规硬断言）
-    cspSummary = { ...cspCollector.summarize(), strictMode: strictCsp };
+    // 场景 h：CSP 记录（默认宽松基线；--strict-csp 时对真实违规硬断言）。
+    // 收集范围 = 全部 CDP 页面目标（应用标签 + tabbar file:// + 空壳），真实违规
+    // 与 Electron 开发提醒分开计数
+    cspSummary = { ...cspRegistry.summarize(), strictMode: strictCsp };
     if (strictCsp) {
       record('h1-csp-violations', 'CSP 真实违规为零（--strict-csp 硬断言）', cspSummary.realViolationCount === 0 ? 'pass' : 'fail',
         `真实违规=${cspSummary.realViolationCount}，${JSON.stringify(cspSummary.realViolations).slice(0, 300)}；Electron 开发提醒=${cspSummary.electronDevWarningCount}（仅记录）`);
@@ -338,6 +354,9 @@ async function main() {
     record('launcher', '桌面启动器执行', 'fail', err.message);
     guidance = '桌面启动器异常退出，详见 report.json 与上方输出。';
   } finally {
+    if (hub) {
+      await hub.dispose().catch(() => { /* 会话已随应用退出 */ });
+    }
     if (app) {
       try {
         await app.close();
