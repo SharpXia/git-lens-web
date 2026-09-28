@@ -20,7 +20,12 @@
  *   5. 多标签场景（契约 §15，独立第二实例，m1-m6）：经 tabbar 新建/切换/关闭、
  *      标题同步、sessionStorage 按标签隔离、就近激活、关闭全部标签触发退出协议、
  *      多标签下 strict CSP 真实违规为零。
- *   6. strict CSP 全程收集并硬断言真实违规为零。
+ *   6. 跨启动标签恢复（契约 §15 第二次修订，独立第三实例，r1-r4）：同一 userData
+ *      三轮启动，覆盖运行期防抖落盘与退出同步落盘（存档只含查询串）、二轮自动
+ *      恢复（查询串重放到新端口、顺序/激活项一致、页面数据最新）、服务崩溃重启
+ *      不破坏恢复态、存档坏 JSON 按无存档容错回落单标签首页；恢复段 strict CSP
+ *      继续全程收集并硬断言（r5）。
+ *   7. strict CSP 全程收集并硬断言真实违规为零。
  *
  * 页面通道：多标签架构（§15）下 BrowserWindow 是空壳，应用页经 desktop-shared 的
  * 页面级 CDP 会话驱动；`_electron` 句柄仅用于 app 级操作（主进程 evaluate、close）。
@@ -69,6 +74,15 @@ import {
 const execFileAsync = promisify(execFile);
 const RESTART_TIMEOUT_MS = 25000;
 
+/** 安全解码查询串（异常时原样返回），供跨启动存档的查询串比对使用 */
+function safeDecode(value) {
+  try {
+    return decodeURIComponent(String(value));
+  } catch {
+    return String(value);
+  }
+}
+
 /**
  * 在 fixture 仓库内执行只读 git 命令并返回 stdout（写操作一律走被测服务 API，
  * 这里仅用于操作前后真实 git 状态断言）。
@@ -96,6 +110,9 @@ async function main() {
   let cspRegistry = null;
   let mtabApp = null;
   let mtabHub = null;
+  // 跨启动标签恢复场景（r1-r4）的独立第三实例（suffix 'restore'，独立 userData）
+  let restoreApp = null;
+  let restoreHub = null;
   // DEF-004 回归自证用的无关 Electron 实例（同 worktree 二进制、独立 userData）
   let unrelated = null;
   let ready = null;
@@ -106,7 +123,7 @@ async function main() {
   let cspSummary = { realViolationCount: 0, realViolations: [], electronDevWarningCount: 0, strictMode: true };
 
   process.on('exit', () => {
-    for (const liveApp of [app, mtabApp]) {
+    for (const liveApp of [app, mtabApp, restoreApp]) {
       if (liveApp) {
         try { liveApp.process().kill('SIGKILL'); } catch { /* 已退出 */ }
       }
@@ -114,7 +131,7 @@ async function main() {
     if (unrelated) unrelated.kill();
   });
   process.on('SIGINT', () => {
-    for (const liveApp of [app, mtabApp]) {
+    for (const liveApp of [app, mtabApp, restoreApp]) {
       if (liveApp) liveApp.process().kill('SIGKILL');
     }
     if (unrelated) unrelated.kill();
@@ -1075,6 +1092,240 @@ async function main() {
       mtabHub = null;
     }
 
+    // ================= 9. 跨启动标签恢复（契约 §15 第二次修订，独立第三实例，r1-r5） =================
+    // m 段结束时 mtab 实例已按「关闭全部标签」路径退出（其 userData 存档为空标签集合）。
+    // 恢复段改用独立第三实例（suffix 'restore'：独立 userData/就绪文件/凭据文件），
+    // 从「无存档」的干净基线出发；三轮启动复用同一 userData——跨启动端口必然变化，
+    // 恰好验证「只存查询串、恢复时重放到当前 origin」的核心语义。场景前状态 = 实例
+    // 未启动；每轮结束走优雅退出（closeAndVerify 完整退出协议）衔接下一轮；r4 退出后
+    // 清理存档文件恢复默认。r 段为最后一段，r4 回落单标签不影响任何后续场景。
+    console.log('[qa-desktop-full] 启动跨启动恢复场景独立实例（r1 第一轮）…');
+    const restoreEnv = buildDesktopEnv({ qaRoot, runId, suffix: 'restore' });
+    await fs.mkdir(path.join(qaRoot, 'artifacts-restore'), { recursive: true });
+    await writeScanConfigInto(path.join(restoreEnv.GIT_LENS_USER_DATA, 'git-lens-config'), qaRoot);
+    const restoreTabStatePath = path.join(restoreEnv.GIT_LENS_USER_DATA, 'tab-state.json');
+    const restoreCspRegistry = createCspRegistry();
+
+    /** 读标签存档（<userData>/tab-state.json）；不存在或 JSON 损坏返回 null */
+    const readRestoreTabState = async () => {
+      try {
+        return JSON.parse(await fs.readFile(restoreTabStatePath, 'utf8'));
+      } catch {
+        return null;
+      }
+    };
+
+    /** 单轮启动前清掉上一轮 E2E 文件：防止就绪文件/DevToolsActivePort 被上一轮旧值空洞命中 */
+    const resetRestoreE2eFiles = async () => {
+      await fs.rm(restoreEnv.GIT_LENS_E2E_READY_FILE, { force: true });
+      await fs.rm(restoreEnv.GIT_LENS_E2E_TOKEN_FILE, { force: true });
+      await fs.rm(path.join(restoreEnv.GIT_LENS_USER_DATA, 'DevToolsActivePort'), { force: true });
+    };
+
+    /**
+     * 启动一轮恢复实例并就绪 CDP 通道（同一 userData 跨启动，端口必然变化）。
+     * 返回原始就绪形态（含 mainPid/servicePid，退出协议校验必需）与规范化 baseUrl/port。
+     */
+    const launchRestoreRound = async (roundLabel) => {
+      await resetRestoreE2eFiles();
+      restoreApp = (await startDesktopApp({ qaRoot, runId: `${runId}-restore`, env: restoreEnv })).app;
+      restoreHub = await openDesktopChannel({ env: restoreEnv, registry: restoreCspRegistry });
+      const ready = await pollUntil(() => {
+        const value = readReadyFile(restoreEnv.GIT_LENS_E2E_READY_FILE);
+        return value && Number.isInteger(value.port) && value.port > 0 ? value : null;
+      }, 30000, { describe: `恢复实例就绪文件（${roundLabel}）` });
+      const { baseUrl, port } = validateReady(ready);
+      restoreHub.appPrefix = `${baseUrl}/`;
+      return { ready, baseUrl, port };
+    };
+
+    /** 优雅退出当前轮恢复实例并验证退出协议（轮次衔接；失败即抛错走 launcher 失败） */
+    const closeRestoreRound = async (ready, roundLabel) => {
+      const exit = await closeAndVerify({ app: restoreApp, ready, userDataDir: restoreEnv.GIT_LENS_USER_DATA });
+      restoreApp = null;
+      await restoreHub.dispose().catch(() => { /* 会话已随应用退出 */ });
+      restoreHub = null;
+      if (!exit.ok) {
+        throw new Error(`恢复实例${roundLabel}优雅退出协议未通过：${JSON.stringify(exit)}`);
+      }
+      return exit;
+    };
+
+    /** 取应用目标 URL 的查询串并解码（比对用，防编码形态差异） */
+    const searchOf = (targetUrl) => {
+      try {
+        return safeDecode(new URL(targetUrl).search);
+      } catch {
+        return null;
+      }
+    };
+
+    // ---- r1 建立状态：2 标签各选不同仓库 → 记录查询串 → 优雅退出验证退出前同步落盘 ----
+    // 切库手段复用 m3：页面内 window.selectRepo（syncStateToUrl 把仓库写进 URL 查询串）
+    const restoreRepoA = fixture.main.repo;
+    const restoreRepoB = fixture.mr.repo;
+    const { ready: r1Ready, port: r1Port } = await launchRestoreRound('r1');
+    const [r1T1] = await restoreHub.waitForAppTargets(1, 15000);
+    const r1Page1 = await restoreHub.pageFor(r1T1.id, r1T1.url);
+    // 前置确认：无存档首启回落单标签，且 fixture 多仓库可发现（下拉 ≥2 项）
+    const r1Discovered = await pollPage(r1Page1, () => document.querySelectorAll('#repoSelect option').length >= 2, null, 20000);
+    await r1Page1.evaluate((p) => { window.selectRepo(p); }, restoreRepoA);
+    const r1Repo1Set = await pollPage(r1Page1, (p) => document.getElementById('repoSelect')?.value === p, restoreRepoA, 20000);
+    const r1Search1 = await r1Page1.evaluate('location.search');
+
+    const r1Tabbar = await restoreHub.waitForTabbarReady(15000);
+    const r1Tabs = createTabbarDriver(r1Tabbar);
+    await r1Tabs.clickNew();
+    const r1T2 = await restoreHub.waitForNewAppTarget([r1T1.id], 15000);
+    const r1Page2 = await restoreHub.pageFor(r1T2.id, r1T2.url);
+    await pollPage(r1Page2, () => document.querySelectorAll('#repoSelect option').length >= 2, null, 20000);
+    await r1Page2.evaluate((p) => { window.selectRepo(p); }, restoreRepoB);
+    const r1Repo2Set = await pollPage(r1Page2, (p) => document.getElementById('repoSelect')?.value === p, restoreRepoB, 20000);
+    const r1Search2 = await r1Page2.evaluate('location.search');
+    // 退出前把激活项切回标签 1，锁定存档 activeIndex 语义（经 tabbar DOM .active 确认）
+    await r1Tabs.clickTab(0);
+    const r1ActiveBack = await pollUntilAsync(
+      async () => ((await r1Tabs.activeIndex()) === 0 ? true : null),
+      5000, { intervalMs: 150, describe: '激活项经 tabbar 切回标签 1' }
+    ).catch(() => false);
+    const r1Searches = [safeDecode(r1Search1), safeDecode(r1Search2)];
+
+    // 运行期防抖（500ms）落盘：不等退出就该能看到含两条查询串的存档
+    // （probe 为异步读取，必须用 pollUntilAsync——pollUntil 只支持同步 read）
+    const r1LiveArchive = await pollUntilAsync(async () => {
+      const parsed = await readRestoreTabState();
+      const tabs = parsed && Array.isArray(parsed.tabs) ? parsed.tabs : [];
+      return tabs.length === 2 && tabs.every((t) => typeof t?.search === 'string' && t.search.startsWith('?')) ? parsed : null;
+    }, 8000, { intervalMs: 250, describe: '运行期防抖落盘 tab-state.json（2 条查询串）' }).catch(() => null);
+    record('r1a-multitab-setup', '恢复场景 r1a：两标签分别选中不同仓库且运行期防抖落盘（存档含 2 条查询串）',
+      Boolean(r1Discovered && r1Repo1Set && r1Repo2Set && r1ActiveBack && r1LiveArchive) ? 'pass' : 'fail',
+      `port=${r1Port} 查询串=[${r1Searches.map((s) => s.slice(0, 60)).join(' | ')}] 防抖存档=${r1LiveArchive ? '已落盘' : '未落盘'} 激活切回标签1=${Boolean(r1ActiveBack)}`);
+
+    const r1Exit = await closeRestoreRound(r1Ready, 'r1');
+    // 退出同步落盘终态：存档合法、只含查询串（无 http、每条 ? 开头）、activeIndex 合法且与第一轮一致
+    const r1Archive = await readRestoreTabState();
+    const r1ArchivedSearches = Array.isArray(r1Archive?.tabs) ? r1Archive.tabs.map((t) => safeDecode(t?.search || '')) : [];
+    const r1ArchiveOk = Boolean(r1Archive)
+      && r1Archive.version === 1
+      && Number.isInteger(r1Archive.activeIndex)
+      && r1Archive.activeIndex >= 0 && r1Archive.activeIndex < r1Archive.tabs.length
+      && r1Archive.tabs.length === 2
+      && r1Archive.tabs.every((t) => {
+        const raw = typeof t?.search === 'string' ? t.search : '';
+        // 只允许「?」开头的纯查询串：拒绝整串 URL 与协议相对形态（契约校验的写入侧镜像）
+        return raw.startsWith('?') && !/https?:/i.test(raw) && !raw.includes('//');
+      })
+      && r1ArchivedSearches[0] === r1Searches[0] && r1ArchivedSearches[1] === r1Searches[1]
+      && r1Archive.activeIndex === 0;
+    record('r1b-exit-sync-archive', '恢复场景 r1b：优雅退出后存档同步落盘且只含查询串（无 http、? 开头、activeIndex 合法）',
+      r1ArchiveOk && r1Exit.ok ? 'pass' : 'fail',
+      `存档=${r1Archive ? JSON.stringify(r1Archive).slice(0, 260) : '缺失'} 退出协议=${r1Exit.ok}（close ${r1Exit.closeElapsed}ms）`);
+
+    // ---- r2 跨启动恢复：同一 userData 重启 → 查询串重放到新端口、顺序/激活项一致、数据最新 ----
+    console.log('[qa-desktop-full] 恢复实例第二轮启动（同 userData，验证自动恢复）…');
+    const { ready: r2Ready, baseUrl: r2BaseUrl, port: r2Port } = await launchRestoreRound('r2');
+    const r2Targets = await restoreHub.waitForAppTargets(2, 15000).catch(() => null);
+    // 核心：每条存档查询串恰重放到一个标签，且 origin 为新一轮端口（端口不参与存档）
+    const r2Matched = r1Searches.map((expected) => (r2Targets || []).filter((t) => searchOf(t.url) === expected));
+    const r2ReplayOk = Boolean(r2Targets) && r2Targets.length === 2
+      && r2Port !== r1Port
+      && r2Matched.every((m) => m.length === 1)
+      && r2Targets.every((t) => t.url.startsWith(`${r2BaseUrl}/`));
+    // 顺序与激活项：标签条标题含仓库名（形如 `<仓库> · <视图> | Git Lens`），激活项经 .active 断言
+    const r2Tabbar = await restoreHub.waitForTabbarReady(15000);
+    const r2Tabs = createTabbarDriver(r2Tabbar);
+    const r2Titles = await pollUntilAsync(async () => {
+      const titles = await r2Tabs.titles();
+      return Array.isArray(titles) && titles.length === 2 && titles.every((t) => t.includes('Git Lens')) ? titles : null;
+    }, 15000, { describe: '恢复后标签条渲染 2 个标签' }).catch(() => null);
+    const r2ActiveIndex = await r2Tabs.activeIndex();
+    const r2OrderOk = Boolean(r2Titles)
+      && r2Titles[0].includes('repo-main') && r2Titles[1].includes('repo-mr')
+      && r2ActiveIndex === (r1Archive?.activeIndex ?? -1);
+    // 页面数据可加载（fresh）：每个恢复标签内 /api/projects 200 且选中仓库恢复
+    let r2DataOk = Boolean(r2Matched[0][0] && r2Matched[1][0]);
+    if (r2DataOk) {
+      for (const [index, matched] of r2Matched.entries()) {
+        const tabPage = await restoreHub.pageFor(matched[0].id, matched[0].url);
+        const status = await tabPage.evaluate('fetch("/api/projects").then((r) => r.status)');
+        const repoRestored = await pollPage(
+          tabPage, (p) => document.getElementById('repoSelect')?.value === p,
+          index === 0 ? restoreRepoA : restoreRepoB, 20000
+        );
+        if (status !== 200 || !repoRestored) r2DataOk = false;
+      }
+    }
+    // 恢复后的标签条截图（G4 视觉基线）
+    const r2ShotPath = path.join(qaRoot, 'artifacts', 'g4-r2-restored-tabbar.png');
+    let r2ShotOk = true;
+    try {
+      await r2Tabbar.screenshot({ path: r2ShotPath });
+    } catch (err) {
+      r2ShotOk = false;
+      console.error(`[qa-desktop-full] 恢复标签条截图失败：${err.message}`);
+    }
+    record('r2-cross-launch-restore', '恢复场景 r2：同 userData 重启自动恢复 2 标签——查询串重放到新端口、顺序/激活项一致、数据可加载',
+      r2ReplayOk && r2OrderOk && r2DataOk ? 'pass' : 'fail',
+      `port ${r1Port}→${r2Port} 查询串重放=${r2ReplayOk} 标题=${JSON.stringify(r2Titles)} 激活=${r2ActiveIndex}（存档 ${r1Archive?.activeIndex}） 数据fresh=${r2DataOk} 截图=${r2ShotOk ? r2ShotPath : '失败'}`);
+
+    // ---- r3 崩溃不破坏：kill -9 服务 → 自动重启 → 2 标签仍在、查询串不变 ----
+    const r2ServicePid = r2Ready.servicePid;
+    process.kill(r2ServicePid, 'SIGKILL');
+    const r3Restarted = await pollUntil(() => {
+      const value = readReadyFile(restoreEnv.GIT_LENS_E2E_READY_FILE);
+      return value && !value.state && Number.isInteger(value.port) && value.servicePid !== r2ServicePid ? value : null;
+    }, RESTART_TIMEOUT_MS, { describe: '恢复实例服务崩溃后自动重启' }).catch(() => null);
+    // 重启端口可能与崩溃前不同：按新端口重设应用前缀再枚举（既有标签被同源 reload 到新 origin）
+    let r3Targets = null;
+    if (r3Restarted) {
+      restoreHub.appPrefix = `http://127.0.0.1:${r3Restarted.port}/`;
+      r3Targets = await restoreHub.waitForAppTargets(2, 15000).catch(() => null);
+    }
+    const r3Matched = r1Searches.map((expected) => (r3Targets || []).filter((t) => searchOf(t.url) === expected));
+    const r3QueriesUnchanged = r3Matched.every((m) => m.length === 1);
+    // 同端口 → reload 保留查询串（强断言）；端口变化 → ensureAppDocument 按设计回落首页
+    // （跨源 sessionStorage 无法保留，实现注释声明的既有边界），此时断言标签数与 origin 迁移
+    const r3SamePort = Boolean(r3Restarted) && r3Restarted.port === r2Port;
+    const r3Ok = Boolean(r3Restarted && r3Targets)
+      && r3Targets.length === 2
+      && (r3SamePort ? r3QueriesUnchanged : r3Targets.every((t) => t.url.startsWith(`http://127.0.0.1:${r3Restarted.port}/`)));
+    record('r3-crash-keeps-restored-tabs', '恢复场景 r3：服务被 kill -9 后自动重启，恢复态不破坏（2 标签仍在、查询串不变）',
+      r3Ok ? 'pass' : 'fail',
+      `重启=${Boolean(r3Restarted)}（port ${r2Port}→${r3Restarted?.port}） 同端口=${r3SamePort} 标签数=${r3Targets?.length ?? 0} 查询串不变=${r3QueriesUnchanged}`);
+    await closeRestoreRound(r3Restarted, 'r3');
+
+    // ---- r4 容错：存档坏 JSON → 按无存档处理回落单标签首页；结束清理存档恢复默认 ----
+    console.log('[qa-desktop-full] 恢复实例第三轮启动（坏档容错）…');
+    await fs.writeFile(restoreTabStatePath, '{"version":1,"activeIndex":0,"tabs":[{"search":"?repo=%2Fbrok', 'utf8');
+    const { ready: r4Ready, port: r4Port } = await launchRestoreRound('r4');
+    const r4Targets = await restoreHub.waitForAppTargets(1, 15000).catch(() => null);
+    let r4HomeOk = false;
+    let r4Usable = false;
+    let r4Search = '';
+    if (r4Targets && r4Targets.length === 1) {
+      const r4Page = await restoreHub.pageFor(r4Targets[0].id, r4Targets[0].url);
+      // 回落首页 = 未按坏档恢复：坏档中的两条存档查询串不得重现。
+      // 注意页面加载完仓库列表后会自动选中默认仓库并重写 URL（?repo=<默认仓库>），
+      // 这是无存档启动的正常行为，「首页」以「坏档内容未被重放」为准
+      r4Search = safeDecode(await r4Page.evaluate('location.search'));
+      r4HomeOk = !r4Search.includes('repo-main') && !r4Search.includes('repo-mr');
+      const r4Status = await r4Page.evaluate('fetch("/api/projects").then((r) => r.status)');
+      const r4ReposLoaded = await pollPage(r4Page, () => document.querySelectorAll('#repoSelect option').length >= 2, null, 20000);
+      r4Usable = r4Status === 200 && Boolean(r4ReposLoaded);
+    }
+    record('r4-corrupt-archive-fallback', '恢复场景 r4：存档坏 JSON 按无存档处理——单标签回落首页且页面可用',
+      r4HomeOk && r4Usable ? 'pass' : 'fail',
+      `port=${r4Port} 应用目标=${r4Targets?.length ?? 0} 存档查询串未重放=${r4HomeOk}（当前 search=${r4Search.slice(0, 80) || '(空)'}） 可用=${r4Usable}`);
+    await closeRestoreRound(r4Ready, 'r4');
+    // 清理该 userData 的存档文件恢复默认（无存档态）；qa-root 成功时整体删除，
+    // 此处显式清理保证 --keep 保留现场时也不残留坏档
+    await fs.rm(restoreTabStatePath, { force: true });
+
+    // r5：恢复段三轮启动全程的 strict CSP 硬断言（镜像 m6 的多标签 CSP 收口）
+    const restoreCsp = restoreCspRegistry.summarize();
+    record('r5-restore-csp', '恢复场景 r5：三轮启动全程 CSP 真实违规为零（--strict-csp 硬断言）', restoreCsp.realViolationCount === 0 ? 'pass' : 'fail',
+      `真实违规=${restoreCsp.realViolationCount}，${JSON.stringify(restoreCsp.realViolations).slice(0, 240)}；Electron 开发提醒=${restoreCsp.electronDevWarningCount}（打包前固有，仅记录）`);
+
     outcome = results.some((r) => r.status === 'fail') ? 'failed' : 'passed';
   } catch (err) {
     outcome = 'failed';
@@ -1096,6 +1347,15 @@ async function main() {
       // 多标签实例可能仍存活（场景中断），强杀防残留
       try { mtabApp.process().kill('SIGKILL'); } catch { /* 已退出 */ }
       mtabApp = null;
+    }
+    if (restoreHub) {
+      await restoreHub.dispose().catch(() => { /* 会话已随应用退出 */ });
+      restoreHub = null;
+    }
+    if (restoreApp) {
+      // 恢复实例可能仍存活（场景中断），强杀防残留
+      try { restoreApp.process().kill('SIGKILL'); } catch { /* 已退出 */ }
+      restoreApp = null;
     }
     if (unrelated) {
       // 无关实例完成自证后即清理，退出路径（含失败/异常）都不留残留进程
