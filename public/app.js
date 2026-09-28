@@ -241,7 +241,8 @@
         starredReposCache = previous;
         renderRepoDropdownList();
         updateRepoTriggerText();
-        alert('星标保存失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
+        // 服务/网络原因失败走非阻断提示（DEF-006）：星标乐观更新已回滚，无需打断用户
+        notifyRequestFailure(err, '星标保存失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
       });
     }
     const TAB_STATE_STORAGE_KEY = 'git_lens_tab_state';
@@ -496,7 +497,8 @@
           alert(`已删除 ${successCount} 个分支${failed.length ? `，${failed.length} 个因状态变化未处理` : ''}。`);
         }
       } catch (err) {
-        alert(`清理失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`);
+        // 服务/网络原因失败走非阻断提示（DEF-006），按钮状态在 finally 中恢复
+        notifyRequestFailure(err, `清理失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`);
       } finally {
         button.disabled = false;
         button.textContent = originalText;
@@ -1310,7 +1312,8 @@
         populateDiffSelectors();
         refreshMergeRequests();
       } catch (err) {
-        alert('分析失败: ' + toDisplayErrorMessage(err, '无法连接本地服务'));
+        // 服务中断期间在途分析请求失败是常态，绝不能弹阻塞框冻结恢复遮罩（DEF-006）
+        notifyRequestFailure(err, '分析失败: ' + toDisplayErrorMessage(err, '无法连接本地服务'));
       }
     }
 
@@ -1624,7 +1627,7 @@
           }
         }
       } catch (err) {
-        alert('移除失败: ' + toDisplayErrorMessage(err, '无法连接本地服务'));
+        notifyRequestFailure(err, '移除失败: ' + toDisplayErrorMessage(err, '无法连接本地服务'));
         if (btn) {
           btn.disabled = false;
           btn.textContent = '移除';
@@ -1678,7 +1681,7 @@
           }
         }
       } catch (err) {
-        alert('删除失败: ' + toDisplayErrorMessage(err, '无法连接本地服务'));
+        notifyRequestFailure(err, '删除失败: ' + toDisplayErrorMessage(err, '无法连接本地服务'));
         if (btn) {
           btn.disabled = false;
           btn.textContent = '删除';
@@ -2030,6 +2033,61 @@
     function toDisplayErrorMessage(err, fallback) {
       if (err instanceof TypeError) return fallback; // fetch 网络层失败
       return (err && err.message) || fallback;
+    }
+
+    /**
+     * 服务/网络原因导致的请求失败统一提示入口（DEF-006）。
+     * 服务被 kill 的瞬间在途请求会失败，若此处弹阻塞式 alert，会挂起渲染层全部 JS，
+     * 导致恢复遮罩、自动重载全部冻结，直到人工点掉弹框。因此按三条路径分流：
+     * - 服务已知中断（serviceKnownDown）：恢复遮罩/提示条已在向用户传达中断，仅 console.warn，不弹任何框；
+     * - fetch 网络层失败（TypeError，服务不可达）：用右上角自动消失的 toast 非阻断提示；
+     * - 其余（服务正常响应后的业务错误）：沿用阻塞 alert，保持既有行为不变。
+     * @param {unknown} err - catch 到的异常
+     * @param {string} message - 已格式化的完整提示文案（通常为前缀 + toDisplayErrorMessage 结果）
+     */
+    function notifyRequestFailure(err, message) {
+      if (serviceKnownDown) {
+        console.warn('服务中断期间请求失败（由恢复遮罩/提示条承担提示）:', message);
+        return;
+      }
+      if (err instanceof TypeError) {
+        showToast(message);
+        return;
+      }
+      alert(message);
+    }
+
+    /* toast 自动消失定时器；重复失败会重置定时并覆盖文案，reload 后自然重置无需额外清理 */
+    let requestFailureToastTimer = null;
+
+    /**
+     * 右上角自动消失的非阻断失败提示（DEF-006）。
+     * 用内联样式 + app.css 既有 CSS 变量实现，不新增样式表；pointer-events:none
+     * 保证不拦截右上角按钮点击；z-index 1300 高于弹层(1150)但低于服务状态覆盖层(2000)。
+     * @param {string} message - 要展示的完整提示文案
+     */
+    function showToast(message) {
+      let toast = document.getElementById('requestFailureToast');
+      if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'requestFailureToast';
+        toast.style.cssText = [
+          'position:fixed', 'top:16px', 'right:16px', 'z-index:1300',
+          'max-width:360px', 'padding:10px 14px',
+          'background:var(--card-bg)', 'color:var(--text-bright)',
+          'border:1px solid var(--border)', 'border-left:3px solid var(--danger)',
+          'border-radius:6px', 'font-size:13px', 'line-height:1.5',
+          'word-break:break-all', 'box-shadow:0 4px 12px rgba(0,0,0,0.3)',
+          'pointer-events:none', 'opacity:0', 'transition:opacity 0.2s'
+        ].join(';');
+        document.body.appendChild(toast);
+      }
+      toast.textContent = message;
+      toast.style.opacity = '1';
+      if (requestFailureToastTimer) clearTimeout(requestFailureToastTimer);
+      requestFailureToastTimer = setTimeout(() => {
+        toast.style.opacity = '0';
+      }, 3000);
     }
 
     /**
@@ -2589,7 +2647,7 @@
         if (!data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
         await refreshCurrentDiff();
       } catch (err) {
-        alert(`操作失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`);
+        notifyRequestFailure(err, `操作失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`);
         if (btn && btn.isConnected) btn.disabled = false;
       }
     }
@@ -3287,7 +3345,7 @@
         // 外层 worktree 列表的领先/同步徽标同样受写操作影响，同步刷新保持两处一致
         await refreshRepoInspectData();
       } catch (err) {
-        alert(`${actionLabel} 失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`);
+        notifyRequestFailure(err, `${actionLabel} 失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`);
       } finally {
         // 重载会整体重建列表 DOM，旧按钮多已离线；仅在按钮仍连着文档时恢复可点
         if (btn && btn.isConnected) btn.disabled = false;
@@ -4321,8 +4379,8 @@
           alert('Prune 失败: ' + data.error);
         }
       } catch (err) {
-        // 网络层失败（服务不可达）同样给出中文提示，避免按钮点击后无任何反馈
-        alert('Prune 失败: ' + toDisplayErrorMessage(err, '无法连接本地服务'));
+        // 网络层失败（服务不可达）走非阻断提示，避免按钮点击后无任何反馈（DEF-006）
+        notifyRequestFailure(err, 'Prune 失败: ' + toDisplayErrorMessage(err, '无法连接本地服务'));
       }
     });
 
@@ -4418,6 +4476,10 @@
     let lastServiceState = null;     // 最近一次收到的服务状态；重复事件不重复处理
     let serviceRestartTimer = null;  // 「正在重启」已等待秒数计时器
     let serviceOverlayShown = false; // 覆盖层当前是否可见（区分首启 ready 与恢复 ready）
+    // DEF-006：服务已知中断标志。restarting/crashed/stopped 置真、ready 置假；
+    // 浏览器模式不订阅 onServiceState，恒为 false。为真时请求失败提示全部静默，
+    // 由恢复遮罩/提示条承担告知职责（见 notifyRequestFailure）
+    let serviceKnownDown = false;
 
     function setServiceOverlay(visible) {
       document.getElementById('serviceStateOverlay').style.display = visible ? 'flex' : 'none';
@@ -4482,6 +4544,8 @@
     function handleServiceState(state) {
       if (state === lastServiceState) return; // 重复的同状态事件不重复处理
       lastServiceState = state;
+      // DEF-006：中断态置真抑制请求失败弹框；ready 清标志解除抑制，恢复常规提示路径
+      serviceKnownDown = state === 'restarting' || state === 'crashed' || state === 'stopped';
       switch (state) {
         case 'restarting':
           hideServiceStoppedBar();
