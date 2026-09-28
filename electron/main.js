@@ -78,6 +78,10 @@ const TAB_STATE_MAX_TABS = 50;
 /** 恢复兜底检查延迟：给页面自身遮罩（onServiceState 驱动）的接管窗口 */
 const RECOVERY_FALLBACK_DELAY_MS = 1200;
 
+/** 跨源重放导航的提交判定等待与重试上限 */
+const TAB_REPLAY_COMMIT_TIMEOUT_MS = 8000;
+const TAB_REPLAY_MAX_RETRIES = 2;
+
 /** 各平台 git 常见安装目录；GUI 启动的 PATH 通常不含 Homebrew，需要增补探测 */
 const GIT_SEARCH_DIRS = {
   darwin: ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'],
@@ -446,8 +450,9 @@ function onServiceExit(child, exitCode) {
  *   加载者触发；
  * - 已有标签且端口未变：逐标签同文档同源 reload——不交换 browsing context
  *   group，各标签独立的 sessionStorage 完整保留，用户选中状态不丢失；
- * - 端口变更（重启复用端口被抢占的罕见回退）：只能跨源导航，各标签会话状态
- *   丢失，记日志说明。
+ * - 端口变更（重启复用端口被抢占的罕见回退）：只能跨源导航，各标签页内会话
+ *   状态丢失；「标签对应的项目」按各标签当前 URL 的查询串重放到新 origin 保住，
+ *   查询串为空/非法的标签回落首页。
  * @param {number|null} previousPort - 重启前的服务端口（null 表示首次就绪）
  */
 function ensureAppDocument(previousPort) {
@@ -461,11 +466,57 @@ function ensureAppDocument(previousPort) {
       if (isViewAlive(tab.view)) tab.view.webContents.reload();
     }
   } else {
-    log(`服务端口由 ${previousPort} 变为 ${servicePort}，页面跨源导航，崩溃前的会话状态无法保留`);
+    // 跨源导航必然丢失各标签 sessionStorage（DEF-002 已知取舍），但裸加载首页
+    // 会把「标签-项目」映射一并丢掉（页面自动选中第一个仓库）。这里取各标签
+    // 当前 URL 的查询串重放到新 origin。注意不能用 currentTabSearch：它以
+    // 「当前」servicePort 判同源，此刻端口已更新，旧 URL 会被全部误判为无查询串；
+    // 直接解析 URL 后走与存档恢复同一套查询串校验，两条路径行为保持一致。
+    log(`服务端口由 ${previousPort} 变为 ${servicePort}，页面跨源导航，崩溃前的页内会话状态无法保留，各标签按查询串重放`);
     for (const tab of tabs) {
-      if (isViewAlive(tab.view)) tab.view.webContents.loadURL(appUrl());
+      if (!isViewAlive(tab.view)) continue;
+      let search = '?';
+      try {
+        search = new URL(tab.view.webContents.getURL()).search || '?';
+      } catch {
+        // URL 解析失败按无查询串处理
+      }
+      const replay = normalizeArchivedSearch({ search });
+      navigateTabWithRetry(tab, replay ? `${appOrigin()}/${replay}` : appUrl());
     }
   }
+}
+
+/**
+ * 执行一次导航并做提交兜底（供跨源重放使用）：实测 Electron 44 下跨端口
+ * loadURL 偶发长期 pending——CDP 目标 URL 长期为空、无 did-fail-load、
+ * loadURL promise 也不 settle，等待无法自愈。因此以「限定时间内 getURL()
+ * 是否已到达当前 origin」判定提交，未提交则 stop() 后重新 loadURL 重试，
+ * 无论挂起根因是导航调度丢失还是端口竞态，都能收敛到重放目标。
+ * @param {{id: number, view: Electron.WebContentsView, title: string}} tab - 目标标签
+ * @param {string} target - 目标地址（当前 origin + 查询串）
+ * @param {number} [attempt] - 已重试次数
+ */
+function navigateTabWithRetry(tab, target, attempt = 0) {
+  if (!isViewAlive(tab.view)) return;
+  const webContents = tab.view.webContents;
+  log(`标签页（id=${tab.id}）跨源重放（第 ${attempt + 1} 次导航）→ ${target}`);
+  // 拒绝（如并发导航取消的 ERR_ABORTED）不单独处理，交由提交检查统一判定
+  webContents.loadURL(target).catch(() => {});
+  setTimeout(() => {
+    if (!isViewAlive(tab.view) || shuttingDown) return;
+    if (isSameOriginAppUrl(webContents.getURL())) return; // 已提交到当前 origin
+    if (attempt >= TAB_REPLAY_MAX_RETRIES) {
+      log(`标签页（id=${tab.id}）跨源重放连续未提交，已达重试上限，保持页面遮罩态等待用户手动刷新`);
+      return;
+    }
+    log(`标签页（id=${tab.id}）跨源重放 ${TAB_REPLAY_COMMIT_TIMEOUT_MS}ms 未提交，stop 后重试`);
+    try {
+      webContents.stop();
+    } catch {
+      // 视图恰好销毁时忽略
+    }
+    navigateTabWithRetry(tab, target, attempt + 1);
+  }, TAB_REPLAY_COMMIT_TIMEOUT_MS);
 }
 
 /**
