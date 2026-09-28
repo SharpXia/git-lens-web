@@ -1,0 +1,60 @@
+# Git Lens Web 桌面版打包配置（Release 工作流 G5）。
+#
+# 产物策略（计划书 §8）：
+#  - macOS 目标 dmg + zip，arm64/x64 双架构；zip 为后续 auto-update 与命令行分发的候选载体；
+#  - 发行包内不包含测试 fixture、自验脚本与文档：files 只放行业务源码，
+#    electron/checks/（冒烟自验）、test/、scripts/、docs/、assets/ 等均未列入，自然不进包；
+#  - 生产依赖（express、cors 及其传递依赖）由 electron-builder 依据 package.json
+#    与 package-lock.json 自动收集进包，不在 files 中重复声明；
+#  - asar 保持默认开启：主进程/service 子进程的 ESM import、preload.cjs、public 静态资源
+#    读取在 asar 内均由 Electron 支持（G2 已验证机制，打包态验证记录见
+#    docs/proposals/electron-release.md）。
+#
+# 签名现状：本机无 Apple 开发者证书，mac.identity 取 "-" 做 ad-hoc 打包签名（未公证）。
+# 用户首次打开需右键 → 打开，或执行 `xattr -cr "/Applications/Git Lens.app"` 绕过
+# Gatekeeper；公证（notarize）未验收，配置 notarize 前不得分发给外部用户。
+appId: com.sharpxia.git-lens-web
+productName: Git Lens
+# 产物输出目录（release/ 已在 .gitignore 中忽略，构建产物不入库）
+directories:
+  output: release
+  # 图标等构建资源目录；当前未提供图标，使用 Electron 默认图标（TODO：补充正式图标）
+  buildResources: assets
+# package.json 未声明 main 字段（仓库保持 CLI 直接运行 src/server.js 的形态，不为其改动根文件）；
+# 桌面打包入口经 extraMetadata 注入打包内 package.json，仓库根 package.json 不受影响
+extraMetadata:
+  main: electron/main.js
+files:
+  - package.json
+  - electron/main.js
+  - electron/service-main.js
+  - electron/preload.cjs
+  - electron/tabbar.html
+  - electron/tabbar-preload.cjs
+  - src/**
+  - public/**
+  - "!**/.DS_Store"
+# 产物命名去掉 productName 中的空格，便于脚本化分发与校验
+artifactName: ${name}-${version}-mac-${arch}.${ext}
+mac:
+  # 开发者工具类目：面向开发者的本地 Git 仓库透镜，归类 developer-tools；
+  # 备选 public.app-category.utilities 语义更泛，与工具定位不符
+  category: public.app-category.developer-tools
+  # 无开发者证书，采用 ad-hoc 签名：identity 取 "-"（codesign 的 ad-hoc 身份）触发
+  # electron-builder 的真实打包级 ad-hoc 签名，产物 codesign -dv 显示 Signature=adhoc
+  # 且 --verify --deep --strict 通过（bundle seal 完整）。
+  # 注意：identity 置 null 是"完全跳过签名"，主二进制虽保留上游 linker-signed adhoc，
+  # 但 electron-builder 改写 Info.plist 后 bundle 校验必失败，故不采用（G5 实测）。
+  identity: "-"
+  # 未公证无需加固运行时；ad-hoc + hardened runtime 会因库验证（无 TeamID）带来启动风险
+  hardenedRuntime: false
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
+  # 未验收公证：afterSign 钩子与 notarize 配置在有 Apple 开发者账号并完成验收前不引入
