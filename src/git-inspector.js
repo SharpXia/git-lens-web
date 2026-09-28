@@ -5,12 +5,57 @@ import fs from 'node:fs/promises';
 
 const exec = promisify(execFile);
 
+// git 可执行文件路径。解析优先级：configureGitPath 显式传入 > GIT_LENS_GIT_PATH 环境变量 > 'git'。
+// 桌面版安装包不自带 Git，macOS 图形应用的 PATH 可能找不到命令行 git，
+// 因此允许服务工厂把解析到的绝对路径注入进来，默认行为保持与原来一致。
+let gitExecutable = process.env.GIT_LENS_GIT_PATH || 'git';
+
+/**
+ * 配置本模块全部 git 调用使用的可执行文件路径。
+ * @param {string} [gitPath] - git 可执行文件路径；为空时保持当前配置不变
+ * @returns {string} 配置后的实际路径（供诊断接口展示）
+ */
+export function configureGitPath(gitPath) {
+  if (typeof gitPath === 'string' && gitPath.trim() !== '') {
+    gitExecutable = gitPath;
+  }
+  return gitExecutable;
+}
+
+/**
+ * 读取当前生效的 git 可执行文件路径。
+ * @returns {string}
+ */
+export function getGitPath() {
+  return gitExecutable;
+}
+
+/**
+ * 探测当前生效的 git 可执行文件并读取版本，供 GET /api/diagnostics 使用（契约 §7）。
+ * 探测走模块解析链得到的最终路径（configureGitPath 显式传入 > GIT_LENS_GIT_PATH > 'git'），
+ * 与业务 git 调用完全同源——诊断结论即真实运行时依赖。
+ * 任何失败形态（ENOENT、权限不足、非零退出、超时）一律降级为 found:false，
+ * 绝不抛错，保证诊断接口本身可用（ok 恒为 true）。
+ * @param {number} [timeoutMs=5000] - git --version 的超时毫秒数，超时按未找到处理
+ * @returns {Promise<{found: boolean, path: string|null, version: string|null}>}
+ */
+export async function getGitDiagnostics(timeoutMs = 5000) {
+  try {
+    const { stdout } = await exec(gitExecutable, ['--version'], { timeout: timeoutMs, maxBuffer: 1024 * 1024 });
+    // "git version 2.50.1 (Apple Git-155)" → "2.50.1 (Apple Git-155)"；异常输出保留原文不硬解
+    const version = String(stdout).trim().replace(/^git version\s*/i, '') || null;
+    return { found: true, path: gitExecutable, version };
+  } catch {
+    return { found: false, path: null, version: null };
+  }
+}
+
 /**
  * 执行 git 命令辅助函数 (返回字符串)
  */
 async function runGit(cwd, args) {
   try {
-    const { stdout } = await exec('git', args, { cwd, maxBuffer: 20 * 1024 * 1024 });
+    const { stdout } = await exec(gitExecutable, args, { cwd, maxBuffer: 20 * 1024 * 1024 });
     return stdout.trim();
   } catch (err) {
     throw new Error(`Git error in ${cwd}: ${err.message}`);
@@ -22,7 +67,7 @@ async function runGit(cwd, args) {
  */
 function runGitRaw(cwd, args) {
   return new Promise((resolve, reject) => {
-    execFile('git', args, { cwd, encoding: 'buffer', maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(gitExecutable, args, { cwd, encoding: 'buffer', maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) return reject(new Error(stderr.toString() || err.message));
       resolve(stdout);
     });
@@ -34,7 +79,7 @@ function runGitRaw(cwd, args) {
  */
 function runGitResult(cwd, args) {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(gitExecutable, args, { cwd, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 }, (err, stdout, stderr) => {
       resolve({
         ok: !err,
         stdout: stdout || '',
@@ -70,20 +115,51 @@ export function getMimeType(filePath) {
 }
 
 /**
+ * 校验路径已归一到 base 目录内（base 自身放行，供目录流式场景使用）。
+ * @param {string} targetPath - realpath 归一后的待检路径
+ * @param {string} baseReal - realpath 归一后的基座目录
+ * @returns {boolean} 位于 base 内（含 base 自身）时返回 true
+ */
+function isPathInsideBase(targetPath, baseReal) {
+  return targetPath === baseReal || targetPath.startsWith(baseReal + path.sep);
+}
+
+/**
  * 获取 Git 提交或工作区中的文件二进制 Buffer
  */
 export async function getFileContentBuffer(repoPath, revision, filePath, worktreePath = null) {
-  // 如果指定了 worktreePath 且 revision 是 'WORKTREE'，直接从磁盘读取工作区最新文件
+  // 如果指定了 worktreePath 且 revision 是 'WORKTREE'，直接从磁盘读取工作区最新文件。
+  // DEF-001（P1，越界任意文件读取）：此分支曾用 path.resolve(worktreePath, filePath)
+  // 直接读盘，`../../etc/passwd` 这类相对路径与绝对路径都能越出 Worktree。
+  // 现在做两道包含性校验，均以 realpath 归一后的 Worktree 为基座：
+  // 1) 粗筛——用归一基座重解 filePath 后必须在基座内，拒绝 `../` 回溯与绝对路径注入；
+  // 2) 符号链接防逃逸——目标存在时对其实际路径 realpath 归一再比对，
+  //    拒绝指向 Worktree 之外的链接（readFile 会跟随链接读到外部内容）。
   if (revision === 'WORKTREE' && worktreePath) {
-    const full = path.resolve(worktreePath, filePath);
+    const baseReal = await toRealPathSafe(worktreePath);
+    const candidate = path.resolve(baseReal, filePath);
+    if (!isPathInsideBase(candidate, baseReal)) {
+      throw Object.assign(new Error('filePath 解析后越出 Worktree 边界，拒绝读取'), { statusCode: 400 });
+    }
+    let realFull;
     try {
-      return await fs.readFile(full);
+      realFull = await fs.realpath(candidate);
+    } catch {
+      // 目标不存在：保持既有“读取失败返回 null → 404”的行为
+      return null;
+    }
+    if (!isPathInsideBase(realFull, baseReal)) {
+      throw Object.assign(new Error('filePath 经符号链接指向 Worktree 之外的路径，拒绝读取'), { statusCode: 400 });
+    }
+    try {
+      return await fs.readFile(realFull);
     } catch {
       return null;
     }
   }
 
-  // 否则通过 git show 从对应版本获取
+  // 否则通过 git show 从对应版本获取；git 自身拒绝越界的相对/绝对路径引用，
+  // show 失败时返回 null（由路由返回 404），无需额外越界校验
   try {
     const targetCwd = worktreePath || repoPath;
     const buf = await runGitRaw(targetCwd, ['show', `${revision}:${filePath}`]);
