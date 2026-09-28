@@ -441,8 +441,9 @@ function onServiceExit(child, exitCode) {
 /**
  * 把应用文档带回内容标签（DEF-002 语义的多标签版）：
  * - 窗口不存在：先建空壳窗口（含标签条）；
- * - 尚无任何标签：创建首个标签加载应用页——契约 §15 就绪文件由该视图的
- *   首次加载触发；
+ * - 尚无任何标签：按存档恢复标签集合（契约 §15 第二次修订，无有效存档时
+ *   单标签加载应用首页）——契约 §15 就绪文件仍由该批视图中首个完成首次
+ *   加载者触发；
  * - 已有标签且端口未变：逐标签同文档同源 reload——不交换 browsing context
  *   group，各标签独立的 sessionStorage 完整保留，用户选中状态不丢失；
  * - 端口变更（重启复用端口被抢占的罕见回退）：只能跨源导航，各标签会话状态
@@ -452,7 +453,7 @@ function onServiceExit(child, exitCode) {
 function ensureAppDocument(previousPort) {
   if (!mainWindow || mainWindow.isDestroyed()) createMainWindow();
   if (tabs.length === 0) {
-    createTab(appUrl());
+    ensureInitialTab();
     return;
   }
   if (previousPort === null || previousPort === servicePort) {
@@ -889,9 +890,29 @@ function cycleTab(offset) {
   activateTab(next.id);
 }
 
-/** 确保至少存在一个内容标签（服务就绪后首次进窗、二次启动激活等场景共用） */
+/**
+ * 确保至少存在一个内容标签；当前无标签时按存档恢复标签集合（契约 §15 第二次修订）：
+ *  - 有效存档 → 按保存顺序把各查询串重放到当前 origin 逐个建标签，并激活
+ *    存档记录的激活项（越界回落 0）；
+ *  - 无存档/存档全部无效 → 维持现状：单标签加载首页。
+ * 本路径只在「当前一个标签都没有」时进入（首启建首标签、窗口重开、崩溃重启
+ * 时集合为空的兜底）；服务崩溃重启时已有标签走 ensureAppDocument 的同源
+ * reload，两条路径互不干扰。就绪文件语义不变：首个内容视图（含恢复标签）
+ * 完成首次加载时触发。
+ */
 function ensureInitialTab() {
-  if (tabs.length === 0) createTab(appUrl());
+  if (tabs.length > 0) return;
+  const archive = loadTabState();
+  if (archive && archive.searches.length > 0) {
+    for (const search of archive.searches) {
+      createTab(`${appOrigin()}/${search}`);
+    }
+    const activeIndex = Math.min(Math.max(archive.activeIndex, 0), tabs.length - 1);
+    activateTab(tabs[activeIndex].id);
+    log(`已按存档恢复 ${archive.searches.length} 个标签页（激活第 ${activeIndex + 1} 个）`);
+  } else {
+    createTab(appUrl());
+  }
 }
 
 // ---- 窗口管理与安全边界 ----
@@ -1249,8 +1270,9 @@ function createMainWindow() {
 }
 
 /**
- * 按当前服务状态打开主窗口：服务就绪则带首个内容标签进入应用；
- * 未就绪（启动中/已崩溃）则向空壳窗口载入独立恢复页。
+ * 按当前服务状态打开主窗口：服务就绪则按存档恢复标签集合进入应用
+ * （ensureInitialTab，无有效存档时单标签首页）；未就绪（启动中/已崩溃）
+ * 则向空壳窗口载入独立恢复页。
  */
 function openWindowForCurrentServiceState() {
   createMainWindow();
