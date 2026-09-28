@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import vm from 'node:vm';
+
 import {
+  DIALOG_STUB_SOURCE,
   buildEvaluateSource,
   filterAppTargets,
   parseDevToolsActivePort
@@ -46,4 +49,18 @@ test('应用目标过滤：只保留 URL 前缀匹配的 page 目标（排除 ta
   const app = filterAppTargets(prefix, targets);
   assert.deepEqual(app.map((t) => t.id), ['app', 'app-root'], '仅同前缀 page 目标入选');
   assert.deepEqual(filterAppTargets(prefix, null), [], '空入参安全返回空数组');
+});
+
+test('弹框免疫桩（DIALOG_STUB_SOURCE）：三个阻塞式对话框全部替换为安全桩', () => {
+  // 桩源码必须同时覆盖 alert/confirm/prompt——缺一即为阻塞式弹框漏网
+  for (const name of ['alert', 'confirm', 'prompt']) {
+    assert.ok(DIALOG_STUB_SOURCE.includes(`window.${name} =`), `桩包含 window.${name} 替换`);
+  }
+  // 桩语义在隔离上下文执行验证：confirm 取消语义返回 false、prompt 返回 null、
+  // alert 无副作用（不抛错、无返回），调用后不产生任何真实弹框行为
+  const sandbox = { window: {} };
+  vm.runInNewContext(DIALOG_STUB_SOURCE, sandbox);
+  assert.equal(sandbox.window.alert('崩溃提示'), undefined, 'alert 桩无副作用');
+  assert.equal(sandbox.window.confirm('确定吗？'), false, 'confirm 桩返回 false（用户取消语义）');
+  assert.equal(sandbox.window.prompt('输入？'), null, 'prompt 桩返回 null（用户取消语义）');
 });

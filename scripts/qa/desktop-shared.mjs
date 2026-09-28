@@ -11,6 +11,15 @@
  * 应用以 `--remote-debugging-port=0` 启动，从 `<userData>/DevToolsActivePort` 读取
  * 调试端口，经页面级 CDP WebSocket（/json/list 枚举 + Runtime.evaluate）驱动各标签；
  * `_electron` 的 ElectronApp 句柄保留用于 app 级操作（close()/evaluate 主进程）。
+ *
+ * 弹框免疫（对齐 electron/checks/smoke.mjs 的 armDialogImmunity，双层机制）：
+ * 每个 CDP 页面会话建立时即（1）用 Page.addScriptToEvaluateOnNewDocument 预置
+ * window.alert/confirm/prompt 桩，后续新文档从源头不弹框；（2）订阅
+ * Page.javascriptDialogOpening，弹框出现即自动 Page.handleJavaScriptDialog accept，
+ * 覆盖桩注入前已加载文档的弹框窗口。背景：服务被 kill 的瞬间页面在途请求失败
+ * 可能触发页面自身的阻塞式 alert，挂起渲染层全部 JS，恢复遮罩/自动重载/断言
+ * 全部冻结——测试必须不被人肉弹框阻塞。事件兜底依赖会话存活，长会话须覆盖
+ * 可能弹框的整个窗口期（见 run-desktop-full 崩溃场景的 ≥30s 覆盖提醒）。
  * 实测说明：playwright 的 `chromium.connectOverCDP` 在 Electron 44 下 browser 级
  * 会话初始化挂起（与 remote-debugging-pipe 是否在位无关），故按契约的 CDP 通道
  * 采用页面级直连（与 electron/checks/smoke.mjs 已验证方式一致）。
@@ -39,6 +48,15 @@ export const ELECTRON_BIN = path.join(
 );
 export const READY_TIMEOUT_MS = 30000;
 export const HTTP_TIMEOUT_MS = 10000;
+
+/**
+ * 弹框免疫第一层（新文档桩）的注入源：把 alert/confirm/prompt 替换为无副作用
+ * 桩（confirm 返回 false、prompt 返回 null，与用户取消语义一致），让
+ * addScriptToEvaluateOnNewDocument 之后加载的每个新文档从源头不产生真实弹框。
+ * 单独导出供单测钉死桩语义（三个函数齐全且返回值安全）。
+ */
+export const DIALOG_STUB_SOURCE =
+  'window.alert = function () {}; window.confirm = function () { return false; }; window.prompt = function () { return null; };';
 
 /** 桌面入口通用参数（纯函数，供单测）：--keep 保留现场、--strict-csp 硬断言 */
 export function parseDesktopArgs(argv) {
@@ -244,6 +262,9 @@ export function connectCdpPage(cdpPort, targetId, { initialUrl = '' } = {}) {
     let lastUrl = initialUrl;
     const pending = new Map();
     const consoleListeners = [];
+    // 弹框事件记录（第二层免疫的观测面）：捕获 javascriptDialogOpening 供场景
+    // 核对（如 DEF-006 验收——服务中断改非阻断提示后，恢复窗口不应再出现弹框）
+    const dialogEvents = [];
 
     const failAll = (err) => {
       for (const { rej } of pending.values()) rej(err);
@@ -338,6 +359,14 @@ export function connectCdpPage(cdpPort, targetId, { initialUrl = '' } = {}) {
         on(event, listener) {
           if (event === 'console') consoleListeners.push(listener);
         },
+        /**
+         * 本会话捕获到的弹框事件快照（Page.javascriptDialogOpening 的
+         * {type, message} 列表）。供场景核对阻塞式弹框是否出现（快照为副本，
+         * 不清空原记录）。
+         */
+        dialogEvents() {
+          return dialogEvents.slice();
+        },
         close() {
           closed = true;
           try { ws.close(); } catch { /* 已关闭 */ }
@@ -355,6 +384,10 @@ export function connectCdpPage(cdpPort, targetId, { initialUrl = '' } = {}) {
             await send('Runtime.enable');
             await send('Page.enable');
             await send('Log.enable');
+            // 弹框免疫第一层：预置新文档桩（DIALOG_STUB_SOURCE），此后每个新
+            // 文档从源头不产生真实弹框。必须在回报就绪前完成——会话就绪即可
+            // 被场景驱动，免疫必须已挂
+            await send('Page.addScriptToEvaluateOnNewDocument', { source: DIALOG_STUB_SOURCE });
           })(),
           initDeadline
         ]);
@@ -383,6 +416,16 @@ export function connectCdpPage(cdpPort, targetId, { initialUrl = '' } = {}) {
       } else if (message.method === 'Log.entryAdded') {
         const entry = message.params?.entry || {};
         emitConsole({ type: entry.level || 'error', text: String(entry.text || '').slice(0, 2000) });
+      } else if (message.method === 'Page.javascriptDialogOpening') {
+        // 弹框免疫第二层（事件兜底）：桩注入前已加载文档上的阻塞式弹框出现即
+        // 自动 accept，防止 alert/confirm/prompt 挂起渲染层全部 JS（恢复遮罩、
+        // 自动重载与断言都会被冻结）。accept 失败忽略——对话框可能已被同会话
+        // 其他机制处理或目标已销毁。事件同时入记录，供场景核对（DEF-006 验收）
+        dialogEvents.push({
+          type: message.params?.type || '',
+          message: String(message.params?.message || '').slice(0, 200)
+        });
+        void send('Page.handleJavaScriptDialog', { accept: true }).catch(() => { /* 兜底失败不影响会话 */ });
       }
     });
     ws.addEventListener('error', () => {
@@ -445,15 +488,42 @@ export function createDesktopPageHub({ cdpPort, appPrefix = '' }) {
         return fresh.length === 1 ? fresh[0] : null;
       }, timeoutMs, { intervalMs: 150, describe: '新出现的应用页面目标恰一个' });
     },
-    /** 取（并缓存）目标页会话；连接失败后移除缓存以便重试 */
+    /** 取（并缓存）目标页会话；连接失败后移除缓存以便重试，断线会话自动重建 */
     pageFor(targetId, initialUrl = '') {
+      const cached = conns.get(targetId);
+      // 已建立后断线的会话（典型：跨源导航按站点隔离更换 renderer，页面级
+      // WebSocket 随之关闭）必须重建——resolve 的 api 挂在 promise 的 apiRef
+      // 属性上供同步检查 isClosed；否则调用方拿到的是永久求值失败的死会话，
+      // 弹框免疫也随断线失效
+      if (cached && cached.apiRef && cached.apiRef.isClosed) {
+        conns.delete(targetId);
+      }
       if (!conns.has(targetId)) {
-        conns.set(targetId, connectCdpPage(cdpPort, targetId, { initialUrl }).catch((err) => {
+        const promise = connectCdpPage(cdpPort, targetId, { initialUrl }).catch((err) => {
           conns.delete(targetId);
           throw err;
-        }));
+        });
+        promise.apiRef = null;
+        void promise.then((api) => { promise.apiRef = api; }, () => { /* 失败由调用方处理 */ });
+        conns.set(targetId, promise);
       }
       return conns.get(targetId);
+    },
+    /**
+     * 汇总全部已建立会话捕获到的弹框事件快照（含已断线会话的历史记录——
+     * 跨源导航断开旧会话后，其崩溃窗口内的事件仍可被核对）。
+     * 连接失败的会话跳过，不阻断调用方。
+     */
+    async dialogEvents() {
+      const events = [];
+      for (const promise of conns.values()) {
+        try {
+          events.push(...(await promise).dialogEvents());
+        } catch {
+          // 连接从未建立的会话无事件可收
+        }
+      }
+      return events;
     },
     /** 等待标签条目标出现、脚本就绪且至少渲染 1 个标签，返回其会话 */
     async waitForTabbarReady(timeoutMs = 10000) {
@@ -470,8 +540,10 @@ export function createDesktopPageHub({ cdpPort, appPrefix = '' }) {
       return page;
     },
     /**
-     * 后台尽早就挂 console 收集器：页面目标一出现（首次导航完成前）即连接挂载，
-     * 尽量减少漏采首屏 CSP 违规。
+     * 后台尽早就挂后台收集：页面目标一出现（首次导航完成前）即连接挂载，
+     * 尽量减少漏采首屏 CSP 违规。会话建立的同时也就位弹框免疫（桩 + 事件
+     * 兜底内置在 connectCdpPage 初始化序列），收集器挂载越早，免疫的无保护
+     * 窗口越小——这是把会话建立时机尽量提前的原因之一。
      */
     startConsoleWatch(registry, { intervalMs = 150 } = {}) {
       const watched = new Set();
@@ -791,17 +863,20 @@ export async function createUnrelatedElectronInstance({ qaRoot } = {}) {
 }
 
 /**
- * 打开 CDP 页面通道：读调试端口 → 建 hub → 启动 console 尽早收集。
- * 应用目标枚举依赖服务端口，调用方在解析就绪文件后设置 `hub.appPrefix`。
+ * 打开 CDP 页面通道：读调试端口 → 建 hub → 启动后台尽早就绪会话。
+ * 无论是否传入 CSP registry，startConsoleWatch 都会启动——它同时承担弹框
+ * 免疫的尽早就位（会话建立即挂桩 + 事件兜底），跳过会让页面目标在首次
+ * 显式 pageFor 之前处于无保护窗口。应用目标枚举依赖服务端口，调用方在
+ * 解析就绪文件后设置 `hub.appPrefix`。
  * @param {object} options
  * @param {object} options.env buildDesktopEnv 产出的环境（取 GIT_LENS_USER_DATA）
- * @param {object} [options.registry] CSP 收集注册表（传入即开始后台收集）
+ * @param {object} [options.registry] CSP 收集注册表（传入即同时收集 CSP）
  * @param {number} [options.timeoutMs]
  */
 export async function openDesktopChannel({ env, registry, timeoutMs = READY_TIMEOUT_MS } = {}) {
   const cdpPort = await waitForCdpPort(env.GIT_LENS_USER_DATA, timeoutMs);
   const hub = createDesktopPageHub({ cdpPort });
-  if (registry) hub.startConsoleWatch(registry);
+  hub.startConsoleWatch(registry);
   return hub;
 }
 
