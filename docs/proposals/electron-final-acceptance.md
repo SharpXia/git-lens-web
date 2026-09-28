@@ -64,3 +64,12 @@ npx electron-builder --mac               # 复现打包产物并比对 SHA-256
 ```
 
 视觉基线与逐场景报告由各入口的 `--keep` 模式保留于 qa-root `artifacts/`。
+
+## 6. G7 增量：多标签模式（2026-09-28 追加验收）
+
+- **范围**：契约 §15（WebContentsView 多 tab）——单窗口多标签、每标签独立应用视图与 sessionStorage、共享服务与凭据（defaultSession 过滤覆盖全部标签）、标签条 chrome UI（tabbar.html，主进程持有）、⌘T/⌘W/Ctrl±Tab、关闭最后一个标签等同退出；`public/**` 页面零改动。
+- **分支**：`codex/electron-multitab`（Shell 实现 70e500b/42364de/cc39aba）+ `codex/electron-qa`（E2E 迁移 CDP 通道 275448a/c4ae759），静态审核通过后 `--no-ff` 合入协调分支。
+- **静态审核结论**：契约逐条符合；tabbar 通道带 sender 校验；各视图同强度导航/新窗管控；恢复遮罩升级为逐标签注入；无注入面（动态文案全部 textContent/JSON 字面量化）。连带集成修正：electron-builder.yml 白名单补入 tabbar 两文件。
+- **验收结果（协调 HEAD）**：`node --test` 112/112；`npm run test:isolated` 22/22；`node electron/checks/smoke.mjs` **36/36**（原 22 + 多标签生命周期 14）；`npm run test:desktop:isolated` 16 pass/0 fail/1 skip；`npm run test:desktop:full` **36 pass/0 fail/1 skip**（新增 m1–m6：三标签同源、标题与激活态同步、sessionStorage 按标签隔离、中间标签关闭销毁与就近激活、全关退出协议、多标签 strict-CSP 零违规）。
+- **契约第一次修订**：§15 E2E 通道改为页面级 CDP 直连（playwright 与 Electron 44 的 browser 级 CDP 会话挂起，`connectOverCDP` 不可用）；补充标签激活语义（关闭激活态标签时就近激活，关后台标签不改激活）。
+- **人工清单新增**：⌘T/⌘W/⇧⌘W/Ctrl±Tab 原生加速键实点；新建标签「新标签页」瞬态标题；打包态（dmg）下的标签条渲染需在下次构建时复验一次（白名单已修正，未重新出包）。
