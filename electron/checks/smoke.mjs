@@ -17,14 +17,18 @@
  *    （规则 2 真实用户场景无法整进程安全验证，以 home 注入 + 默认组装字符串断言
  *    代替，不触碰真实 ~/.config）、主进程委托共享实现的代码走查、以及
  *    「显式 GIT_LENS_CONFIG_DIR」「仅 GIT_LENS_USER_DATA」两条端到端链路的
- *    握手 configDir 落点与 config.json 不越界校验。
+ *    握手 configDir 落点与 config.json 不越界校验；
+ * 10. 跨启动标签恢复（契约 §15 第二次修订，场景五）：同一 userData 三轮启动，
+ *    覆盖预写扫描目录发现 fixture、运行期防抖落盘、退出同步落盘（仅查询串）、
+ *    二轮自动恢复（顺序/激活项一致、查询串重放到新端口、页面数据最新）、
+ *    服务崩溃重启不破坏恢复态、存档损坏按无存档容错回落单标签首页。
  *
  * 运行：node electron/checks/smoke.mjs
  * 纯 GUI 项（菜单、原生对话框、窗口状态恢复的视觉表现）无法自动化，
  * 以文末「人工验证清单」输出。
  */
 
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -859,6 +863,339 @@ async function runSharedConfigCheck(baseCtx) {
   }
 }
 
+// ---- 场景五：跨启动标签恢复（契约 §15 第二次修订） ----
+
+/**
+ * 用隔离环境创建最小 fixture 仓库（git init + 单次 commit）。
+ * 提交身份以 -c 注入、GIT_CONFIG_GLOBAL 指向临时文件，不读写真实全局 git 配置。
+ * @param {string} fixturesRoot - fixture 根目录（已存在）
+ * @param {string} name - 仓库名（即目录名）
+ * @returns {string} 仓库 realpath（macOS 上 /var 与 /private/var 差异以此为准）
+ */
+function createFixtureRepo(fixturesRoot, name) {
+  const repoDir = path.join(fixturesRoot, name);
+  fs.mkdirSync(repoDir, { recursive: true });
+  fs.writeFileSync(path.join(repoDir, 'README.md'), `# ${name}\n`, 'utf-8');
+  const git = (...args) => execFileSync('git', args, {
+    cwd: repoDir,
+    stdio: 'ignore',
+    env: { ...process.env, GIT_CONFIG_GLOBAL: path.join(fixturesRoot, '.gitconfig-smoke') },
+  });
+  git('init');
+  git('add', '-A');
+  git('-c', 'user.name=glwt-smoke', '-c', 'user.email=glwt-smoke@example.invalid', 'commit', '-m', 'init');
+  return fs.realpathSync(repoDir);
+}
+
+/** 安全解码查询串（异常时原样返回），供存档内容断言使用 */
+function safeDecode(value) {
+  try {
+    return decodeURIComponent(String(value));
+  } catch {
+    return String(value);
+  }
+}
+
+/**
+ * 场景五：跨启动标签恢复（契约 §15 第二次修订）。
+ *
+ * 三轮启动共用同一 userData（tab-state.json 随其天然隔离），端口跨启动变化
+ * 恰好验证「只存查询串、恢复时重放到当前 origin」：
+ *  a. 预置：mkdtemp 根下两个最小 fixture 仓库 + 预写
+ *     <userData>/git-lens-config/config.json（customDirectories=[fixture 根]）；
+ *  b. 第一轮：标签 1 经页面仓库下拉切到 fixture-a，标签条「+」新建标签 2 切到
+ *     fixture-b，切回标签 1 后优雅退出，核对退出前落盘的存档内容；
+ *  c. 第二轮：断言自动恢复 2 个标签（顺序/激活项与首轮一致、查询串重放到新
+ *     端口、页面数据可拉取），再强杀服务验证崩溃重启不破坏恢复态；
+ *  d. 第三轮：把存档写成半截 JSON，断言按无存档处理回落单标签首页且页面可用。
+ * @param {{runId: string}} baseCtx - 复用主场景的 runId 前缀
+ */
+async function runTabRestoreCheck(baseCtx) {
+  const root5 = fs.mkdtempSync(path.join(os.tmpdir(), 'glwt-smoke-restore-'));
+  const ctx = {
+    root: root5,
+    readyFile: path.join(root5, 'ready.json'),
+    tokenFile: path.join(root5, 'token.txt'),
+    runId: `${baseCtx.runId}-restore`,
+  };
+  const userDataDir = path.join(ctx.root, 'user-data');
+  await fsp.mkdir(userDataDir, { recursive: true });
+  await fsp.mkdir(path.join(ctx.root, 'xdg-config'), { recursive: true });
+  const tabStatePath = path.join(userDataDir, 'tab-state.json');
+
+  // a. fixture 仓库与预写扫描目录配置（仅 GIT_LENS_USER_DATA 时服务配置目录
+  //    按规则 3 落在 <userData>/git-lens-config，smoke 场景四已验证该解析）
+  const fixturesRoot = path.join(root5, 'fixtures');
+  fs.mkdirSync(fixturesRoot, { recursive: true });
+  const fixtureA = createFixtureRepo(fixturesRoot, 'fixture-a');
+  const fixtureB = createFixtureRepo(fixturesRoot, 'fixture-b');
+  const serviceConfigDir = path.join(userDataDir, 'git-lens-config');
+  await fsp.mkdir(serviceConfigDir, { recursive: true });
+  await fsp.writeFile(
+    path.join(serviceConfigDir, 'config.json'),
+    `${JSON.stringify({ customDirectories: [fs.realpathSync(fixturesRoot)] }, null, 2)}\n`,
+    'utf-8',
+  );
+
+  /** 单轮启动前清掉上一轮的 E2E 文件，避免 waitFor 读到旧值空洞通过 */
+  const resetE2eFiles = async () => {
+    await fsp.rm(ctx.readyFile, { force: true });
+    await fsp.rm(ctx.tokenFile, { force: true });
+    await fsp.rm(path.join(userDataDir, 'DevToolsActivePort'), { force: true });
+  };
+
+  /** 读标签存档；不存在/损坏返回 null */
+  const readTabState = () => {
+    try {
+      return JSON.parse(fs.readFileSync(tabStatePath, 'utf-8'));
+    } catch {
+      return null;
+    }
+  };
+
+  /** 等待应用页面目标数量达标并返回目标列表（按服务前缀过滤） */
+  const waitForAppTargets = (cdpPort, prefix, count, timeoutMs) => waitFor(async () => {
+    const list = await fetchCdpTargets(cdpPort);
+    const apps = list.filter((item) => item.type === 'page' && item.url.startsWith(prefix));
+    return apps.length === count ? apps : null;
+  }, timeoutMs);
+
+  /** 等待应用页加载出仓库选项（下拉列表已渲染 ≥2 项） */
+  const waitForRepoOptions = (conn) => waitFor(async () => {
+    const count = await conn.evaluate('document.querySelectorAll("#repoDropdownList .repo-item").length');
+    return count >= 2 ? count : null;
+  }, 15000);
+
+  /** 在应用页内经真实仓库下拉（#repoTrigger + .repo-item 点击）切换到指定仓库 */
+  const selectRepoViaUi = (conn, repoPath) => conn.evaluate(`(function () {
+    var trigger = document.getElementById('repoTrigger');
+    if (!trigger) { return false; }
+    trigger.click();
+    var items = document.querySelectorAll('#repoDropdownList .repo-item');
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].dataset.repoPath === ${JSON.stringify(repoPath)}) { items[i].click(); return true; }
+    }
+    return false;
+  })()`);
+
+  /** 等待标签条渲染出指定数量标签且标题全部来自页面 title，返回标题数组 */
+  const waitForTabbarTitles = (tabbar, count) => waitFor(async () => {
+    const titles = await tabbar.evaluate('Array.from(document.querySelectorAll(".tab-title")).map(function (e) { return e.textContent; })');
+    return Array.isArray(titles) && titles.length === count && titles.every((t) => typeof t === 'string' && t.includes('Git Lens')) ? titles : null;
+  }, 15000);
+
+  /** 读取标签条当前激活下标 */
+  const tabbarActiveIndex = (tabbar) => tabbar.evaluate('Array.from(document.querySelectorAll(".tab")).findIndex(function (e) { return e.classList.contains("active"); })');
+
+  // ---- 第一轮：构造状态（两个标签分别指向 fixture-a / fixture-b，激活标签 1） ----
+  await resetE2eFiles();
+  const app1 = launchApp(ctx, 'restore-1', ['--remote-debugging-port=0']);
+  const ready1 = await waitForReadyAndToken(ctx);
+  assert('恢复场景：首轮启动就绪（30s 内）', Boolean(ready1), ready1 ? `port=${ready1.port}` : '就绪文件超时\n' + app1.tail());
+  if (!ready1) {
+    app1.child.kill('SIGKILL');
+    return;
+  }
+
+  const token1 = fs.readFileSync(ctx.tokenFile, 'utf-8').trim();
+  const projectsResp = await httpGet(ready1.port, '/api/projects', { 'X-Git-Lens-Session': token1 });
+  const projectsBody = projectsResp.ok ? await projectsResp.json() : null;
+  const discovered = ((projectsBody && Array.isArray(projectsBody.repos)) ? projectsBody.repos : []).map((item) => item.path);
+  const discoveredOk = projectsBody?.ok === true && discovered.includes(fixtureA) && discovered.includes(fixtureB);
+  assert('恢复场景：预写 config.json 生效——/api/projects 发现 fixture-a 与 fixture-b', discoveredOk, `repos=${JSON.stringify(discovered)}`);
+  if (!discoveredOk) {
+    app1.child.kill('SIGKILL');
+    return;
+  }
+
+  const cdpPort1 = await waitFor(() => readDevToolsPort(userDataDir), 10000);
+  const prefix1 = `http://127.0.0.1:${ready1.port}`;
+  const targets1 = cdpPort1 ? await waitForAppTargets(cdpPort1, prefix1, 1, 15000) : null;
+  assert('恢复场景：首轮启动为单标签（此前无存档，回落首页）', Boolean(targets1), targets1 ? targets1.map((t) => t.url).join(', ') : '15s 内未就绪');
+  if (!cdpPort1 || !targets1) {
+    app1.child.kill('SIGKILL');
+    return;
+  }
+
+  const conn1 = await connectCdpPage(cdpPort1, targets1[0].id);
+  await waitForRepoOptions(conn1);
+  await selectRepoViaUi(conn1, fixtureA);
+  const search1 = await waitFor(async () => {
+    const value = await conn1.evaluate('location.search');
+    return safeDecode(value).includes('fixture-a') ? value : null;
+  }, 15000);
+  assert('恢复场景：标签 1 经页面下拉切到 fixture-a（URL 出现 ?repo= 查询串）', Boolean(search1), `search=${search1}`);
+
+  const tabbarTarget1 = (await fetchCdpTargets(cdpPort1)).find((item) => item.type === 'page' && item.url.includes('tabbar.html'));
+  if (!tabbarTarget1) {
+    conn1.close();
+    app1.child.kill('SIGKILL');
+    return;
+  }
+  const tabbar1 = await connectCdpPage(cdpPort1, tabbarTarget1.id);
+  await tabbar1.evaluate('document.getElementById("new-tab").click()');
+  const targets1b = await waitForAppTargets(cdpPort1, prefix1, 2, 15000);
+  const newTarget = targets1b ? targets1b.find((item) => item.id !== targets1[0].id) : null;
+  assert('恢复场景：经标签条「+」新建标签 2（新应用目标恰一个）', Boolean(newTarget), newTarget ? `新目标 ${newTarget.id.slice(0, 8)}…` : '未出现第 2 个应用目标');
+  if (!newTarget) {
+    conn1.close();
+    tabbar1.close();
+    app1.child.kill('SIGKILL');
+    return;
+  }
+
+  const conn2 = await connectCdpPage(cdpPort1, newTarget.id);
+  await waitForRepoOptions(conn2);
+  await selectRepoViaUi(conn2, fixtureB);
+  const search2 = await waitFor(async () => {
+    const value = await conn2.evaluate('location.search');
+    return safeDecode(value).includes('fixture-b') ? value : null;
+  }, 15000);
+  assert('恢复场景：标签 2 切到 fixture-b（两标签查询串各指向各自仓库）', Boolean(search2), `search=${search2}`);
+
+  // 运行期防抖落盘：不等退出就该能看到含两个仓库查询串的存档
+  const archivedLive = await waitFor(() => {
+    const parsed = readTabState();
+    return parsed && Array.isArray(parsed.tabs) && parsed.tabs.length === 2
+      && safeDecode(parsed.tabs[0]?.search || '').includes('fixture-a')
+      && safeDecode(parsed.tabs[1]?.search || '').includes('fixture-b')
+      ? parsed : null;
+  }, 8000);
+  assert('恢复场景：运行期间防抖落盘 tab-state.json（2 个标签各含仓库查询串）', Boolean(archivedLive), archivedLive ? JSON.stringify(archivedLive) : '8s 内未出现有效存档');
+
+  // 切回标签 1 作为退出时的激活项，锁定 activeIndex 语义
+  await tabbar1.evaluate('document.querySelectorAll(".tab")[0].click()');
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const active1 = await tabbarActiveIndex(tabbar1);
+  assert('恢复场景：退出前激活项已切回标签 1（索引 0）', active1 === 0, `activeIndex=${active1}`);
+
+  app1.child.kill('SIGTERM');
+  const exit1 = await waitExit(app1.child, 15000);
+  assert('恢复场景：首轮 SIGTERM 优雅退出（退出协议内同步落盘）', exit1 !== null, exit1 ? `code=${exit1.code} signal=${exit1.signal}` : '超时\n' + app1.tail());
+
+  const serviceGone1 = await waitFor(() => {
+    try {
+      process.kill(ready1.servicePid, 0);
+      return false;
+    } catch (err) {
+      return err.code === 'ESRCH' ? true : null;
+    }
+  }, 10000);
+  assert('恢复场景：首轮退出后服务随之退出（无孤儿）', serviceGone1 === true, serviceGone1 ? `servicePid=${ready1.servicePid} 已退出` : '服务进程仍存活');
+
+  const final1 = readTabState();
+  const final1Ok = Boolean(final1)
+    && final1.version === 1
+    && Array.isArray(final1.tabs) && final1.tabs.length === 2
+    && final1.activeIndex === 0
+    && final1.tabs.every((item) => {
+      const value = typeof item?.search === 'string' ? item.search : '';
+      // 只允许「?」开头的纯查询串：拒绝整串 URL / 协议相对形态（契约校验规则的写入侧镜像）
+      return value.startsWith('?') && !/https?:/i.test(value) && !value.includes('//');
+    })
+    && safeDecode(final1.tabs[0]?.search || '').includes('fixture-a')
+    && safeDecode(final1.tabs[1]?.search || '').includes('fixture-b');
+  assert('恢复场景：退出后存档仅含查询串（无 origin/端口）且顺序与激活项与首轮一致', final1Ok, JSON.stringify(final1));
+
+  conn1.close();
+  conn2.close();
+  tabbar1.close();
+
+  // ---- 第二轮：同 userData 启动，验证自动恢复与崩溃重启边界 ----
+  await resetE2eFiles();
+  const app2 = launchApp(ctx, 'restore-2', ['--remote-debugging-port=0']);
+  const ready2 = await waitForReadyAndToken(ctx);
+  const ready2Ok = Boolean(ready2) && ready2.port !== ready1.port;
+  assert('恢复场景：第二轮启动就绪且端口变化（跨启动端口不参与存档）', ready2Ok, ready2 ? `port ${ready1.port} → ${ready2.port}` : '就绪超时\n' + app2.tail());
+  if (!ready2) {
+    app2.child.kill('SIGKILL');
+    return;
+  }
+
+  const cdpPort2 = await waitFor(() => readDevToolsPort(userDataDir), 10000);
+  const prefix2 = `http://127.0.0.1:${ready2.port}`;
+  const targets2 = cdpPort2 ? await waitForAppTargets(cdpPort2, prefix2, 2, 15000) : null;
+  const targets2Ok = Boolean(targets2)
+    && targets2.filter((item) => String(item.url).includes('fixture-a')).length === 1
+    && targets2.filter((item) => String(item.url).includes('fixture-b')).length === 1;
+  assert('恢复场景：第二轮自动恢复 2 个标签，查询串重放到当前 origin（新端口）', targets2Ok, targets2 ? JSON.stringify(targets2.map((item) => item.url)) : '15s 内未出现 2 个应用目标');
+  if (!targets2) {
+    app2.child.kill('SIGKILL');
+    return;
+  }
+
+  const tabbarTarget2 = (await fetchCdpTargets(cdpPort2)).find((item) => item.type === 'page' && item.url.includes('tabbar.html'));
+  const tabbar2 = tabbarTarget2 ? await connectCdpPage(cdpPort2, tabbarTarget2.id) : null;
+  const titles2 = tabbar2 ? await waitForTabbarTitles(tabbar2, 2) : null;
+  const active2 = tabbar2 ? await tabbarActiveIndex(tabbar2) : -1;
+  const order2Ok = Boolean(titles2) && titles2[0].includes('fixture-a') && titles2[1].includes('fixture-b') && active2 === 0;
+  assert('恢复场景：恢复后标签顺序与激活项与首轮一致（fixture-a 在前且激活）', order2Ok, `titles=${JSON.stringify(titles2)} activeIndex=${active2}`);
+
+  // 页面数据为最新：每个恢复标签内凭据注入可用、服务接口可拉取
+  const dataStatuses = [];
+  for (const target of targets2) {
+    const conn = await connectCdpPage(cdpPort2, target.id);
+    dataStatuses.push(await conn.evaluate('fetch("/api/projects").then(function (r) { return r.status; })'));
+    conn.close();
+  }
+  assert('恢复场景：恢复后的页面数据为最新（各标签 /api/projects 均 200）', dataStatuses.length === 2 && dataStatuses.every((status) => status === 200), JSON.stringify(dataStatuses));
+
+  // 崩溃重启：强杀服务 → 自动重启 → 已有标签走同源 reload，恢复态不被破坏
+  const oldPid2 = ready2.servicePid;
+  try {
+    process.kill(oldPid2, 'SIGKILL');
+  } catch {
+    // 服务进程意外已死也继续走重启断言
+  }
+  const restarted2 = await waitFor(() => {
+    const data = readReadyFile(ctx.readyFile);
+    return data && !data.state && Number.isInteger(data.servicePid) && data.servicePid !== oldPid2 ? data : null;
+  }, 20000);
+  assert('恢复场景：服务被强杀后自动重启（新 servicePid）', Boolean(restarted2), restarted2 ? `新 servicePid=${restarted2.servicePid}` : '20s 内未重启');
+
+  const targets2AfterCrash = restarted2 ? await waitForAppTargets(cdpPort2, prefix2, 2, 15000) : null;
+  const crashKeepOk = Boolean(targets2AfterCrash)
+    && targets2AfterCrash.some((item) => String(item.url).includes('fixture-a'))
+    && targets2AfterCrash.some((item) => String(item.url).includes('fixture-b'));
+  assert('恢复场景：崩溃重启不破坏恢复态（2 个标签保持、查询串不变）', crashKeepOk, targets2AfterCrash ? JSON.stringify(targets2AfterCrash.map((item) => item.url)) : '标签丢失或未恢复');
+
+  app2.child.kill('SIGTERM');
+  const exit2 = await waitExit(app2.child, 15000);
+  assert('恢复场景：第二轮优雅退出（供第三轮复用同一 userData）', exit2 !== null, exit2 ? `code=${exit2.code} signal=${exit2.signal}` : '超时\n' + app2.tail());
+  if (tabbar2) tabbar2.close();
+
+  // ---- 第三轮：存档损坏容错（半截 JSON → 按无存档处理） ----
+  await resetE2eFiles();
+  await fsp.writeFile(tabStatePath, '{"version":1,"activeIndex":0,"tabs":[{"search":"?repo=%2Fbrok', 'utf-8');
+  const app3 = launchApp(ctx, 'restore-3', ['--remote-debugging-port=0']);
+  const ready3 = await waitForReadyAndToken(ctx);
+  if (!ready3) {
+    assert('恢复场景：存档损坏时应用仍能正常启动', false, '就绪超时\n' + app3.tail());
+    app3.child.kill('SIGKILL');
+    return;
+  }
+  const cdpPort3 = await waitFor(() => readDevToolsPort(userDataDir), 10000);
+  const prefix3 = `http://127.0.0.1:${ready3.port}`;
+  const targets3 = cdpPort3 ? await waitForAppTargets(cdpPort3, prefix3, 1, 15000) : null;
+  const status3 = targets3
+    ? await (await connectCdpPage(cdpPort3, targets3[0].id)).evaluate('fetch("/api/projects").then(function (r) { return r.status; })')
+    : 0;
+  assert('恢复场景：存档损坏按无存档处理——单标签首页且页面可用', Boolean(targets3) && status3 === 200, `应用目标=${targets3 ? targets3.length : 0} status=${status3}`);
+  await terminateApp(app3);
+
+  const failedHere = results.some((item) => !item.ok && item.name.startsWith('恢复场景'));
+  if (!failedHere) {
+    try {
+      await fsp.rm(root5, { recursive: true, force: true });
+      console.log('跨启动恢复场景临时目录已清理。');
+    } catch {
+      console.log(`跨启动恢复场景临时目录保留（清理失败）：${root5}`);
+    }
+  } else {
+    console.log(`跨启动恢复场景存在失败项，临时目录保留供排查：${root5}`);
+  }
+}
+
 // ---- 入口 ----
 
 async function main() {
@@ -895,6 +1232,8 @@ async function main() {
     await runMultiTabCheck(ctx);
     console.log('');
     await runSharedConfigCheck(ctx);
+    console.log('');
+    await runTabRestoreCheck(ctx);
   } finally {
     const failed = results.filter((item) => !item.ok);
     console.log('');
@@ -918,8 +1257,10 @@ async function main() {
     console.log('5. 窗口拖动/缩放后重开位置尺寸恢复；外接显示器拔除后窗口自动回到可见区域；');
     console.log('6. 页面内外链点击经系统浏览器打开且不产生新应用窗口；');
     console.log('7. 未设置 GIT_LENS_DEVTOOLS 时 F12/Cmd+Shift+I 不唤起 devtools；设置后可用。');
-    console.log('8. 多标签：⌘T/⌘W/Ctrl+Tab（及菜单「标签页」分组）行为正确；新建标签初始标题「新标签页」；');
-    console.log('   标签标题过长时省略号截短；窗口缩放/最大化时标签条与内容区布局同步；服务崩溃时各标签呈现恢复遮罩。');
+  console.log('8. 多标签：⌘T/⌘W/Ctrl+Tab（及菜单「标签页」分组）行为正确；新建标签初始标题「新标签页」；');
+  console.log('   标签标题过长时省略号截短；窗口缩放/最大化时标签条与内容区布局同步；服务崩溃时各标签呈现恢复遮罩。');
+  console.log('9. 跨启动标签恢复（真实使用路径）：正常使用数个标签后退出重开，标签集合/顺序/激活项恢复；');
+  console.log('   macOS 关窗后经 Dock 重开同样恢复；删除/损坏 tab-state.json 后启动回落单标签首页。');
     process.exit(failed.length === 0 ? 0 : 1);
   }
 }

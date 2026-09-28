@@ -13,6 +13,9 @@
  *  - 应用菜单：标签页（新建/关闭/切换）、编辑与视图操作（作用于激活标签）、
  *    帮助（关于 + 复制诊断信息）、退出；
  *  - 窗口位置尺寸持久化，恢复时校验可见显示器并夹紧；
+ *  - 跨启动标签恢复（契约 §15 第二次修订）：各标签 URL 查询串存档
+ *    （tab-state.json）防抖 + 退出同步落盘，服务就绪后重放到当前 origin
+ *    恢复标签集合；只存查询串不存完整 URL，跨启动端口变化不影响恢复；
  *  - Git 依赖发现：不阻塞启动，结果经 runtime-info 提供给渲染层呈现修复建议。
  */
 
@@ -65,6 +68,12 @@ const SERVICE_SIGKILL_GRACE_MS = 2000;
 /** 窗口状态文件名（存放在 userData 下）与防抖保存间隔 */
 const WINDOW_STATE_FILE = 'window-state.json';
 const WINDOW_STATE_SAVE_DEBOUNCE_MS = 500;
+
+/** 标签状态文件名（契约 §15 第二次修订：跨启动标签恢复）与防抖保存间隔 */
+const TAB_STATE_FILE = 'tab-state.json';
+const TAB_STATE_SAVE_DEBOUNCE_MS = 500;
+/** 单次存档允许的最大标签条目数，防异常膨胀的存档文件拖垮启动 */
+const TAB_STATE_MAX_TABS = 50;
 
 /** 恢复兜底检查延迟：给页面自身遮罩（onServiceState 驱动）的接管窗口 */
 const RECOVERY_FALLBACK_DELAY_MS = 1200;
@@ -138,6 +147,8 @@ let shuttingDown = false;
 let recoveryFallbackTimer = null;
 /** 目录选择桥接的主进程侧端口（与当前服务进程配对） */
 let serviceDialogPort = null;
+/** 标签状态防抖保存定时器（契约 §15 第二次修订） */
+let tabStateSaveTimer = null;
 /** Git 发现结果（found/path/version），不阻塞启动 */
 let gitInfo = { found: false, path: null, version: null, source: null };
 
@@ -430,8 +441,9 @@ function onServiceExit(child, exitCode) {
 /**
  * 把应用文档带回内容标签（DEF-002 语义的多标签版）：
  * - 窗口不存在：先建空壳窗口（含标签条）；
- * - 尚无任何标签：创建首个标签加载应用页——契约 §15 就绪文件由该视图的
- *   首次加载触发；
+ * - 尚无任何标签：按存档恢复标签集合（契约 §15 第二次修订，无有效存档时
+ *   单标签加载应用首页）——契约 §15 就绪文件仍由该批视图中首个完成首次
+ *   加载者触发；
  * - 已有标签且端口未变：逐标签同文档同源 reload——不交换 browsing context
  *   group，各标签独立的 sessionStorage 完整保留，用户选中状态不丢失；
  * - 端口变更（重启复用端口被抢占的罕见回退）：只能跨源导航，各标签会话状态
@@ -441,7 +453,7 @@ function onServiceExit(child, exitCode) {
 function ensureAppDocument(previousPort) {
   if (!mainWindow || mainWindow.isDestroyed()) createMainWindow();
   if (tabs.length === 0) {
-    createTab(appUrl());
+    ensureInitialTab();
     return;
   }
   if (previousPort === null || previousPort === servicePort) {
@@ -741,6 +753,12 @@ function attachTabGuards(tab) {
     void writeE2eReadyFile();
   });
 
+  // 契约 §15 第二次修订：页面经 replaceState/pushState 把「当前项目与视图」写进
+  // URL 查询串，主框架导航与页内导航（含 replaceState/pushState）都意味着标签
+  // 入口可能已变化，统一交给防抖保存去取各标签当前查询串
+  webContents.on('did-navigate', () => scheduleTabStateSave());
+  webContents.on('did-navigate-in-page', () => scheduleTabStateSave());
+
   webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
     // -3 (ABORTED) 是导航被取消的正常噪音（如加载中途切换页面）
     if (errorCode === -3) return;
@@ -798,6 +816,8 @@ function createTab(url) {
   // 新标签按浏览器惯例立即激活（activateTab 负责隐藏旧激活视图）
   activateTab(tab.id);
   view.webContents.loadURL(url || appUrl());
+  // 契约 §15 第二次修订：标签集合变化是存档保存触发点之一（防抖）
+  scheduleTabStateSave();
   log(`已新建标签页（id=${tab.id}，共 ${tabs.length} 个）`);
   return tab;
 }
@@ -818,6 +838,8 @@ function activateTab(id) {
   syncTabBounds();
   if (isViewAlive(tab.view)) tab.view.webContents.focus();
   pushTabbarState();
+  // 契约 §15 第二次修订：激活项变化写入存档（防抖，与 createTab 触发合并）
+  scheduleTabStateSave();
 }
 
 /**
@@ -849,6 +871,8 @@ function closeTab(id) {
     pushTabbarState();
   }
   log(`已关闭标签页（id=${id}，剩余 ${tabs.length} 个）`);
+  // 契约 §15 第二次修订：标签集合变化是存档保存触发点之一（防抖）
+  scheduleTabStateSave();
   if (tabs.length === 0) {
     log('已关闭最后一个标签页，按契约关闭窗口并退出应用');
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
@@ -866,9 +890,29 @@ function cycleTab(offset) {
   activateTab(next.id);
 }
 
-/** 确保至少存在一个内容标签（服务就绪后首次进窗、二次启动激活等场景共用） */
+/**
+ * 确保至少存在一个内容标签；当前无标签时按存档恢复标签集合（契约 §15 第二次修订）：
+ *  - 有效存档 → 按保存顺序把各查询串重放到当前 origin 逐个建标签，并激活
+ *    存档记录的激活项（越界回落 0）；
+ *  - 无存档/存档全部无效 → 维持现状：单标签加载首页。
+ * 本路径只在「当前一个标签都没有」时进入（首启建首标签、窗口重开、崩溃重启
+ * 时集合为空的兜底）；服务崩溃重启时已有标签走 ensureAppDocument 的同源
+ * reload，两条路径互不干扰。就绪文件语义不变：首个内容视图（含恢复标签）
+ * 完成首次加载时触发。
+ */
 function ensureInitialTab() {
-  if (tabs.length === 0) createTab(appUrl());
+  if (tabs.length > 0) return;
+  const archive = loadTabState();
+  if (archive && archive.searches.length > 0) {
+    for (const search of archive.searches) {
+      createTab(`${appOrigin()}/${search}`);
+    }
+    const activeIndex = Math.min(Math.max(archive.activeIndex, 0), tabs.length - 1);
+    activateTab(tabs[activeIndex].id);
+    log(`已按存档恢复 ${archive.searches.length} 个标签页（激活第 ${activeIndex + 1} 个）`);
+  } else {
+    createTab(appUrl());
+  }
 }
 
 // ---- 窗口管理与安全边界 ----
@@ -1030,6 +1074,152 @@ function trackWindowState(win) {
   });
 }
 
+// ---- 标签状态持久化（契约 §15 第二次修订：跨启动标签恢复） ----
+
+/** 标签状态存档文件路径（userData 下，随 GIT_LENS_USER_DATA 天然隔离） */
+function tabStateFilePath() {
+  return path.join(app.getPath('userData'), TAB_STATE_FILE);
+}
+
+/**
+ * 校验单条存档查询串：只接受以「?」开头的纯查询串，且必须能被 URL 解析
+ * 原样回环（解析后 search 与原文一致）。显式拒绝包含 http 的整串 URL 与
+ * 协议相对形态，防旧格式或脏数据把恢复导航带离当前 origin。
+ * @param {unknown} entry - 存档中的单个标签条目
+ * @returns {string|null} 合法查询串；不合法返回 null（该条目丢弃）
+ */
+function normalizeArchivedSearch(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const search = entry.search;
+  if (typeof search !== 'string' || !search.startsWith('?')) return null;
+  if (search.length > 2048 || /\s/.test(search)) return null;
+  if (/https?:/i.test(search) || search.includes('//')) return null;
+  try {
+    // 挂在占位 origin 上解析即可，校验只关心查询串回环一致（与当前端口无关）
+    const parsed = new URL(`http://127.0.0.1/${search}`);
+    return parsed.search === search ? search : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 读取标签状态存档。文件缺失/JSON 损坏/版本不符/结构异常一律按无存档处理
+ * （返回 null，由调用方回落单标签首页）；单条非法条目丢弃，不拖垮整份存档。
+ * @returns {{activeIndex: number, searches: string[]}|null} 有效存档；无存档为 null
+ */
+function loadTabState() {
+  let raw;
+  try {
+    raw = fs.readFileSync(tabStateFilePath(), 'utf-8');
+  } catch {
+    return null;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || parsed.version !== 1) return null;
+  if (!Array.isArray(parsed.tabs) || !Number.isInteger(parsed.activeIndex)) return null;
+  const searches = [];
+  for (const entry of parsed.tabs.slice(0, TAB_STATE_MAX_TABS)) {
+    const search = normalizeArchivedSearch(entry);
+    if (search !== null) searches.push(search);
+  }
+  return { activeIndex: parsed.activeIndex, searches };
+}
+
+/**
+ * 取单个标签当前 URL 的查询串（契约 §15：只存查询串、不存完整 URL，跨启动
+ * 端口会变，恢复时重放到当前 origin）。视图销毁/导航尚未提交/非常规地址按
+ * 无查询串处理，统一存「?」——「?」的语义是“开过一个无参首页标签”，恢复侧
+ * 加载 `<origin>/?` 与加载首页等价，读写形态保持一致。
+ * @param {{id: number, view: Electron.WebContentsView, title: string}} tab - 目标标签
+ * @returns {string} 以「?」开头的查询串
+ */
+function currentTabSearch(tab) {
+  if (isViewAlive(tab.view)) {
+    try {
+      const url = tab.view.webContents.getURL();
+      if (isSameOriginAppUrl(url)) {
+        const search = new URL(url).search;
+        return search === '' ? '?' : search;
+      }
+    } catch {
+      // URL 解析失败按无查询串处理
+    }
+  }
+  return '?';
+}
+
+/**
+ * 把当前标签集合序列化为存档结构；无标签时返回 null（同步落盘侧会改写为
+ * 空存档覆盖旧数据，语义为“上次会话以无标签收尾”，下次启动回落单标签首页）。
+ * @returns {{version: number, activeIndex: number, tabs: Array<{search: string}>}|null}
+ */
+function serializeTabState() {
+  if (tabs.length === 0) return null;
+  // 找不到激活项（理论不可达）时按第 0 个处理，避免产出负数下标
+  const activeIndex = Math.max(0, tabs.findIndex((tab) => tab.id === activeTabId));
+  return {
+    version: 1,
+    activeIndex,
+    tabs: tabs.map((tab) => ({ search: currentTabSearch(tab) })),
+  };
+}
+
+/** 防抖保存（同 window-state 模式）：500ms 内连续触发只落一次盘 */
+function scheduleTabStateSave() {
+  if (tabStateSaveTimer) clearTimeout(tabStateSaveTimer);
+  tabStateSaveTimer = setTimeout(() => {
+    tabStateSaveTimer = null;
+    void saveTabStateNow();
+  }, TAB_STATE_SAVE_DEBOUNCE_MS);
+}
+
+/** 取消尚未触发的防抖保存（同步落盘前调用，避免双写竞争） */
+function cancelTabStateSaveTimer() {
+  if (tabStateSaveTimer) {
+    clearTimeout(tabStateSaveTimer);
+    tabStateSaveTimer = null;
+  }
+}
+
+/** 异步原子写入存档（防抖路径）：临时文件 + rename，避免写入中途留下半截 JSON */
+async function saveTabStateNow() {
+  const payload = serializeTabState();
+  if (!payload) return;
+  try {
+    await atomicWriteFile(tabStateFilePath(), `${JSON.stringify(payload, null, 2)}\n`);
+  } catch (err) {
+    log(`保存标签状态失败：${err.message}`);
+  }
+}
+
+/**
+ * 同步（阻塞式）落盘存档，用于退出协议与窗口关闭等不能再等防抖的时机。
+ * 无标签时也写一份空存档，覆盖上一轮会话的旧数据，保证读写语义一致。
+ */
+function saveTabStateSync() {
+  cancelTabStateSaveTimer();
+  const payload = serializeTabState() || { version: 1, activeIndex: 0, tabs: [] };
+  const target = tabStateFilePath();
+  const tmpPath = `${target}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+  try {
+    fs.writeFileSync(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf-8');
+    fs.renameSync(tmpPath, target);
+  } catch (err) {
+    log(`同步保存标签状态失败：${err.message}`);
+    try {
+      fs.rmSync(tmpPath, { force: true });
+    } catch {
+      // 清理失败可忽略：临时文件带随机后缀，不会覆盖任何有效数据
+    }
+  }
+}
+
 /**
  * 创建主窗口空壳并装载标签条（契约 §15）。
  * 窗口自身 webContents 保持空白未用（仅独立恢复页可能载入），应用页一律
@@ -1057,6 +1247,12 @@ function createMainWindow() {
   if (restored && restored.isMaximized) mainWindow.maximize();
   attachWindowGuards(mainWindow);
   trackWindowState(mainWindow);
+  // 关窗即同步落盘标签状态（同 window-state 的 close 时机）：「关闭最后一个
+  // 标签 = 关窗退出」路径中 'closed' 会先于 before-quit 清空标签集合，必须趁
+  // 集合还在时抓快照；app.quit() 关窗会再次走到这里，重复写入幂等无害
+  mainWindow.on('close', () => {
+    saveTabStateSync();
+  });
   mainWindow.on('closed', () => {
     mainWindow = null;
     tabbarView = null;
@@ -1074,8 +1270,9 @@ function createMainWindow() {
 }
 
 /**
- * 按当前服务状态打开主窗口：服务就绪则带首个内容标签进入应用；
- * 未就绪（启动中/已崩溃）则向空壳窗口载入独立恢复页。
+ * 按当前服务状态打开主窗口：服务就绪则按存档恢复标签集合进入应用
+ * （ensureInitialTab，无有效存档时单标签首页）；未就绪（启动中/已崩溃）
+ * 则向空壳窗口载入独立恢复页。
  */
 function openWindowForCurrentServiceState() {
   createMainWindow();
@@ -1602,6 +1799,9 @@ app.on('window-all-closed', () => {
 app.on('before-quit', (event) => {
   if (shuttingDown) return;
   shuttingDown = true;
+  // 契约 §15 第二次修订：退出前同步落盘一次标签状态（服务关闭是异步流程，
+  // 必须在交出控制权前完成落盘）
+  saveTabStateSync();
   event.preventDefault();
   serviceState = 'stopped';
   broadcastServiceState();
