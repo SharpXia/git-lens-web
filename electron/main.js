@@ -6,10 +6,12 @@
  *  - 监督独立服务子进程（utilityProcess）：等待就绪、意外退出时指数退避自动重启
  *    （上限 3 次，成功后清零）、应用退出时请求优雅关闭并兜底 SIGKILL；
  *  - 生成仅存主进程的会话凭据，经 webRequest 仅对本机 /api 请求注入请求头；
- *  - 受限 BrowserWindow：contextIsolation + sandbox，加载 http://127.0.0.1:<随机端口>/，
- *    拦截跨源导航、新窗口与权限请求；
+ *  - 多标签架构（契约 §15）：BrowserWindow 仅作空壳，顶部为自有 chrome 标签条
+ *    （tabbar.html + 专用 preload），内容区为各标签对应的 WebContentsView 栈；
+ *    每个标签复用应用 preload 与凭据注入（defaultSession 级过滤天然覆盖全部视图）；
  *  - 原生能力 IPC（契约 §6）：运行时信息、目录选择、服务状态推送、外链打开；
- *  - 应用菜单：刷新、前进/后退、缩放、编辑、帮助（关于 + 复制诊断信息）、退出；
+ *  - 应用菜单：标签页（新建/关闭/切换）、编辑与视图操作（作用于激活标签）、
+ *    帮助（关于 + 复制诊断信息）、退出；
  *  - 窗口位置尺寸持久化，恢复时校验可见显示器并夹紧；
  *  - Git 依赖发现：不阻塞启动，结果经 runtime-info 提供给渲染层呈现修复建议。
  */
@@ -19,6 +21,7 @@ import {
   BrowserWindow,
   MessageChannelMain,
   Menu,
+  WebContentsView,
   clipboard,
   dialog,
   ipcMain,
@@ -26,6 +29,7 @@ import {
   session,
   shell,
   utilityProcess,
+  webContents,
 } from 'electron';
 import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -44,6 +48,11 @@ const WINDOW_DEFAULT_WIDTH = 1280;
 const WINDOW_DEFAULT_HEIGHT = 800;
 const WINDOW_MIN_WIDTH = 960;
 const WINDOW_MIN_HEIGHT = 600;
+
+/** 顶部标签条固定高度（契约 §15：Shell 自有 chrome UI，DIP） */
+const TABBAR_HEIGHT = 38;
+/** 新建标签的初始标题（契约 §15：加载完成前占位，页面 title 到达后覆盖） */
+const INITIAL_TAB_TITLE = '新标签页';
 
 /** 服务自动重启上限（连续失败次数，成功就绪后清零） */
 const SERVICE_RESTART_MAX_ATTEMPTS = 3;
@@ -94,8 +103,16 @@ const e2eTokenFile = process.env.GIT_LENS_E2E_TOKEN_FILE
 /** 仅存主进程的本地 API 会话凭据（契约 §4.6：crypto 随机 ≥32 字节，不暴露给页面） */
 const sessionToken = crypto.randomBytes(32).toString('hex');
 
-/** 主窗口；服务未就绪时可能尚未创建 */
+/** 主窗口；服务未就绪时可能尚未创建。多标签架构下仅作空壳容器，自身不加载应用页 */
 let mainWindow = null;
+/** 顶部标签条视图（Shell 自有 chrome，加载 electron/tabbar.html）；随主窗口销毁重建 */
+let tabbarView = null;
+/** 内容标签集合：每个标签一个 WebContentsView（契约 §15） */
+const tabs = [];
+/** 当前激活标签 id；null 表示尚无标签 */
+let activeTabId = null;
+/** 标签 id 序列（仅用于内部标识与 tabbar IPC 回传，不外露） */
+let nextTabSeq = 1;
 /** 服务子进程句柄；退出后置 null */
 let serviceProcess = null;
 /** 最近一次已知的服务进程 pid（写诊断与 ready 文件用） */
@@ -165,11 +182,20 @@ function rendererServiceState() {
   return serviceState === 'starting' ? 'restarting' : serviceState;
 }
 
-/** 向所有窗口广播服务状态 */
+/**
+ * 向窗口与全部内容标签视图广播服务状态。
+ * 多标签架构下应用页面运行在 WebContentsView 里（不在窗口自身 webContents），
+ * 状态广播必须显式覆盖每个标签，否则页面内恢复遮罩（#serviceStateOverlay）收不到事件。
+ */
 function broadcastServiceState() {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send('git-lens:service-state', rendererServiceState());
+    }
+  }
+  for (const tab of tabs) {
+    if (!tab.view.webContents.isDestroyed()) {
+      tab.view.webContents.send('git-lens:service-state', rendererServiceState());
     }
   }
 }
@@ -385,30 +411,32 @@ function onServiceExit(child, exitCode) {
 }
 
 /**
- * 把应用文档带回主窗口（DEF-002 修复的关键路径）：
- * - 应用页已加载且端口未变：用 reload() 同文档同源重载——不交换 browsing
- *   context group，同源 sessionStorage 完整保留，用户选中状态不丢失；
- * - 端口变更（重启复用端口被抢占的罕见回退）：只能跨源导航，会话状态丢失，
- *   记日志说明；
- * - 窗口还在但只展示过首启恢复页：无会话状态可丢，直接换地址加载应用页；
- * - 窗口不存在：创建并加载应用页。
+ * 把应用文档带回内容标签（DEF-002 语义的多标签版）：
+ * - 窗口不存在：先建空壳窗口（含标签条）；
+ * - 尚无任何标签：创建首个标签加载应用页——契约 §15 就绪文件由该视图的
+ *   首次加载触发；
+ * - 已有标签且端口未变：逐标签同文档同源 reload——不交换 browsing context
+ *   group，各标签独立的 sessionStorage 完整保留，用户选中状态不丢失；
+ * - 端口变更（重启复用端口被抢占的罕见回退）：只能跨源导航，各标签会话状态
+ *   丢失，记日志说明。
  * @param {number|null} previousPort - 重启前的服务端口（null 表示首次就绪）
  */
 function ensureAppDocument(previousPort) {
-  if (mainWindow && !mainWindow.isDestroyed() && appEverLoaded) {
-    if (previousPort === null || previousPort === servicePort) {
-      mainWindow.webContents.reload();
-    } else {
-      log(`服务端口由 ${previousPort} 变为 ${servicePort}，页面跨源导航，崩溃前的会话状态无法保留`);
-      mainWindow.loadURL(appUrl());
+  if (!mainWindow || mainWindow.isDestroyed()) createMainWindow();
+  if (tabs.length === 0) {
+    createTab(appUrl());
+    return;
+  }
+  if (previousPort === null || previousPort === servicePort) {
+    for (const tab of tabs) {
+      if (isViewAlive(tab.view)) tab.view.webContents.reload();
     }
-    return;
+  } else {
+    log(`服务端口由 ${previousPort} 变为 ${servicePort}，页面跨源导航，崩溃前的会话状态无法保留`);
+    for (const tab of tabs) {
+      if (isViewAlive(tab.view)) tab.view.webContents.loadURL(appUrl());
+    }
   }
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.loadURL(appUrl());
-    return;
-  }
-  createMainWindow(appUrl());
 }
 
 /**
@@ -528,6 +556,304 @@ function registerTokenFilter() {
   });
 }
 
+// ---- 多标签视图管理（契约 §15） ----
+
+/**
+ * 判断视图及其 webContents 仍可用。
+ * 视图随窗口销毁后访问其属性可能抛错，统一在此兜底。
+ * @param {Electron.WebContentsView} [view] - 待检视图
+ */
+function isViewAlive(view) {
+  if (!view) return false;
+  try {
+    return !view.webContents.isDestroyed();
+  } catch {
+    return false;
+  }
+}
+
+/** 当前激活的标签对象；无标签时返回 null */
+function getActiveTab() {
+  return tabs.find((tab) => tab.id === activeTabId) || null;
+}
+
+/** 标签列表快照（推送 tabbar 用；只含渲染所需的三个字段） */
+function tabsSnapshot() {
+  return tabs.map((tab) => ({ id: tab.id, title: tab.title, active: tab.id === activeTabId }));
+}
+
+/**
+ * 向标签条推送最新标签集合。
+ * 标签条未就绪（加载中/已销毁）时静默跳过——其 did-finish-load 会主动拉取
+ * 一次当前状态，不会永久失步。
+ */
+function pushTabbarState() {
+  if (!isViewAlive(tabbarView)) return;
+  tabbarView.webContents.send('git-lens-tabbar:state-changed', { tabs: tabsSnapshot(), activeId: activeTabId });
+}
+
+/** 判断 sender 是否为标签条视图本身（防止应用页面伪造标签条通道调用） */
+function isTabbarSender(sender) {
+  return Boolean(isViewAlive(tabbarView) && sender === tabbarView.webContents);
+}
+
+/**
+ * 同步内容区所有视图 bounds（DIP）：标签条固定占顶部 TABBAR_HEIGHT，
+ * 内容标签铺满其余区域。窗口 resize/最大化/全屏切换时由窗口事件驱动。
+ */
+function syncTabBounds() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const { width, height } = mainWindow.getContentBounds();
+  const contentHeight = Math.max(0, height - TABBAR_HEIGHT);
+  if (isViewAlive(tabbarView)) {
+    tabbarView.setBounds({ x: 0, y: 0, width, height: TABBAR_HEIGHT });
+  }
+  for (const tab of tabs) {
+    if (isViewAlive(tab.view)) {
+      tab.view.setBounds({ x: 0, y: TABBAR_HEIGHT, width, height: contentHeight });
+    }
+  }
+}
+
+/**
+ * 创建标签条视图：Shell 自有 chrome（tabbar.html，自足深色样式），经专用
+ * preload 与主进程通信（通道前缀 git-lens-tabbar:）。
+ * @returns {Electron.WebContentsView}
+ */
+function createTabbarView() {
+  const view = new WebContentsView({
+    webPreferences: {
+      preload: path.join(__dirname, 'tabbar-preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false,
+    },
+  });
+  view.setBackgroundColor('#010409');
+  attachTabbarGuards(view);
+  view.webContents.loadFile(path.join(__dirname, 'tabbar.html'));
+  // 加载完成（含崩溃重建后的重载）即回填当前标签集合，避免状态失步
+  view.webContents.on('did-finish-load', () => {
+    pushTabbarState();
+  });
+  return view;
+}
+
+/**
+ * 标签条视图安全边界：chrome 页无导航需求，跨源导航与新窗口一律拒绝；
+ * 渲染进程异常退出时记录日志并整体重建（契约 §15 健壮性要求）。
+ * @param {Electron.WebContentsView} view - 标签条视图
+ */
+function attachTabbarGuards(view) {
+  const webContents = view.webContents;
+
+  webContents.on('will-navigate', (event) => {
+    event.preventDefault();
+  });
+
+  webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+  webContents.on('render-process-gone', (_event, details) => {
+    if (shuttingDown) return;
+    log(`标签条渲染进程异常退出（${details.reason}），正在重建`);
+    rebuildTabbar();
+  });
+}
+
+/** 重建标签条：新视图就位后再销毁旧视图，期间标签集合不受影响 */
+function rebuildTabbar() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    tabbarView = null;
+    return;
+  }
+  const previous = tabbarView;
+  tabbarView = createTabbarView();
+  if (previous) {
+    mainWindow.contentView.removeChildView(previous);
+    try {
+      previous.webContents.close();
+    } catch {
+      // 旧视图可能已随崩溃销毁
+    }
+  }
+  mainWindow.contentView.addChildView(tabbarView);
+  syncTabBounds();
+}
+
+/**
+ * 附加标签视图安全边界：与主窗口同规则（同源放行、外链交系统浏览器、
+ * 拒新窗、拒 webview、非调试模式拦截 devtools 快捷键），另挂标题监听、
+ * 就绪文件触发与崩溃处理。
+ * @param {{id: number, view: Electron.WebContentsView, title: string}} tab - 目标标签
+ */
+function attachTabGuards(tab) {
+  const webContents = tab.view.webContents;
+
+  webContents.on('will-navigate', (event, url) => {
+    if (isSameOriginAppUrl(url)) return;
+    event.preventDefault();
+    openExternalIfHttp(url);
+  });
+
+  webContents.setWindowOpenHandler(({ url }) => {
+    openExternalIfHttp(url);
+    return { action: 'deny' };
+  });
+
+  webContents.on('will-attach-webview', (event) => {
+    event.preventDefault();
+  });
+
+  webContents.on('before-input-event', (event, input) => {
+    if (process.env.GIT_LENS_DEVTOOLS === '1') return;
+    if (isDevtoolsShortcut(input)) event.preventDefault();
+  });
+
+  // 标签标题取自页面 title（形如 `<仓库> · <视图> | Git Lens`），过长由 tabbar CSS 截短
+  webContents.on('page-title-updated', (_event, title) => {
+    if (typeof title === 'string' && title) tab.title = title;
+    pushTabbarState();
+  });
+
+  // 契约 §13（经 §15 修订）：就绪文件以「首个内容视图完成首次加载」为准；
+  // 空壳窗口自身不再触发。其余标签的加载（含恢复 reload）幂等重写同一基础形态
+  webContents.on('did-finish-load', () => {
+    if (!isSameOriginAppUrl(webContents.getURL())) return;
+    appEverLoaded = true;
+    void writeE2eReadyFile();
+  });
+
+  webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    // -3 (ABORTED) 是导航被取消的正常噪音（如加载中途切换页面）
+    if (errorCode === -3) return;
+    log(`标签页加载失败（${errorDescription}，code ${errorCode}）：${validatedURL}`);
+  });
+
+  // 契约 §15：单标签崩溃不做独立恢复，按服务不可用路径处理——复用既有状态
+  // 广播通道（服务健康时页面遮罩不受影响），并重载该视图尝试自愈；服务本身
+  // 不可用时交给服务恢复路径统一处理（重启成功后 reloadAll 带回全部标签）
+  webContents.on('render-process-gone', (_event, details) => {
+    log(`标签页（id=${tab.id}）渲染进程异常退出：${details.reason}`);
+    if (shuttingDown || serviceState !== 'ready') return;
+    broadcastServiceState();
+    setTimeout(() => {
+      if (!shuttingDown && isViewAlive(tab.view)) {
+        tab.view.webContents.reload();
+      }
+    }, 300);
+  });
+
+  // 销毁回执：供自验与排障确认「关闭标签 = 无泄漏销毁」
+  webContents.on('destroyed', () => {
+    log(`标签页（id=${tab.id}）webContents 已销毁`);
+  });
+}
+
+/**
+ * 新建内容标签并加载应用首页（无仓库参数，契约 §15）。
+ * webPreferences 与既有窗口一致（sandbox + contextIsolation + 同一 preload）；
+ * 不指定 partition，视图挂在 defaultSession 上，§4.6 凭据注入过滤天然覆盖。
+ * @param {string} [url] - 初始地址；缺省为应用首页
+ * @returns {object|null} 新建标签；服务未就绪或窗口不存在时为 null
+ */
+function createTab(url) {
+  if (!mainWindow || mainWindow.isDestroyed()) return null;
+  if (!servicePort) {
+    log('服务尚未就绪，忽略新建标签请求');
+    return null;
+  }
+  const view = new WebContentsView({
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false,
+    },
+  });
+  // 深色底色与应用主题一致，避免加载间隙白闪
+  view.setBackgroundColor('#0d1117');
+  const tab = { id: nextTabSeq++, view, title: INITIAL_TAB_TITLE };
+  attachTabGuards(tab);
+  tabs.push(tab);
+  mainWindow.contentView.addChildView(view);
+  // 新标签按浏览器惯例立即激活（activateTab 负责隐藏旧激活视图）
+  activateTab(tab.id);
+  view.webContents.loadURL(url || appUrl());
+  log(`已新建标签页（id=${tab.id}，共 ${tabs.length} 个）`);
+  return tab;
+}
+
+/**
+ * 激活指定标签：显隐切换 + 焦点移交，不销毁、不重载（契约 §15 交互冻结）。
+ * @param {number} id - 目标标签 id
+ */
+function activateTab(id) {
+  const tab = tabs.find((item) => item.id === id);
+  if (!tab) return;
+  const previous = getActiveTab();
+  if (previous && previous !== tab && isViewAlive(previous.view)) {
+    previous.view.setVisible(false);
+  }
+  tab.view.setVisible(true);
+  activeTabId = id;
+  syncTabBounds();
+  if (isViewAlive(tab.view)) tab.view.webContents.focus();
+  pushTabbarState();
+}
+
+/**
+ * 关闭指定标签：移出视图树并销毁 webContents（无泄漏）。
+ * 关闭最后一个标签等同关闭窗口（契约 §15），经 window-all-closed 走既有
+ * 退出协议（before-quit → 服务 close → 等待退出 → 超时 SIGKILL）。
+ * @param {number} id - 目标标签 id
+ */
+function closeTab(id) {
+  const index = tabs.findIndex((item) => item.id === id);
+  if (index === -1) return;
+  const [tab] = tabs.splice(index, 1);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.contentView.removeChildView(tab.view);
+  }
+  try {
+    // close() 触发 graceful 销毁；'destroyed' 事件回执供自验确认
+    tab.view.webContents.close();
+  } catch (err) {
+    log(`关闭标签页（id=${id}）销毁异常：${err && err.message ? err.message : err}`);
+  }
+  if (activeTabId === id) {
+    activeTabId = null;
+    // 就近激活：优先原位置右侧标签，其次左侧（浏览器惯例）
+    const neighbor = tabs[index] || tabs[index - 1] || null;
+    if (neighbor) activateTab(neighbor.id);
+    else pushTabbarState();
+  } else {
+    pushTabbarState();
+  }
+  log(`已关闭标签页（id=${id}，剩余 ${tabs.length} 个）`);
+  if (tabs.length === 0) {
+    log('已关闭最后一个标签页，按契约关闭窗口并退出应用');
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+  }
+}
+
+/**
+ * 循环切换标签（Ctrl+Tab 下一个 / Ctrl+Shift+Tab 上一个，契约 §15）。
+ * @param {1|-1} offset - 切换方向
+ */
+function cycleTab(offset) {
+  if (tabs.length === 0) return;
+  const currentIndex = Math.max(0, tabs.findIndex((item) => item.id === activeTabId));
+  const next = tabs[(currentIndex + offset + tabs.length) % tabs.length];
+  activateTab(next.id);
+}
+
+/** 确保至少存在一个内容标签（服务就绪后首次进窗、二次启动激活等场景共用） */
+function ensureInitialTab() {
+  if (tabs.length === 0) createTab(appUrl());
+}
+
 // ---- 窗口管理与安全边界 ----
 
 /**
@@ -568,8 +894,10 @@ function isDevtoolsShortcut(input) {
 }
 
 /**
- * 附加窗口安全边界：同源导航、拒绝新窗口、拒绝权限请求、
+ * 附加主窗口（空壳）安全边界：同源导航、拒绝新窗口、拒绝权限请求、
  * 拒绝 webview、非调试模式下拦截 devtools 快捷键。
+ * 多标签架构下窗口自身 webContents 平时空白未用（仅独立恢复页可能载入），
+ * 这里保留同强度边界作纵深防御；就绪文件触发已移至内容标签视图。
  * @param {Electron.BrowserWindow} win - 目标窗口
  */
 function attachWindowGuards(win) {
@@ -594,14 +922,6 @@ function attachWindowGuards(win) {
   webContents.on('before-input-event', (event, input) => {
     if (process.env.GIT_LENS_DEVTOOLS === '1') return;
     if (isDevtoolsShortcut(input)) event.preventDefault();
-  });
-
-  // 应用页面首次加载完成：记录标记（区分首启与重启恢复）并按契约 §13
-  // 在「服务就绪且窗口完成首次加载」后写入就绪文件
-  webContents.on('did-finish-load', () => {
-    if (!isSameOriginAppUrl(webContents.getURL())) return;
-    appEverLoaded = true;
-    void writeE2eReadyFile();
   });
 
   // 加载失败与渲染进程异常退出必须有日志，否则恢复页之外的问题无从排查
@@ -694,10 +1014,11 @@ function trackWindowState(win) {
 }
 
 /**
- * 创建主窗口并加载地址（无地址时加载恢复页）。
- * @param {string} [initialUrl] - 初始加载地址；缺省时展示启动恢复页
+ * 创建主窗口空壳并装载标签条（契约 §15）。
+ * 窗口自身 webContents 保持空白未用（仅独立恢复页可能载入），应用页一律
+ * 运行在内容标签视图里；首个内容标签由 ensureAppDocument 在服务就绪后创建。
  */
-function createMainWindow(initialUrl) {
+function createMainWindow() {
   const restored = restoredWindowBounds();
   mainWindow = new BrowserWindow({
     width: restored ? restored.bounds.width : WINDOW_DEFAULT_WIDTH,
@@ -707,8 +1028,9 @@ function createMainWindow(initialUrl) {
     minHeight: WINDOW_MIN_HEIGHT,
     title: 'Git Lens Web',
     show: true,
+    backgroundColor: '#0d1117',
+    // 空壳窗口不挂应用 preload：preload 只属于内容标签视图（契约 §6 暴露面不变）
     webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -720,8 +1042,28 @@ function createMainWindow(initialUrl) {
   trackWindowState(mainWindow);
   mainWindow.on('closed', () => {
     mainWindow = null;
+    tabbarView = null;
+    // 内容视图随窗口一起销毁；清空集合，避免二次启动/激活路径引用已销毁视图
+    tabs.length = 0;
+    activeTabId = null;
   });
-  mainWindow.loadURL(initialUrl || buildRecoveryPageUrl('restarting', '本地服务正在启动', true));
+  // 标签条与全部内容标签的布局随窗口几何变化全量同步（resize/maximize/全屏）
+  for (const event of ['resize', 'maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen']) {
+    mainWindow.on(event, syncTabBounds);
+  }
+  tabbarView = createTabbarView();
+  mainWindow.contentView.addChildView(tabbarView);
+  syncTabBounds();
+}
+
+/**
+ * 按当前服务状态打开主窗口：服务就绪则带首个内容标签进入应用；
+ * 未就绪（启动中/已崩溃）则向空壳窗口载入独立恢复页。
+ */
+function openWindowForCurrentServiceState() {
+  createMainWindow();
+  if (serviceState === 'ready') ensureInitialTab();
+  else mainWindow.loadURL(buildRecoveryPageUrl('restarting', '本地服务正在启动', true));
 }
 
 /**
@@ -753,20 +1095,25 @@ function cancelRecoveryFallback() {
 }
 
 /**
- * 兜底检查：页面自身遮罩可见则不干预；否则按窗口状态选择注入遮罩或展示恢复页。
+ * 兜底检查：激活标签页自身遮罩可见则不干预；否则向全部内容标签注入遮罩
+ * （每个标签独立运行页面，任一切换后都应呈现一致的恢复态）。
+ * 应用页尚未加载（首启即失败）时没有会话状态可丢，仍走独立恢复页。
  */
 async function armRecoveryFallback(state, reason, autoRecover) {
-  if (mainWindow && !mainWindow.isDestroyed() && appEverLoaded) {
-    let pageOverlayVisible = false;
-    try {
-      // 只读探测页面自身遮罩的显示状态，不触碰页面数据
-      pageOverlayVisible = await mainWindow.webContents.executeJavaScript(
-        `(function () { var el = document.getElementById('serviceStateOverlay'); return !!(el && el.style.display !== 'none'); })()`,
-      );
-    } catch {
-      // 渲染层异常时按遮罩不可见处理，尝试注入兜底
+  if (mainWindow && !mainWindow.isDestroyed() && appEverLoaded && tabs.length > 0) {
+    const active = getActiveTab();
+    if (active && isViewAlive(active.view)) {
+      let pageOverlayVisible = false;
+      try {
+        // 只读探测页面自身遮罩的显示状态，不触碰页面数据
+        pageOverlayVisible = await active.view.webContents.executeJavaScript(
+          `(function () { var el = document.getElementById('serviceStateOverlay'); return !!(el && el.style.display !== 'none'); })()`,
+        );
+      } catch {
+        // 渲染层异常时按遮罩不可见处理，尝试注入兜底
+      }
+      if (pageOverlayVisible) return;
     }
-    if (pageOverlayVisible) return;
     injectRecoveryOverlay(state, reason, autoRecover);
     return;
   }
@@ -774,29 +1121,31 @@ async function armRecoveryFallback(state, reason, autoRecover) {
 }
 
 /**
- * 向当前应用文档注入全屏深色恢复遮罩（主进程 executeJavaScript，不受页面
+ * 向全部内容标签注入全屏深色恢复遮罩（主进程 executeJavaScript，不受页面
  * CSP 约束）。遮罩拦截指针与键盘输入，避免旧数据可交互；服务恢复后的
  * 同文档 reload 会自然清除注入内容。
  */
 function injectRecoveryOverlay(state, reason, autoRecover) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.webContents.executeJavaScript(buildRecoveryOverlayScript(state, reason, autoRecover))
-    .catch((err) => log(`注入恢复遮罩失败：${err && err.message ? err.message : err}`));
+  const script = buildRecoveryOverlayScript(state, reason, autoRecover);
+  for (const tab of tabs) {
+    if (!isViewAlive(tab.view)) continue;
+    tab.view.webContents.executeJavaScript(script)
+      .catch((err) => log(`注入恢复遮罩失败：${err && err.message ? err.message : err}`));
+  }
 }
 
 /**
- * 展示独立恢复页：仅用于应用页从未加载（首启失败）或窗口刚重建的场景，
- * 此时无任何会话状态可丢，data: URL 导航无副作用。
+ * 展示独立恢复页：仅用于应用页从未加载（首启失败）的场景。恢复页加载进
+ * 窗口自身的空壳 webContents（多标签架构下该 webContents 平时空白未用），
+ * 不占用内容标签；服务就绪后首个内容标签创建并覆盖其上。
  * @param {'restarting'|'crashed'} state - 恢复页状态
  * @param {string} reason - 失败原因（中文）
- * @param {boolean} autoRecover - 是否仍在自动恢复
+ * @param {boolean} autoRecover - 是否显示自动恢复倒计时
  */
 function showStandaloneRecoveryPage(state, reason, autoRecover) {
   const url = buildRecoveryPageUrl(state, reason, autoRecover);
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    createMainWindow(url);
-    return;
-  }
+  if (!mainWindow || mainWindow.isDestroyed()) createMainWindow();
   mainWindow.loadURL(url);
 }
 
@@ -1009,43 +1358,98 @@ function showAboutDialog() {
 }
 
 /**
- * 构建应用菜单：刷新、前进/后退、缩放（作用于 webContents）、编辑角色、
- * 帮助（关于 + 复制诊断信息）、退出；macOS 保留标准 appMenu。
- * 不提供 devtools 菜单项（保留 GIT_LENS_DEVTOOLS 调试开关）。
+ * 构建应用菜单：标签页（新建/关闭/切换，契约 §15 交互冻结）、编辑与视图操作
+ * （显式路由到激活标签）、帮助（关于 + 复制诊断信息）、退出；macOS 保留标准
+ * appMenu。不提供 devtools 菜单项（保留 GIT_LENS_DEVTOOLS 调试开关）。
  */
 function buildApplicationMenu() {
   const isMac = process.platform === 'darwin';
+
+  /**
+   * 把菜单动作包装为作用到目标标签视图的 click 处理器。
+   * 多标签架构下 BrowserWindow 自身 webContents 是空壳，Electron 内建 role
+   * 一律作用于窗口 webContents，因此编辑/视图操作必须以自定义 click 显式
+   * 路由到真正持有焦点的标签视图（退回激活标签）。
+   * @param {(target: Electron.WebContents) => void} action - 目标动作
+   */
+  const withTabTarget = (action) => () => {
+    let target = null;
+    try {
+      const focused = webContents.getFocusedWebContents();
+      if (focused && tabs.some((tab) => isViewAlive(tab.view) && tab.view.webContents === focused)) {
+        target = focused;
+      }
+    } catch {
+      // 焦点查询失败时退回激活标签
+    }
+    if (!target) {
+      const active = getActiveTab();
+      if (active && isViewAlive(active.view)) target = active.view.webContents;
+    }
+    if (target) action(target);
+  };
+
   const template = [
     ...(isMac ? [{ role: 'appMenu' }] : []),
     {
       label: '文件',
-      submenu: [isMac ? { role: 'close', label: '关闭窗口' } : { role: 'quit', label: '退出' }],
+      submenu: [
+        // ⌘W 已划给「关闭标签页」；macOS 关闭窗口改绑 ⇧⌘W（role:close 默认
+        // ⌘W 必须显式覆盖，否则两个菜单项争抢同一加速键，触发行为不确定）
+        isMac
+          ? { role: 'close', label: '关闭窗口', accelerator: 'Shift+CmdOrCtrl+W' }
+          : { role: 'quit', label: '退出' },
+      ],
+    },
+    {
+      label: '标签页',
+      submenu: [
+        {
+          label: '新建标签页',
+          accelerator: 'CmdOrCtrl+T',
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) createTab(appUrl());
+            else openWindowForCurrentServiceState();
+          },
+        },
+        {
+          label: '关闭标签页',
+          accelerator: 'CmdOrCtrl+W',
+          click: () => {
+            if (activeTabId !== null) closeTab(activeTabId);
+          },
+        },
+        { type: 'separator' },
+        { label: '下一个标签页', accelerator: 'Ctrl+Tab', click: () => cycleTab(1) },
+        { label: '上一个标签页', accelerator: 'Ctrl+Shift+Tab', click: () => cycleTab(-1) },
+      ],
     },
     {
       label: '编辑',
       submenu: [
-        { role: 'undo', label: '撤销' },
-        { role: 'redo', label: '重做' },
+        { label: '撤销', accelerator: 'CmdOrCtrl+Z', click: withTabTarget((wc) => wc.undo()) },
+        { label: '重做', accelerator: 'Shift+CmdOrCtrl+Z', click: withTabTarget((wc) => wc.redo()) },
         { type: 'separator' },
-        { role: 'cut', label: '剪切' },
-        { role: 'copy', label: '复制' },
-        { role: 'paste', label: '粘贴' },
-        { role: 'selectAll', label: '全选' },
+        { label: '剪切', accelerator: 'CmdOrCtrl+X', click: withTabTarget((wc) => wc.cut()) },
+        { label: '复制', accelerator: 'CmdOrCtrl+C', click: withTabTarget((wc) => wc.copy()) },
+        { label: '粘贴', accelerator: 'CmdOrCtrl+V', click: withTabTarget((wc) => wc.paste()) },
+        { label: '全选', accelerator: 'CmdOrCtrl+A', click: withTabTarget((wc) => wc.selectAll()) },
       ],
     },
     {
       label: '视图',
       submenu: [
-        { role: 'reload', label: '刷新' },
-        { role: 'forceReload', label: '强制刷新' },
+        { label: '刷新', accelerator: 'CmdOrCtrl+R', click: withTabTarget((wc) => wc.reload()) },
+        { label: '强制刷新', accelerator: 'Shift+CmdOrCtrl+R', click: withTabTarget((wc) => wc.reloadIgnoringCache()) },
         { type: 'separator' },
-        { role: 'back', label: '返回' },
-        { role: 'forward', label: '前进' },
+        { label: '返回', accelerator: 'CmdOrCtrl+[', click: withTabTarget((wc) => wc.goBack()) },
+        { label: '前进', accelerator: 'CmdOrCtrl+]', click: withTabTarget((wc) => wc.goForward()) },
         { type: 'separator' },
-        { role: 'zoomIn', label: '放大', accelerator: 'CmdOrCtrl+=' },
-        { role: 'zoomOut', label: '缩小', accelerator: 'CmdOrCtrl+-' },
-        { role: 'resetZoom', label: '实际大小', accelerator: 'CmdOrCtrl+0' },
+        { label: '放大', accelerator: 'CmdOrCtrl+=', click: withTabTarget((wc) => wc.setZoomLevel(wc.getZoomLevel() + 0.5)) },
+        { label: '缩小', accelerator: 'CmdOrCtrl+-', click: withTabTarget((wc) => wc.setZoomLevel(wc.getZoomLevel() - 0.5)) },
+        { label: '实际大小', accelerator: 'CmdOrCtrl+0', click: withTabTarget((wc) => wc.setZoomLevel(0)) },
         { type: 'separator' },
+        // 全屏是窗口级操作，内建 role 语义正确
         { role: 'togglefullscreen', label: '全屏' },
       ],
     },
@@ -1088,6 +1492,31 @@ function registerIpc() {
   ipcMain.handle('git-lens:open-external', async (_event, url) => {
     openExternalIfHttp(url);
   });
+
+  // ---- 标签条通道（契约 §15；仅接受标签条视图自身发起，防应用页面伪造） ----
+
+  ipcMain.on('git-lens-tabbar:subscribe', (event) => {
+    if (!isTabbarSender(event.sender)) return;
+    // 订阅即回发当前标签集合，避免标签条错过最近一次变化
+    pushTabbarState();
+  });
+
+  ipcMain.on('git-lens-tabbar:new-tab', (event) => {
+    if (!isTabbarSender(event.sender)) return;
+    if (mainWindow && !mainWindow.isDestroyed()) createTab(appUrl());
+  });
+
+  ipcMain.on('git-lens-tabbar:close-tab', (event, tabId) => {
+    if (!isTabbarSender(event.sender)) return;
+    if (!Number.isInteger(tabId) || tabId <= 0) return;
+    closeTab(tabId);
+  });
+
+  ipcMain.on('git-lens-tabbar:activate-tab', (event, tabId) => {
+    if (!isTabbarSender(event.sender)) return;
+    if (!Number.isInteger(tabId) || tabId <= 0) return;
+    activateTab(tabId);
+  });
 }
 
 // ---- 应用生命周期 ----
@@ -1129,8 +1558,8 @@ if (!gotSingleInstanceLock) {
 } else {
   app.on('second-instance', () => {
     if (!mainWindow || mainWindow.isDestroyed()) {
-      // 已有实例窗口被关闭的场景：服务就绪则直接回应用页，否则进恢复流程
-      createMainWindow(serviceState === 'ready' ? appUrl() : undefined);
+      // 已有实例窗口被关闭的场景：服务就绪则带首个标签回应用页，否则进恢复流程
+      openWindowForCurrentServiceState();
       return;
     }
     if (mainWindow.isMinimized()) mainWindow.restore();
@@ -1165,7 +1594,7 @@ app.on('before-quit', (event) => {
 // macOS 点击 Dock 图标时恢复窗口
 app.on('activate', () => {
   if (!mainWindow || mainWindow.isDestroyed()) {
-    createMainWindow(serviceState === 'ready' ? appUrl() : undefined);
+    openWindowForCurrentServiceState();
   } else {
     mainWindow.show();
   }
