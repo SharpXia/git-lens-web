@@ -217,3 +217,13 @@ E2E 工具锁定：`playwright`（devDependency，协调分支持有；Electron 
 - E2E 通道（第一次修订）：Playwright `_electron` 不把 WebContentsView 暴露为 page；桌面 E2E 以 `--remote-debugging-port=0` 启动，从 `<userData>/DevToolsActivePort` 读取调试端口。~~`chromium.connectOverCDP`~~ **实测 playwright 与 Electron 44 下 browser 级 CDP 会话初始化挂起，改用页面级 CDP 直连**（`/json/list` 过滤 `http://127.0.0.1:<服务端口>/` 前缀 + 页面级 WebSocket `Runtime.evaluate`/`Page.captureScreenshot`）；`_electron` 仅保留 app 级操作。目标创建顺序以「操作一次、新出现应用目标恰一个」锁定。
 - 标签激活语义（第一次修订补充）：关闭**激活态**标签时就近激活（右侧优先）；关闭后台标签不改变当前激活；关闭最后一个标签等同关闭窗口。
 - E2E 启动形态与孤儿判定（第一次修订补充）：E2E 启动参数必须显式携带 `--user-data-dir=<GIT_LENS_USER_DATA>`（作为退出协议孤儿检查的进程匹配锚点）；"无孤儿"语义 = 稳定窗口收敛后的孤儿数（250ms 间隔、连续 3 次持平、上限 5s），且必须带正向对照（锚点扫描能命中本轮存活实例）防止空洞通过。
+
+## 16. 仓库星标持久化契约（G8 增量：DEF-005 修复）
+
+- 缺陷背景：星标原存页面 localStorage（`git_lens_starred_repos`），按源隔离；桌面服务随机端口导致每次启动源变化，星标丢失（web 固定端口不受影响）。
+- **存储**：`<configDir>/stars.json`，格式 `{"version":1,"starred":["<仓库绝对路径>",...]}`；写入用临时文件 + rename 原子替换。随 §5 配置解析规则落位——web 与桌面共享同一配置目录时星标自动互通。
+- **API**（受 §4 全部边界约束）：
+  - `GET /api/stars` → `{"ok":true,"starred":[...]}`；
+  - `POST /api/stars` → body `{"repoPath":string,"starred":boolean}` → 增删一项并返回 `{"ok":true,"starred":[...]}`；`repoPath` 非空字符串、列表去重保序；文件不存在视为空列表。
+- **页面迁移**：启动拉取 `/api/stars` 为唯一事实源；首次加载时若服务端为空且 localStorage 有旧星标，则导入服务端并清除该 localStorage 键（一次性迁移，向后兼容）。
+- **验证**：端点单测（增删/去重/损坏文件容错/边界拒绝）；页面行为由既有视觉与交互场景覆盖，星标跨重启断言列入桌面 E2E 后续增量。
