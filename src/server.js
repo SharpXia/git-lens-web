@@ -39,8 +39,7 @@ import {
 
 const PORT = process.env.PORT || 9527;
 const HOME = os.homedir();
-// 配置目录支持环境变量覆盖：测试实例与真实服务共用 $HOME，若不隔离，
-// 测试期间对扫描目录的任何写入都会覆盖用户真实配置（2026-09-25 曾因此覆盖过用户配置）
+// 配置目录支持环境变量覆盖，便于测试实例与日常实例隔离数据。
 const CONFIG_DIR = process.env.GIT_LENS_CONFIG_DIR || path.join(HOME, '.config', 'git-lens-web');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const execFileAsync = promisify(execFile);

@@ -27,7 +27,7 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │ 📁 my-feature-worktree                               [main]    │
 │    分支: feature/my-feature                                     │
-│    /Users/example/workspace/.../my-feature-worktree       [📋 Copy] │
+│    /Users/example/workspace/my-feature-worktree           [📋 Copy] │
 │    3 hours ago · 张三 · feat: add user authentication           │
 │                                                                 │
 │  [未提交 Diff]  [与主干对比]  [📜 提交记录]  [移除]              │

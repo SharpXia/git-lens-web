@@ -131,7 +131,7 @@ async function runGit(cwd, args) {
 ┌─────────────────────────────────────────────────────────┐
 │ 📁 example-team/feature-xxx          [Main] [feature-xxx] │
 │ /path/to/worktree                           [复制]       │
-│ 2 hours ago · xxd · feat: add commit log viewer         │
+│ 2 hours ago · Demo User · feat: add commit log viewer         │
 │                                                          │
 │  [未提交 Diff (3)]  [提交记录]  [与主干对比]  [移除]      │
 └─────────────────────────────────────────────────────────┘
@@ -167,11 +167,11 @@ async function runGit(cwd, args) {
 │                                        │  │                    │  │
 │                                        │  │ ● a1b2c3d  2h ago  │  │
 │                                        │  │   feat: add viewer │  │
-│                                        │  │   xxd              │  │
+│                                        │  │   Demo User              │  │
 │                                        │  │                    │  │
 │                                        │  │ ● e4f5g6h  5h ago  │  │
 │                                        │  │   fix: edge case   │  │
-│                                        │  │   xxd              │  │
+│                                        │  │   Demo User              │  │
 │                                        │  │                    │  │
 │                                        │  │ ...更多提交...       │  │
 │                                        │  │                    │  │
@@ -198,7 +198,7 @@ async function runGit(cwd, args) {
 ┌──────────────────────────────────┐
 │ ● a1b2c3d          2 hours ago  │  ← hash (可点击复制) + 相对时间
 │ feat: add commit log viewer      │  ← commit subject (单行截断)
-│ xxd                              │  ← 作者名
+│ Demo User                              │  ← 作者名
 └──────────────────────────────────┘
 ```
 
@@ -272,8 +272,8 @@ GET /api/worktree-commits?worktree=/Users/example/workspace/individualProjects/g
     {
       "hash": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
       "shortHash": "a1b2c3d",
-      "author": "xxd",
-      "authorEmail": "xxd@example.com",
+      "author": "Demo User",
+      "authorEmail": "demo@example.com",
       "date": "2026-09-23T10:30:00+08:00",
       "relativeTime": "2 hours ago",
       "subject": "feat: add commit log viewer",
