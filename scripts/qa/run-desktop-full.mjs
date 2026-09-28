@@ -23,9 +23,15 @@
  *   6. 跨启动标签恢复（契约 §15 第二次修订，独立第三实例，r1-r4）：同一 userData
  *      三轮启动，覆盖运行期防抖落盘与退出同步落盘（存档只含查询串）、二轮自动
  *      恢复（查询串重放到新端口、顺序/激活项一致、页面数据最新）、服务崩溃重启
- *      不破坏恢复态、存档坏 JSON 按无存档容错回落单标签首页；恢复段 strict CSP
- *      继续全程收集并硬断言（r5）。
+ *      不破坏恢复态（等待窗口 30s，断言标签集合保持 + 查询串重放到重启后端口；
+ *      弹框免疫长会话覆盖 ≥30s 崩溃窗口）、存档坏 JSON 按无存档容错回落单标签
+ *      首页；恢复段 strict CSP 继续全程收集并硬断言（r5）。
  *   7. strict CSP 全程收集并硬断言真实违规为零。
+ *
+ * 弹框免疫：全部 CDP 页面会话内置双层处理（desktop-shared.mjs，对齐 Shell
+ * smoke.mjs）：新文档预置 alert/confirm/prompt 桩 + javascriptDialogOpening
+ * 自动 accept。e3/r3 同时核对崩溃窗口内不再出现弹框事件（DEF-006 非阻断
+ * 提示验收）。
  *
  * 页面通道：多标签架构（§15）下 BrowserWindow 是空壳，应用页经 desktop-shared 的
  * 页面级 CDP 会话驱动；`_electron` 句柄仅用于 app 级操作（主进程 evaluate、close）。
@@ -919,6 +925,14 @@ async function main() {
         ? `选中仓库已恢复=${repoAfterCrash}（端口 ${restartedReady?.port} 与重启前一致，同源会话保持）`
         : `同端口=${sameOrigin}；崩溃前会话存储=${JSON.stringify(sessionBeforeCrash).slice(0, 240)}；恢复后=${JSON.stringify(sessionAfterCrash).slice(0, 240)}、实际选中=${repoAfterCrash}。DEF-002 修复已合入仍丢失，说明修复不完整，需立即上报`);
     void sameOrigin;
+    // DEF-006 核对（e3）：服务中断已改非阻断失败提示，崩溃重启窗口内不应再出现
+    // 阻塞式弹框（修复前「分析失败」alert 会挂起渲染层）。CDP 层免疫的事件兜底
+    // 若被触发即说明页面仍有弹框路径——作为硬断言暴露，detail 带事件明细供定位
+    const eDialogs = await hub.dialogEvents();
+    record('e3-no-blocking-dialog', '崩溃恢复窗口无阻塞式弹框事件（DEF-006 非阻断提示验收）', eDialogs.length === 0 ? 'pass' : 'fail',
+      eDialogs.length === 0
+        ? 'CDP 会话未观察到 javascriptDialogOpening（免疫事件兜底未被触发）'
+        : `捕获 ${eDialogs.length} 条：${JSON.stringify(eDialogs).slice(0, 240)}`);
 
     // ================= 7. strict CSP 与退出协议 =================
     cspSummary = { ...cspRegistry.summarize(), strictMode: strictCsp };
@@ -1268,30 +1282,44 @@ async function main() {
       r2ReplayOk && r2OrderOk && r2DataOk ? 'pass' : 'fail',
       `port ${r1Port}→${r2Port} 查询串重放=${r2ReplayOk} 标题=${JSON.stringify(r2Titles)} 激活=${r2ActiveIndex}（存档 ${r1Archive?.activeIndex}） 数据fresh=${r2DataOk} 截图=${r2ShotOk ? r2ShotPath : '失败'}`);
 
-    // ---- r3 崩溃不破坏：kill -9 服务 → 自动重启 → 2 标签仍在、查询串不变 ----
+    // ---- r3 崩溃不破坏：kill -9 服务 → 自动重启 → 2 标签仍在、查询串重放 ----
+    // 弹框免疫长会话覆盖（Shell 提醒 ≥30s）：kill 瞬间旧文档在途请求失败是阻塞式
+    // 弹框的风险窗口，事件兜底依赖会话存活。r2 期间 hub 已为两个应用页建立免疫
+    // 会话（免疫内置在 connectCdpPage），kill 前经 pageFor 确认仍存活（断线会话
+    // 自动重建），让免疫覆盖从 kill 到重启收敛的整个窗口
+    for (const matched of r2Matched) {
+      if (matched[0]) await restoreHub.pageFor(matched[0].id, matched[0].url).catch(() => { /* 重建失败由后续断言兜底 */ });
+    }
     const r2ServicePid = r2Ready.servicePid;
     process.kill(r2ServicePid, 'SIGKILL');
     const r3Restarted = await pollUntil(() => {
       const value = readReadyFile(restoreEnv.GIT_LENS_E2E_READY_FILE);
       return value && !value.state && Number.isInteger(value.port) && value.servicePid !== r2ServicePid ? value : null;
     }, RESTART_TIMEOUT_MS, { describe: '恢复实例服务崩溃后自动重启' }).catch(() => null);
-    // 重启端口可能与崩溃前不同：按新端口重设应用前缀再枚举（既有标签被同源 reload 到新 origin）
+    // 重启端口可能与崩溃前不同：按新端口重设应用前缀再枚举（既有标签被迁移到新 origin）。
+    // 换端口重放是跨源导航：Electron 按站点隔离为新标签换 renderer 进程，提交耗时
+    // 数秒且随负载波动，等待窗口放宽到 30s（原 15s 在换端口轮次会偶发超时）
     let r3Targets = null;
     if (r3Restarted) {
       restoreHub.appPrefix = `http://127.0.0.1:${r3Restarted.port}/`;
-      r3Targets = await restoreHub.waitForAppTargets(2, 15000).catch(() => null);
+      r3Targets = await restoreHub.waitForAppTargets(2, 30000).catch(() => null);
     }
     const r3Matched = r1Searches.map((expected) => (r3Targets || []).filter((t) => searchOf(t.url) === expected));
+    // 断言加严（DEF-006 修复后的代码上）：无论重启端口是否复用，一律断言
+    // 「标签集合保持（恰 2 个）+ 每条存档查询串恰重放到一个标签」——查询串重放
+    // 由主进程按存档把查询串附加到当前 origin 实现，不依赖同源 sessionStorage，
+    // 换端口轮次不再放宽为只断言 origin 迁移
     const r3QueriesUnchanged = r3Matched.every((m) => m.length === 1);
-    // 同端口 → reload 保留查询串（强断言）；端口变化 → ensureAppDocument 按设计回落首页
-    // （跨源 sessionStorage 无法保留，实现注释声明的既有边界），此时断言标签数与 origin 迁移
-    const r3SamePort = Boolean(r3Restarted) && r3Restarted.port === r2Port;
     const r3Ok = Boolean(r3Restarted && r3Targets)
       && r3Targets.length === 2
-      && (r3SamePort ? r3QueriesUnchanged : r3Targets.every((t) => t.url.startsWith(`http://127.0.0.1:${r3Restarted.port}/`)));
-    record('r3-crash-keeps-restored-tabs', '恢复场景 r3：服务被 kill -9 后自动重启，恢复态不破坏（2 标签仍在、查询串不变）',
+      && r3QueriesUnchanged
+      && r3Targets.every((t) => t.url.startsWith(`http://127.0.0.1:${r3Restarted.port}/`));
+    // DEF-006 核对：崩溃重启窗口内 CDP 层不应观察到阻塞式弹框事件
+    //（修复前「分析失败」alert 会在此窗口弹出并挂起渲染层）
+    const r3Dialogs = await restoreHub.dialogEvents();
+    record('r3-crash-keeps-restored-tabs', '恢复场景 r3：服务被 kill -9 后自动重启，恢复态不破坏（2 标签保持、查询串重放到重启后端口）',
       r3Ok ? 'pass' : 'fail',
-      `重启=${Boolean(r3Restarted)}（port ${r2Port}→${r3Restarted?.port}） 同端口=${r3SamePort} 标签数=${r3Targets?.length ?? 0} 查询串不变=${r3QueriesUnchanged}`);
+      `重启=${Boolean(r3Restarted)}（port ${r2Port}→${r3Restarted?.port}） 标签数=${r3Targets?.length ?? 0} 查询串重放=${r3QueriesUnchanged}（各条命中数=${JSON.stringify(r3Matched.map((m) => m.length))}） 弹框事件=${r3Dialogs.length}${r3Dialogs.length > 0 ? ` ${JSON.stringify(r3Dialogs).slice(0, 200)}` : ''}`);
     await closeRestoreRound(r3Restarted, 'r3');
 
     // ---- r4 容错：存档坏 JSON → 按无存档处理回落单标签首页；结束清理存档恢复默认 ----
