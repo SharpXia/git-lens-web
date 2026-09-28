@@ -78,7 +78,7 @@ export function buildDesktopEnv({ qaRoot, runId, suffix = '' } = {}) {
   };
 }
 
-/** 预写服务扫描目录配置：desktop 服务读 <userData>/git-lens-config，web 位置留档对照 */
+/** 预写服务扫描目录配置：desktop 服务读 GIT_LENS_CONFIG_DIR（<qaRoot>/config），旧布局留档对照 */
 export async function writeServiceScanConfig(qaRoot) {
   for (const dir of [
     path.join(qaRoot, 'electron-user-data', 'git-lens-config'),

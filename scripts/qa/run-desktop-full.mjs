@@ -158,7 +158,7 @@ async function main() {
     try {
       handshake = await performHandshake(baseUrl, {
         runId,
-        configDir: path.join(qaRoot, 'electron-user-data', 'git-lens-config'),
+        configDir: path.join(qaRoot, 'config'), // 契约 §5 第三次修订：= GIT_LENS_CONFIG_DIR 指向处
         headers: { 'X-Git-Lens-Session': token }
       });
     } catch (err) {

@@ -139,7 +139,8 @@ async function main() {
     if (!token) throw new Error(`会话凭据文件为空: ${tokenFile}`);
 
     // 握手核对（带凭据）：runId/configDir 与本轮 qa-root 完全一致
-    const desktopConfigDir = path.join(qaRoot, 'electron-user-data', 'git-lens-config');
+    // 契约 §5 第三次修订：desktop 配置目录 = GIT_LENS_CONFIG_DIR 指向处（<qaRoot>/config）
+    const desktopConfigDir = path.join(qaRoot, 'config');
     let handshake = null;
     try {
       handshake = await performHandshake(baseUrl, {
@@ -156,7 +157,7 @@ async function main() {
     }
     if (handshake) {
       handshakeMeta = { runId: handshake.runId, configDir: handshake.configDir, host: handshake.host, port: handshake.port, pid: handshake.pid };
-      // configDir 必须落在本轮 qa-root 内（desktop 配置目录 = <userData>/git-lens-config）
+      // configDir 必须落在本轮 qa-root 内（desktop 配置目录 = GIT_LENS_CONFIG_DIR 指向处）
       await assertPathInsideRoot(handshake.configDir, qaRoot);
       record('a4-handshake', '测试握手（带会话凭据）三方一致', 'pass',
         `runId=${handshake.runId} configDir=${handshake.configDir} port=${handshake.port}`);
