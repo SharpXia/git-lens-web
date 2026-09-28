@@ -81,7 +81,11 @@ browser 模式不要求凭据（无主进程可托管 token），但保留 1–5
 ## 5. 配置与迁移契约
 
 - browser 模式：`GIT_LENS_CONFIG_DIR` 或 `~/.config/git-lens-web`，语义不变。
-- desktop 模式：`<userData>/git-lens-config`（userData = Electron `app.getPath('userData')`）；目录结构沿用现有 `config.json` + 本地 MR 存储。**（第二次修订澄清）desktop 模式下 `GIT_LENS_CONFIG_DIR` 环境变量被忽略，服务配置目录一律取 `<userData>/git-lens-config`**；QA 预写配置应写入该路径。
+- desktop 模式配置解析（**第三次修订，配置互通**）：
+  1. `GIT_LENS_CONFIG_DIR` 已设置 → 使用该目录（与浏览器版完全同一配置，实现 web/桌面互通；E2E 经此通道保持隔离）；
+  2. 未设置且未设 `GIT_LENS_USER_DATA`（真实用户启动）→ 默认 `~/.config/git-lens-web`（与 web 共享，互通为默认行为）；
+  3. 兜底（`GIT_LENS_USER_DATA` 隔离场景）→ `<userData>/git-lens-config`。
+  已知取舍：web 与桌面两个服务可能并发写 `config.json`（整文件覆写、后写胜出）；原子写加固列为后续项。曾在旧版桌面 `<userData>/git-lens-config` 配置过扫描目录的用户，切换共享目录后需重配一次。
 - `config.json` 冻结新增字段 `configVersion`：旧文件无该字段视为 `1`；桌面版写入 `2`。迁移动作 = 读取旧目录（只读预览 → 用户确认 → 复制）+ 原子写（临时文件 + rename）+ 保留 `<configDir>/migration.json`（记录 fromVersion/at/sourceDir/result）+ 失败保留 `.bak` 可重试。
 - 测试时 `userData`、服务 configDir、`GIT_CONFIG_GLOBAL`、`HOME`/`XDG_CONFIG_HOME` 全部指向本轮 qa-root（计划书 §6.1）；禁止读取真实配置做断言。
 
