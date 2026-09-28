@@ -10,3 +10,5 @@ logs/
 *.pfx
 coverage/
 .config/
+dist/
+release/
