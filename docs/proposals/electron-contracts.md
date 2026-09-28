@@ -216,3 +216,4 @@ E2E 工具锁定：`playwright`（devDependency，协调分支持有；Electron 
 - 本期不做（留后续）：标签拖拽重排、标签集合跨启动持久化、单标签崩溃的独立恢复（视图崩溃按服务不可用路径处理）。
 - E2E 通道（第一次修订）：Playwright `_electron` 不把 WebContentsView 暴露为 page；桌面 E2E 以 `--remote-debugging-port=0` 启动，从 `<userData>/DevToolsActivePort` 读取调试端口。~~`chromium.connectOverCDP`~~ **实测 playwright 与 Electron 44 下 browser 级 CDP 会话初始化挂起，改用页面级 CDP 直连**（`/json/list` 过滤 `http://127.0.0.1:<服务端口>/` 前缀 + 页面级 WebSocket `Runtime.evaluate`/`Page.captureScreenshot`）；`_electron` 仅保留 app 级操作。目标创建顺序以「操作一次、新出现应用目标恰一个」锁定。
 - 标签激活语义（第一次修订补充）：关闭**激活态**标签时就近激活（右侧优先）；关闭后台标签不改变当前激活；关闭最后一个标签等同关闭窗口。
+- E2E 启动形态与孤儿判定（第一次修订补充）：E2E 启动参数必须显式携带 `--user-data-dir=<GIT_LENS_USER_DATA>`（作为退出协议孤儿检查的进程匹配锚点）；"无孤儿"语义 = 稳定窗口收敛后的孤儿数（250ms 间隔、连续 3 次持平、上限 5s），且必须带正向对照（锚点扫描能命中本轮存活实例）防止空洞通过。
