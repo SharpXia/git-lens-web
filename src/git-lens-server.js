@@ -337,6 +337,49 @@ export function createGitLensServer(options) {
     return { customDirectories, scanDirectories: [...customDirectories] };
   }
 
+  // 星标持久化（契约 §16）：stars.json 与 config.json 同目录落位，
+  // 路径在工厂内按本实例 configDir 解析（configDir 为工厂级常量、模块级无缓存），
+  // 因此 web 与桌面共享同一 configDir 时星标自动互通，隔离目录互不可见。
+  const starsFilePath = path.join(configDir, 'stars.json');
+
+  /**
+   * 读取星标列表。文件不存在按空列表处理（首次使用）；JSON 损坏或结构异常
+   * 同样视为空列表且不抛错（记 warn 日志），避免一个坏文件拖垮整个页面。
+   * @returns {Promise<string[]>} 去重后的仓库绝对路径列表（保持插入顺序）
+   */
+  async function readStars() {
+    try {
+      const raw = await fs.readFile(starsFilePath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed.starred)) return [];
+      // 读取即归一化：过滤非字符串项并去重，容忍历史脏数据
+      return [...new Set(parsed.starred.filter(item => typeof item === 'string' && item.trim() !== ''))];
+    } catch (err) {
+      if (err.code !== 'ENOENT') {
+        log('warn', `stars.json 读取失败，已按空星标列表处理：${err.message}`);
+      }
+      return [];
+    }
+  }
+
+  /**
+   * 原子写入星标列表：先写同目录临时文件再 rename 替换，避免写入中途
+   * 崩溃留下半截 JSON；rename 失败时尽力清理临时文件。
+   * @param {string[]} starred - 去重后的仓库绝对路径列表
+   */
+  async function writeStars(starred) {
+    await fs.mkdir(configDir, { recursive: true });
+    // 临时文件与目标同目录，保证 rename 在同一文件系统上原子生效；随机后缀避免并发互踩
+    const tmp = `${starsFilePath}.tmp-${process.pid}-${crypto.randomUUID()}`;
+    try {
+      await fs.writeFile(tmp, JSON.stringify({ version: 1, starred }, null, 2) + '\n', 'utf-8');
+      await fs.rename(tmp, starsFilePath);
+    } catch (err) {
+      await fs.rm(tmp, { force: true }).catch(() => {});
+      throw err;
+    }
+  }
+
   /**
    * 发现扫描目录中的 Git 仓库。目录本身是仓库时直接收录，否则只检查直接子目录。
    * @param {string[]|null} [scanDirectories] - 扫描目录列表；缺省读配置
@@ -663,6 +706,32 @@ export function createGitLensServer(options) {
         await writeScanConfig(customDirectories);
         const config = await getScanConfig();
         return sendJson(res, 200, { ok: true, ...config });
+      }
+
+      // 1.7 API: 仓库星标持久化（契约 §16）。GET 供页面启动拉取唯一事实源；
+      // POST 为单项增删（幂等：重复加星去重、取消不存在的星不动列表）。
+      // Host/Origin/会话凭据/请求体限制由入口统一执行，此处无特例。
+      if (pathname === '/api/stars' && req.method === 'GET') {
+        const starred = await readStars();
+        return sendJson(res, 200, { ok: true, starred });
+      }
+
+      if (pathname === '/api/stars' && req.method === 'POST') {
+        const { repoPath, starred } = await readJson();
+        if (typeof repoPath !== 'string' || repoPath.trim() === '') {
+          return sendJson(res, 400, { ok: false, error: 'repoPath 必须为非空字符串' });
+        }
+        if (typeof starred !== 'boolean') {
+          return sendJson(res, 400, { ok: false, error: 'starred 必须为布尔值' });
+        }
+        let stars = await readStars();
+        if (starred) {
+          if (!stars.includes(repoPath)) stars = [...stars, repoPath];
+        } else {
+          stars = stars.filter(item => item !== repoPath);
+        }
+        await writeStars(stars);
+        return sendJson(res, 200, { ok: true, starred: stars });
       }
 
       // 系统对话框只接受本机页面的调用（Origin 已在全局边界校验中限制）。
