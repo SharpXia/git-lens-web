@@ -137,7 +137,113 @@
       fetchAndRenderRefDiff(mode, true, true);
     }
 
+    // 星标唯一事实源是服务端 <configDir>/stars.json（契约 §16，桌面随机端口不再丢星标）。
+    // STARRED_STORAGE_KEY 是旧版 localStorage 键，仅保留用于一次性迁移，不再读写星标本身。
     const STARRED_STORAGE_KEY = 'git_lens_starred_repos';
+    let starredReposCache = [];
+
+    /**
+     * 读取旧版 localStorage 星标数据（仅迁移用）；结构异常时按空列表处理。
+     * @returns {string[]} 旧星标仓库路径列表
+     */
+    function readLegacyStarredRepos() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(STARRED_STORAGE_KEY) || 'null');
+        return Array.isArray(parsed) ? parsed.filter(p => typeof p === 'string' && p) : [];
+      } catch {
+        return [];
+      }
+    }
+
+    /**
+     * 调用星标单项切换接口；服务端返回非 ok 时抛错供上层回滚与提示。
+     * @param {string} repoPath - 仓库路径
+     * @param {boolean} starred - true 加星、false 取消
+     * @returns {Promise<{ok: true, starred: string[]}>}
+     */
+    async function postStar(repoPath, starred) {
+      const res = await fetch('/api/stars', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoPath, starred })
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || '保存星标失败');
+      return data;
+    }
+
+    /**
+     * 从服务端拉取星标到内存缓存，并执行旧数据的一次性迁移（契约 §16）：
+     * 仅当服务端为空且 localStorage 有旧数据时导入（逐条 POST，幂等去重）；
+     * 全部成功才清除旧键，任一条失败静默保留 localStorage 待下次再试。
+     */
+    async function loadStarredRepos() {
+      let serverStars = null;
+      try {
+        const res = await fetch('/api/stars');
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '读取星标失败');
+        if (Array.isArray(data.starred)) serverStars = data.starred;
+      } catch (err) {
+        // 服务不可达时保持缓存现状（通常随后 /api/projects 也会失败并进入错误态）
+        console.warn('读取星标失败:', err.message);
+        return;
+      }
+
+      if (serverStars.length === 0) {
+        const legacy = readLegacyStarredRepos();
+        if (legacy.length > 0) {
+          let allImported = true;
+          let latest = serverStars;
+          for (const repoPath of legacy) {
+            try {
+              const data = await postStar(repoPath, true);
+              latest = Array.isArray(data.starred) ? data.starred : latest;
+            } catch (err) {
+              // 导入失败不打断页面：静默保留 localStorage，下次加载再试
+              allImported = false;
+              console.warn('迁移旧星标失败:', err.message);
+            }
+          }
+          if (allImported) {
+            try { localStorage.removeItem(STARRED_STORAGE_KEY); } catch { /* 隐私模式等场景忽略 */ }
+            starredReposCache = latest;
+            return;
+          }
+        }
+      }
+      starredReposCache = serverStars;
+    }
+
+    /**
+     * 取当前星标列表（内存缓存，由 loadStarredRepos/toggleStarRepo 维护）。
+     * @returns {string[]}
+     */
+    function getStarredRepos() {
+      return starredReposCache;
+    }
+
+    function isRepoStarred(repoPath) {
+      return starredReposCache.includes(repoPath);
+    }
+
+    function toggleStarRepo(repoPath, e) {
+      if (e) e.stopPropagation();
+      // 乐观更新：先改本地缓存并重绘，再异步同步服务端；失败回滚缓存并按既有风格提示
+      const wasStarred = starredReposCache.includes(repoPath);
+      const previous = [...starredReposCache];
+      starredReposCache = wasStarred
+        ? starredReposCache.filter(p => p !== repoPath)
+        : [...starredReposCache, repoPath];
+      renderRepoDropdownList();
+      updateRepoTriggerText();
+      postStar(repoPath, !wasStarred).catch(err => {
+        starredReposCache = previous;
+        renderRepoDropdownList();
+        updateRepoTriggerText();
+        alert('星标保存失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
+      });
+    }
     const TAB_STATE_STORAGE_KEY = 'git_lens_tab_state';
     const SCAN_SETUP_PROMPTED_KEY = 'git_lens_scan_setup_prompted';
 
@@ -576,33 +682,6 @@
       } catch (e) {
         console.warn('syncStateToUrl error:', e);
       }
-    }
-
-    function getStarredRepos() {
-      try {
-        const raw = localStorage.getItem(STARRED_STORAGE_KEY);
-        return raw ? JSON.parse(raw) : [];
-      } catch {
-        return [];
-      }
-    }
-
-    function isRepoStarred(repoPath) {
-      const stars = getStarredRepos();
-      return stars.includes(repoPath);
-    }
-
-    function toggleStarRepo(repoPath, e) {
-      if (e) e.stopPropagation();
-      let stars = getStarredRepos();
-      if (stars.includes(repoPath)) {
-        stars = stars.filter(p => p !== repoPath);
-      } else {
-        stars.push(repoPath);
-      }
-      localStorage.setItem(STARRED_STORAGE_KEY, JSON.stringify(stars));
-      renderRepoDropdownList();
-      updateRepoTriggerText();
     }
 
     function toggleStarredOnlyFilter() {
@@ -1066,6 +1145,9 @@
       isRestoringHistory = Boolean(pendingRestoreState);
 
       await loadScanDirectoryConfig();
+      // 启动即拉取服务端星标（含旧 localStorage 一次性迁移），
+      // 保证后续「星标仓库作为默认选中仓库」与渲染分组用到最新数据
+      await loadStarredRepos();
 
       if (pendingRestoreState && pendingRestoreState.q) {
         searchKeyword = pendingRestoreState.q;
