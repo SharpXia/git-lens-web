@@ -218,6 +218,7 @@ E2E 工具锁定：`playwright`（devDependency，协调分支持有；Electron 
   - 保存：标签新建/关闭/切换、任一标签 URL 变化（did-navigate / did-navigate-in-page）时防抖保存（500ms，同 window-state 模式）；before-quit 同步落盘。格式损坏/缺失按无存档处理。
   - 恢复：服务就绪后按保存顺序创建标签并加载各自查询串（页面按 URL 参数回到对应项目并**拉取最新数据**——即恢复 tab 与项目、不恢复 sessionStorage 深层视图）；查询串校验仅接受以 `?` 开头且解析成功的形态，无效条目丢弃；全部无效回落单标签首页。activeIndex 越界回落 0；首个内容视图照旧触发 ready 文件。
   - E2E 隔离：状态文件位于 userData 内，随 `GIT_LENS_USER_DATA` 天然隔离。
+  - 边界澄清（第二次修订补记）：**崩溃重启（进程内恢复）与跨启动恢复是两条路径**——崩溃重启若复用原端口，既有标签走同源 reload，查询串态完整保留；若端口被抢占回退随机端口，既有标签按 DEF-002 语义回落首页（跨源导航），此时标签集合由磁盘存档兜底（下次冷启动恢复）。查询串重放仅适用于冷启动。
 - 本期不做（留后续）：标签拖拽重排、单标签崩溃的独立恢复（视图崩溃按服务不可用路径处理）。
 - E2E 通道（第一次修订）：Playwright `_electron` 不把 WebContentsView 暴露为 page；桌面 E2E 以 `--remote-debugging-port=0` 启动，从 `<userData>/DevToolsActivePort` 读取调试端口。~~`chromium.connectOverCDP`~~ **实测 playwright 与 Electron 44 下 browser 级 CDP 会话初始化挂起，改用页面级 CDP 直连**（`/json/list` 过滤 `http://127.0.0.1:<服务端口>/` 前缀 + 页面级 WebSocket `Runtime.evaluate`/`Page.captureScreenshot`）；`_electron` 仅保留 app 级操作。目标创建顺序以「操作一次、新出现应用目标恰一个」锁定。
 - 标签激活语义（第一次修订补充）：关闭**激活态**标签时就近激活（右侧优先）；关闭后台标签不改变当前激活；关闭最后一个标签等同关闭窗口。
