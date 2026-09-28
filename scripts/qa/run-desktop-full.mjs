@@ -48,6 +48,9 @@ import {
   createCspRegistry,
   createResults,
   createTabbarDriver,
+  createUnrelatedElectronInstance,
+  findElectronProcesses,
+  isPidAlive,
   openDesktopChannel,
   parseDesktopArgs,
   pollPage,
@@ -93,6 +96,8 @@ async function main() {
   let cspRegistry = null;
   let mtabApp = null;
   let mtabHub = null;
+  // DEF-004 回归自证用的无关 Electron 实例（同 worktree 二进制、独立 userData）
+  let unrelated = null;
   let ready = null;
   let baseUrl = null;
   let token = null;
@@ -106,11 +111,13 @@ async function main() {
         try { liveApp.process().kill('SIGKILL'); } catch { /* 已退出 */ }
       }
     }
+    if (unrelated) unrelated.kill();
   });
   process.on('SIGINT', () => {
     for (const liveApp of [app, mtabApp]) {
       if (liveApp) liveApp.process().kill('SIGKILL');
     }
+    if (unrelated) unrelated.kill();
     process.exit(130);
   });
 
@@ -901,12 +908,31 @@ async function main() {
     record('h1-csp-strict', 'CSP 真实违规为零（--strict-csp 硬断言）', cspSummary.realViolationCount === 0 ? 'pass' : 'fail',
       `真实违规=${cspSummary.realViolationCount}，${JSON.stringify(cspSummary.realViolations).slice(0, 300)}；Electron 开发提醒=${cspSummary.electronDevWarningCount}（打包前固有，仅记录）`);
 
-    const exit = await closeAndVerify({ app, ready });
+    // 场景 j：误杀防护自证（DEF-004 回归钉死）。另起一个与本轮无关的 Electron 实例
+    // （同 worktree 二进制、独立 mkdtemp userData、仅加载 about:blank）——旧的孤儿
+    // 匹配按「worktree 根 + Electron.app 路径」会把这类实例误判为本轮孤儿并强杀，
+    // 修复后 i1 结束时它必须仍然存活
+    unrelated = await createUnrelatedElectronInstance({ qaRoot });
+    console.log(`[qa-desktop-full] 无关实例已启动 pid=${unrelated.pid} userData=${unrelated.userDataDir}`);
+
+    // j1 正向对照：孤儿匹配锚点（本轮 userData）必须能命中运行中的本轮实例，
+    // 防止匹配式失效后孤儿检查退化为「扫不到任何进程」的空洞通过
+    const userDataDir = launched.env.GIT_LENS_USER_DATA;
+    const scopeProbe = await findElectronProcesses({ userDataDir });
+    record('j1-orphan-scope-probe', '孤儿匹配锚点可命中运行中的本轮实例（正向对照，≥1）', scopeProbe.length >= 1 ? 'pass' : 'fail',
+      `锚点=${userDataDir} 命中=${scopeProbe.length}`);
+
+    const exit = await closeAndVerify({ app, ready, userDataDir });
     app = null;
     await hub.dispose().catch(() => { /* 会话已随应用退出 */ });
     hub = null;
     record('i1-exit-protocol', 'app.close() 后服务退出、端口释放、主进程退出、无 Electron 孤儿', exit.ok ? 'pass' : 'fail',
-      `服务退出=${exit.serviceGone} 端口释放=${exit.portClosed} 主进程退出=${exit.mainGone} 孤儿=${exit.orphanCount}（close 耗时 ${exit.closeElapsed}ms）`);
+      `服务退出=${exit.serviceGone} 端口释放=${exit.portClosed} 主进程退出=${exit.mainGone} 孤儿=${exit.orphanCount}（稳定窗口收敛=${exit.orphanScanStable}，close 耗时 ${exit.closeElapsed}ms）`);
+
+    // j2 误杀防护断言：i1 的孤儿检查（含稳定窗口与兜底强杀）结束后，无关实例仍存活
+    const unrelatedAlive = isPidAlive(unrelated.pid);
+    record('j2-unrelated-instance-survives', '同 worktree 无关 Electron 实例在退出协议后仍存活（未被误杀）', unrelatedAlive ? 'pass' : 'fail',
+      unrelatedAlive ? `pid=${unrelated.pid} 存活` : `pid=${unrelated.pid} 已被误杀（回退为过宽匹配即复现）`);
 
     // ================= 8. 多标签场景（契约 §15，独立第二实例） =================
     // 主实例已在 i1 验证 app.close() 应用级退出；多标签改用独立实例（独立 userData/
@@ -1023,11 +1049,11 @@ async function main() {
       }).catch(() => { /* 下方退出断言兜底 */ });
       await tabbar.clickClose(0);
       // 必须传原始就绪文件形态（含 mainPid/servicePid）：validateReady 只回 baseUrl/port，
-      // pid 缺失会让退出校验变成空洞通过
-      const mtabExit = await verifyAppExit({ ready: mtabReady, closeTimeoutMs: 20000, waitMainGoneMs: 20000 });
+      // pid 缺失会让退出校验变成空洞通过；userDataDir 为孤儿匹配锚点（仅匹配本实例）
+      const mtabExit = await verifyAppExit({ ready: mtabReady, closeTimeoutMs: 20000, waitMainGoneMs: 20000, userDataDir: mtabEnv.GIT_LENS_USER_DATA });
       record('m5-multitab-exit-protocol', '依次关闭全部标签后应用退出：主进程退出、服务退出、端口释放、无孤儿',
         mtabExit.mainGone && mtabExit.serviceGone && mtabExit.portClosed && mtabExit.orphanCount === 0 ? 'pass' : 'fail',
-        `主进程退出=${mtabExit.mainGone} 服务退出=${mtabExit.serviceGone} 端口释放=${mtabExit.portClosed} 孤儿=${mtabExit.orphanCount}`);
+        `主进程退出=${mtabExit.mainGone} 服务退出=${mtabExit.serviceGone} 端口释放=${mtabExit.portClosed} 孤儿=${mtabExit.orphanCount}（稳定窗口收敛=${mtabExit.orphanScanStable}）`);
     } else {
       // m1 未通过：不再执行依赖 3 标签的后续场景，记录 skip 并强杀实例防残留
       for (const [id, name] of [
@@ -1070,6 +1096,11 @@ async function main() {
       // 多标签实例可能仍存活（场景中断），强杀防残留
       try { mtabApp.process().kill('SIGKILL'); } catch { /* 已退出 */ }
       mtabApp = null;
+    }
+    if (unrelated) {
+      // 无关实例完成自证后即清理，退出路径（含失败/异常）都不留残留进程
+      unrelated.kill();
+      unrelated = null;
     }
 
     if (qaRoot) {

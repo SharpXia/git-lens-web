@@ -33,6 +33,9 @@ import {
   closeAndVerify,
   createCspRegistry,
   createResults,
+  createUnrelatedElectronInstance,
+  findElectronProcesses,
+  isPidAlive,
   openDesktopChannel,
   parseDesktopArgs,
   pollPage,
@@ -61,6 +64,9 @@ async function main() {
   let qaRoot = null;
   let app = null;
   let hub = null;
+  // DEF-004 回归自证用的无关 Electron 实例（同 worktree 二进制、独立 userData），
+  // 任何退出路径都必须强杀清理，避免残留
+  let unrelated = null;
   let latestReady = null;
   let outcome = 'failed';
   let guidance = null;
@@ -73,9 +79,11 @@ async function main() {
     if (app) {
       try { app.process().kill('SIGKILL'); } catch { /* 已退出 */ }
     }
+    if (unrelated) unrelated.kill();
   });
   process.on('SIGINT', () => {
     if (app) app.process().kill('SIGKILL');
+    if (unrelated) unrelated.kill();
     process.exit(130);
   });
 
@@ -344,10 +352,30 @@ async function main() {
       port: latestReady.port,
       baseUrl: `http://127.0.0.1:${latestReady.port}`
     };
-    const exit = await closeAndVerify({ app, ready: latestReady });
+
+    // 场景 j：误杀防护自证（DEF-004 回归钉死）。另起一个与本轮无关的 Electron 实例
+    // （同 worktree 二进制、独立 mkdtemp userData、仅加载 about:blank）——旧的孤儿匹配
+    // 按「worktree 根 + Electron.app 路径」会把这类实例误判为本轮孤儿并强杀，修复后
+    // i1 结束时它必须仍然存活
+    unrelated = await createUnrelatedElectronInstance({ qaRoot });
+    console.log(`[qa-desktop] 无关实例已启动 pid=${unrelated.pid} userData=${unrelated.userDataDir}`);
+
+    // j1 正向对照：孤儿匹配锚点（本轮 userData）必须能命中运行中的本轮实例，
+    // 防止匹配式失效后孤儿检查退化为「扫不到任何进程」的空洞通过
+    const userDataDir = launched.env.GIT_LENS_USER_DATA;
+    const scopeProbe = await findElectronProcesses({ userDataDir });
+    record('j1-orphan-scope-probe', '孤儿匹配锚点可命中运行中的本轮实例（正向对照，≥1）', scopeProbe.length >= 1 ? 'pass' : 'fail',
+      `锚点=${userDataDir} 命中=${scopeProbe.length}`);
+
+    const exit = await closeAndVerify({ app, ready: latestReady, userDataDir });
     app = null;
     record('i1-exit-protocol', 'app.close() 后服务退出、端口释放、主进程退出、无 Electron 孤儿', exit.ok ? 'pass' : 'fail',
-      `服务退出=${exit.serviceGone} 端口释放=${exit.portClosed} 主进程退出=${exit.mainGone} 孤儿=${exit.orphanCount}（close 耗时 ${exit.closeElapsed}ms）`);
+      `服务退出=${exit.serviceGone} 端口释放=${exit.portClosed} 主进程退出=${exit.mainGone} 孤儿=${exit.orphanCount}（稳定窗口收敛=${exit.orphanScanStable}，close 耗时 ${exit.closeElapsed}ms）`);
+
+    // j2 误杀防护断言：i1 的孤儿检查（含稳定窗口与兜底强杀）结束后，无关实例仍存活
+    const unrelatedAlive = isPidAlive(unrelated.pid);
+    record('j2-unrelated-instance-survives', '同 worktree 无关 Electron 实例在退出协议后仍存活（未被误杀）', unrelatedAlive ? 'pass' : 'fail',
+      unrelatedAlive ? `pid=${unrelated.pid} 存活` : `pid=${unrelated.pid} 已被误杀（回退为过宽匹配即复现）`);
 
     outcome = results.some((r) => r.status === 'fail') ? 'failed' : 'passed';
   } catch (err) {
@@ -365,6 +393,11 @@ async function main() {
         // 已在上方处理或进程已死
       }
       app = null;
+    }
+    if (unrelated) {
+      // 无关实例完成自证后即清理，退出路径（含失败/异常）都不留残留进程
+      unrelated.kill();
+      unrelated = null;
     }
 
     if (qaRoot) {

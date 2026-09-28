@@ -587,17 +587,91 @@ export function isPidAlive(pid) {
   }
 }
 
-/** 通过 ps 查找仍存活的本 worktree Electron 进程（含全部辅助进程） */
-export async function findElectronProcesses() {
+/**
+ * 通过 ps 查找仍存活的「本轮实例」Electron 进程（含全部辅助进程）。
+ *
+ * 匹配锚点为本轮实例的 userData 目录（mkdtemp 唯一）：主进程显式携带
+ * --user-data-dir 启动参数时，Chromium 会把该开关传给全部辅助进程
+ * （实测 Electron 44 / macOS：GPU/network/renderer helper 命令行均含
+ * --user-data-dir=<目录>）。DEF-004 修复前按「worktree 根 + Electron.app 路径」
+ * 匹配，范围是整个 worktree，会把用户手动试跑的同 worktree Electron 实例
+ * 误判为本轮孤儿并强杀，故必须收窄到 userData 锚点。
+ *
+ * @param {object} scope 匹配范围（必填，缺失即抛错，防止回退到过宽匹配）
+ * @param {string} scope.userDataDir 本轮实例 userData 目录。macOS 上 Chromium
+ *   可能将其规范化（/tmp → /private/tmp），因此原始路径与 realpath 两种形态都参与匹配
+ * @returns {Promise<string[]>} 命中的 ps 行（pid 为首字段）
+ */
+export async function findElectronProcesses({ userDataDir } = {}) {
+  if (!userDataDir) {
+    throw new Error('findElectronProcesses 必须传入 scope.userDataDir（收窄匹配范围，防止误杀同 worktree 无关实例）');
+  }
+  const anchors = new Set([`--user-data-dir=${userDataDir}`]);
+  try {
+    anchors.add(`--user-data-dir=${fsSync.realpathSync(userDataDir)}`);
+  } catch {
+    // 目录不存在时保留原始形态参与匹配即可
+  }
   try {
     const { stdout } = await execFileAsync('/bin/ps', ['-axo', 'pid=,command='], { maxBuffer: 4 * 1024 * 1024 });
     return stdout
       .split('\n')
       .filter((line) => line.includes('/node_modules/electron/dist/Electron.app/'))
-      .map((line) => line.trim())
-      .filter((line) => line.includes(WORKTREE_ROOT));
+      .filter((line) => [...anchors].some((anchor) => line.includes(anchor)))
+      .map((line) => line.trim());
   } catch {
     return [];
+  }
+}
+
+/** 孤儿稳定窗口扫描参数：间隔 250ms、连续 3 次数量持平（或归零）判定、上限 5 秒 */
+export const ORPHAN_SCAN_INTERVAL_MS = 250;
+export const ORPHAN_STABLE_CONFIRMATIONS = 3;
+export const ORPHAN_WINDOW_TIMEOUT_MS = 5000;
+
+/**
+ * 以「稳定窗口」策略扫描孤儿进程（DEF-004）：主进程退出确认后，macOS 上辅助
+ * 进程拆除滞后于主进程，立即扫描会把「正在退出」的 helper 误计为孤儿并强杀
+ * （某轮误报孤儿=8，随后两轮同代码复跑孤儿=0，即拆除竞态而非泄漏）。改为轮询
+ * 扫描：数量归零立即判定；数量仍在变化（升或降）说明拆除进行中，重置稳定计数；
+ * 连续 stableConfirmations 次数量持平才判定收敛。超时兜底按当前扫描结果返回。
+ * @param {() => Promise<string[]>} scan 单次扫描（findElectronProcesses 的调用形态）
+ * @param {object} [options]
+ * @param {number} [options.intervalMs] 扫描间隔
+ * @param {number} [options.timeoutMs] 窗口上限
+ * @param {number} [options.stableConfirmations] 判定收敛所需的连续持平扫描次数
+ * @returns {Promise<{orphans: string[], stable: boolean, scans: number}>}
+ *   orphans 为稳定窗口结束后的扫描结果；stable=false 表示超时截断（数量未收敛）
+ */
+export async function scanOrphansWithStableWindow(scan, {
+  intervalMs = ORPHAN_SCAN_INTERVAL_MS,
+  timeoutMs = ORPHAN_WINDOW_TIMEOUT_MS,
+  stableConfirmations = ORPHAN_STABLE_CONFIRMATIONS
+} = {}) {
+  const startedAt = Date.now();
+  let previous = null;
+  let stableRuns = 0;
+  let scans = 0;
+  for (;;) {
+    const current = await scan();
+    scans += 1;
+    if (current.length === 0) {
+      return { orphans: current, stable: true, scans };
+    }
+    if (previous !== null && current.length === previous) {
+      stableRuns += 1;
+      if (stableRuns >= stableConfirmations) {
+        return { orphans: current, stable: true, scans };
+      }
+    } else {
+      // 数量上升（新 helper 出现）或下降（仍在拆除）都不算稳定
+      stableRuns = 0;
+    }
+    previous = current.length;
+    if (Date.now() - startedAt >= timeoutMs) {
+      return { orphans: current, stable: false, scans };
+    }
+    await sleep(intervalMs);
   }
 }
 
@@ -622,6 +696,25 @@ export async function requestJson(baseUrl, pathname, { method = 'GET', token, bo
 }
 
 /**
+ * 组装桌面应用启动参数（纯函数，供单测）：
+ * - --remote-debugging-port=0：契约 §15 E2E 通道，port 0 = 内核自选，实际值从
+ *   <userData>/DevToolsActivePort 读取；
+ * - --user-data-dir：与 GIT_LENS_USER_DATA 同目录（main.js 的 setPath 为同值，行为不变）。
+ *   必须显式放在浏览器命令行上：只有主进程携带该开关，Chromium 才会把它传给全部
+ *   辅助进程（实测 Electron 44 / macOS），孤儿检查据此区分本轮实例与同 worktree
+ *   其他 Electron 实例（DEF-004 匹配锚点）。
+ * @param {object} env buildDesktopEnv 产出的环境
+ * @returns {string[]} 启动参数数组
+ */
+export function buildDesktopLaunchArgs(env) {
+  const args = [ELECTRON_MAIN, '--remote-debugging-port=0'];
+  if (env && env.GIT_LENS_USER_DATA) {
+    args.push(`--user-data-dir=${env.GIT_LENS_USER_DATA}`);
+  }
+  return args;
+}
+
+/**
  * 启动桌面应用：`_electron` 句柄仅用于 app 级操作（close()/evaluate 主进程/窗口数），
  * 应用页一律经 openDesktopChannel + hub 以 CDP 驱动（多标签架构，契约 §15）。
  * @param {object} options
@@ -636,13 +729,65 @@ export async function startDesktopApp({ qaRoot, runId, env } = {}) {
   const resolvedEnv = env || buildDesktopEnv({ qaRoot, runId });
   const app = await _electron.launch({
     executablePath: ELECTRON_BIN,
-    // 契约 §15 E2E 通道：port 0 = 内核自选调试端口，实际值从 <userData>/DevToolsActivePort 读取
-    args: [ELECTRON_MAIN, '--remote-debugging-port=0'],
+    args: buildDesktopLaunchArgs(resolvedEnv),
     env: resolvedEnv,
     cwd: WORKTREE_ROOT,
     timeout: READY_TIMEOUT_MS
   });
   return { app, env: resolvedEnv };
+}
+
+/**
+ * 启动一个与本轮 E2E 实例无关的 Electron 实例（DEF-004 回归自证用）：
+ * 同 worktree 二进制、最小化应用（隐藏窗口加载 about:blank）、独立 mkdtemp userData。
+ * 旧的孤儿匹配按「worktree 根 + Electron.app 路径」会把这类实例误判为本轮孤儿并
+ * 强杀；修复后 i1 退出协议结束时它必须仍然存活（见 run-desktop 系列入口的 j2 场景）。
+ * @param {object} options
+ * @param {string} options.qaRoot 本轮 qa-root（最小应用与 mkdtemp userData 均建在其内，
+ *   随 qaRoot 一起清理，不触碰真实用户目录）
+ * @returns {Promise<{app: object, pid: number, userDataDir: string, kill: () => void}>}
+ */
+export async function createUnrelatedElectronInstance({ qaRoot } = {}) {
+  if (!fsSync.existsSync(ELECTRON_BIN)) {
+    throw new Error(`未找到 Electron 可执行文件: ${ELECTRON_BIN}`);
+  }
+  // 最小应用：package.json 不带 "type": "module"，main.js 按 CommonJS 运行
+  const appDir = path.join(qaRoot, 'unrelated-app');
+  await fs.mkdir(appDir, { recursive: true });
+  await fs.writeFile(path.join(appDir, 'package.json'), `${JSON.stringify({ name: 'git-lens-qa-unrelated', main: 'main.js' }, null, 2)}\n`, 'utf8');
+  await fs.writeFile(path.join(appDir, 'main.js'), [
+    '// QA 无关实例（DEF-004 回归自证）：隐藏窗口加载 about:blank，不启动服务、不读写业务配置',
+    "const { app, BrowserWindow } = require('electron');",
+    'app.whenReady().then(() => {',
+    '  const win = new BrowserWindow({ show: false });',
+    "  win.loadURL('about:blank');",
+    '});',
+    ''
+  ].join('\n'), 'utf8');
+  // userData 用 mkdtemp 保证唯一：既与本轮实例隔离，也与其他轮次/手动实例隔离
+  const userDataDir = await fs.mkdtemp(path.join(qaRoot, 'unrelated-ud-'));
+  const env = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY'].includes(k))),
+    // HOME/XDG 重定向到 fixture git-home，避免任何默认配置路径落到真实用户目录
+    HOME: path.join(qaRoot, 'git-home'),
+    XDG_CONFIG_HOME: path.join(qaRoot, 'git-home')
+  };
+  const app = await _electron.launch({
+    executablePath: ELECTRON_BIN,
+    args: [appDir, `--user-data-dir=${userDataDir}`],
+    env,
+    cwd: WORKTREE_ROOT,
+    timeout: READY_TIMEOUT_MS
+  });
+  return {
+    app,
+    pid: app.process().pid,
+    userDataDir,
+    /** 强杀清理（测试实例，无需优雅退出） */
+    kill() {
+      try { app.process().kill('SIGKILL'); } catch { /* 已退出 */ }
+    }
+  };
 }
 
 /**
@@ -716,8 +861,15 @@ export function createCspRegistry() {
   };
 }
 
-/** 关闭应用并执行退出协议验证：服务退出、端口释放、主进程退出、孤儿强杀 */
-export async function closeAndVerify({ app, ready, closeTimeoutMs = 15000 }) {
+/**
+ * 关闭应用并执行退出协议验证：服务退出、端口释放、主进程退出、孤儿强杀。
+ * @param {object} options
+ * @param {object} options.app playwright ElectronApp 句柄
+ * @param {object} options.ready 就绪文件形态（port/servicePid/mainPid）
+ * @param {number} [options.closeTimeoutMs] 服务退出与端口释放的等待上限
+ * @param {string} options.userDataDir 本轮实例 userData 目录（孤儿匹配锚点，见 findElectronProcesses）
+ */
+export async function closeAndVerify({ app, ready, closeTimeoutMs = 15000, userDataDir }) {
   const closeStartedAt = Date.now();
   // app.close() 请求优雅退出；极端情况下优雅通道失效时强杀兜底，
   // 让退出协议验证继续进行（主进程退出项将如实反映优雅关闭失败）
@@ -728,7 +880,7 @@ export async function closeAndVerify({ app, ready, closeTimeoutMs = 15000 }) {
     })
   ]);
   const closeElapsed = Date.now() - closeStartedAt;
-  const exit = await verifyAppExit({ ready, closeTimeoutMs });
+  const exit = await verifyAppExit({ ready, closeTimeoutMs, userDataDir });
   return { ...exit, closeElapsed, ok: exit.serviceGone && exit.portClosed && exit.mainGone && exit.orphanCount === 0 };
 }
 
@@ -739,8 +891,9 @@ export async function closeAndVerify({ app, ready, closeTimeoutMs = 15000 }) {
  * @param {object} options.ready 就绪文件形态（port/servicePid/mainPid）
  * @param {number} [options.closeTimeoutMs] 服务退出与端口释放的等待上限
  * @param {number} [options.waitMainGoneMs] 先等待主进程退出的上限（外部触发退出的路径用）
+ * @param {string} options.userDataDir 本轮实例 userData 目录（孤儿匹配锚点，见 findElectronProcesses）
  */
-export async function verifyAppExit({ ready, closeTimeoutMs = 15000, waitMainGoneMs = 0 }) {
+export async function verifyAppExit({ ready, closeTimeoutMs = 15000, waitMainGoneMs = 0, userDataDir }) {
   if (waitMainGoneMs > 0) {
     await pollUntil(() => !isPidAlive(ready.mainPid), waitMainGoneMs, {
       intervalMs: 250,
@@ -756,8 +909,9 @@ export async function verifyAppExit({ ready, closeTimeoutMs = 15000, waitMainGon
     describe: `端口 ${ready.port} 释放`
   }).then(() => true).catch(() => false);
   const mainGone = !isPidAlive(ready.mainPid);
-  // 主进程退出后 Electron 辅助进程应全部消失；兜底强杀防孤儿
-  let orphans = await findElectronProcesses();
+  // 主进程退出后 Electron 辅助进程应全部消失。DEF-004：拆除滞后于主进程退出是常态，
+  // 必须经稳定窗口收敛后再判定（孤儿数 = 窗口结束后的数值），残留仍 SIGKILL 兜底防真泄漏
+  const { orphans, stable } = await scanOrphansWithStableWindow(() => findElectronProcesses({ userDataDir }));
   for (const line of orphans) {
     const pid = Number(line.split(/\s+/)[0]);
     if (Number.isInteger(pid)) {
@@ -765,11 +919,12 @@ export async function verifyAppExit({ ready, closeTimeoutMs = 15000, waitMainGon
     }
   }
   if (orphans.length > 0) {
-    console.error('[qa-desktop] 残留 Electron 进程（已强杀）:', orphans.slice(0, 5));
+    console.error('[qa-desktop] 稳定窗口收敛后的残留 Electron 进程（已强杀）:', orphans.slice(0, 5));
   }
   return {
     serviceGone, portClosed, mainGone,
-    orphanCount: orphans.length
+    orphanCount: orphans.length,
+    orphanScanStable: stable
   };
 }
 
