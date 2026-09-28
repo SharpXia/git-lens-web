@@ -397,7 +397,8 @@ async function fetchCdpTargets(cdpPort) {
 
 /**
  * 建立到指定页面目标的 CDP WebSocket 连接（Node 内置 WebSocket），
- * 封装 Runtime.evaluate（returnByValue + awaitPromise）。
+ * 封装 Runtime.evaluate（returnByValue + awaitPromise）、任意域命令发送
+ * 与事件订阅（对话框免疫等场景使用）。
  * @param {number} cdpPort - 调试端口
  * @param {string} targetId - 页面目标 id
  */
@@ -406,6 +407,7 @@ function connectCdpPage(cdpPort, targetId) {
     const ws = new WebSocket(`ws://127.0.0.1:${cdpPort}/devtools/page/${targetId}`);
     let seq = 0;
     const pending = new Map();
+    const listeners = new Map();
     const send = (method, params = {}) => new Promise((res, rej) => {
       const id = ++seq;
       pending.set(id, { res, rej });
@@ -420,6 +422,13 @@ function connectCdpPage(cdpPort, targetId) {
         }
         return result && result.result ? result.result.value : undefined;
       },
+      /** 发送任意 CDP 命令并回传结果 */
+      send: (method, params = {}) => send(method, params),
+      /** 订阅 CDP 事件（如 Page.javascriptDialogOpening） */
+      on: (method, handler) => {
+        if (!listeners.has(method)) listeners.set(method, new Set());
+        listeners.get(method).add(handler);
+      },
       close: () => ws.close(),
     });
     ws.onmessage = (event) => {
@@ -429,9 +438,36 @@ function connectCdpPage(cdpPort, targetId) {
         pending.delete(message.id);
         if (message.error) rej(new Error(message.error.message));
         else res(message.result);
+      } else if (message.method && listeners.has(message.method)) {
+        for (const handler of listeners.get(message.method)) handler(message.params || {});
       }
     };
     ws.onerror = () => reject(new Error(`CDP WebSocket 连接失败：target ${targetId}`));
+  });
+}
+
+/**
+ * 让页面会话对阻塞式对话框免疫（双机制）：
+ *  1) 订阅 Page.javascriptDialogOpening，弹框出现即自动 accept——对「已加载
+ *     文档」上弹出的 alert/confirm/prompt 立即生效；
+ *  2) Page.addScriptToEvaluateOnNewDocument 预置 window.alert/confirm/prompt
+ *     桩，让后续新文档从源头不弹框。
+ * 背景（契约 §15 第二次修订交付后 QA 发现）：kill 服务瞬间页面在途请求失败
+ * 会触发页面自身的阻塞式 alert（inspect 失败路径），挂起渲染层全部 JS，
+ * 恢复遮罩/自动重载/断言全部冻结。测试必须不被人肉弹框阻塞；页面侧的产品
+ * 修复由 UI 工作流另行处理（public/**，不在 Shell 范围）。
+ * 注意：机制 1 依赖会话存活，调用方须让连接覆盖可能弹框的窗口期。
+ * @param {{send: Function, on: Function}} conn - connectCdpPage 建立的页面会话
+ */
+async function armDialogImmunity(conn) {
+  conn.on('Page.javascriptDialogOpening', () => {
+    void conn.send('Page.handleJavaScriptDialog', { accept: true }).catch(() => {
+      // 对话框可能已被同会话其他机制处理，忽略
+    });
+  });
+  await conn.send('Page.enable');
+  await conn.send('Page.addScriptToEvaluateOnNewDocument', {
+    source: 'window.alert = function () {}; window.confirm = function () { return false; }; window.prompt = function () { return null; };',
   });
 }
 
@@ -978,11 +1014,13 @@ async function runTabRestoreCheck(baseCtx) {
     return false;
   })()`);
 
-  /** 等待标签条渲染出指定数量标签且标题全部来自页面 title，返回标题数组 */
-  const waitForTabbarTitles = (tabbar, count) => waitFor(async () => {
+  /** 等待标签条标题依次包含期望仓库名（首页加载初期 title 是通用文案，不作为就绪信号） */
+  const waitForTabbarRepoTitles = (tabbar, repoNames, timeoutMs) => waitFor(async () => {
     const titles = await tabbar.evaluate('Array.from(document.querySelectorAll(".tab-title")).map(function (e) { return e.textContent; })');
-    return Array.isArray(titles) && titles.length === count && titles.every((t) => typeof t === 'string' && t.includes('Git Lens')) ? titles : null;
-  }, 15000);
+    return Array.isArray(titles) && titles.length === repoNames.length
+      && repoNames.every((name, index) => typeof titles[index] === 'string' && titles[index].includes(name))
+      ? titles : null;
+  }, timeoutMs);
 
   /** 读取标签条当前激活下标 */
   const tabbarActiveIndex = (tabbar) => tabbar.evaluate('Array.from(document.querySelectorAll(".tab")).findIndex(function (e) { return e.classList.contains("active"); })');
@@ -1018,6 +1056,7 @@ async function runTabRestoreCheck(baseCtx) {
   }
 
   const conn1 = await connectCdpPage(cdpPort1, targets1[0].id);
+  await armDialogImmunity(conn1);
   await waitForRepoOptions(conn1);
   await selectRepoViaUi(conn1, fixtureA);
   const search1 = await waitFor(async () => {
@@ -1045,6 +1084,7 @@ async function runTabRestoreCheck(baseCtx) {
   }
 
   const conn2 = await connectCdpPage(cdpPort1, newTarget.id);
+  await armDialogImmunity(conn2);
   await waitForRepoOptions(conn2);
   await selectRepoViaUi(conn2, fixtureB);
   const search2 = await waitFor(async () => {
@@ -1114,7 +1154,8 @@ async function runTabRestoreCheck(baseCtx) {
 
   const cdpPort2 = await waitFor(() => readDevToolsPort(userDataDir), 10000);
   const prefix2 = `http://127.0.0.1:${ready2.port}`;
-  const targets2 = cdpPort2 ? await waitForAppTargets(cdpPort2, prefix2, 2, 15000) : null;
+  // 恢复标签并发加载页面（inspect 驱动 git 命令），高负载下提交慢，等待给足 30s
+  const targets2 = cdpPort2 ? await waitForAppTargets(cdpPort2, prefix2, 2, 30000) : null;
   const targets2Ok = Boolean(targets2)
     && targets2.filter((item) => String(item.url).includes('fixture-a')).length === 1
     && targets2.filter((item) => String(item.url).includes('fixture-b')).length === 1;
@@ -1126,17 +1167,27 @@ async function runTabRestoreCheck(baseCtx) {
 
   const tabbarTarget2 = (await fetchCdpTargets(cdpPort2)).find((item) => item.type === 'page' && item.url.includes('tabbar.html'));
   const tabbar2 = tabbarTarget2 ? await connectCdpPage(cdpPort2, tabbarTarget2.id) : null;
-  const titles2 = tabbar2 ? await waitForTabbarTitles(tabbar2, 2) : null;
+  // 等到两个标签标题各自变成对应仓库名再断言顺序与激活项——恢复初期 title
+  // 还是「新标签页」或首页通用文案，不能作为「已恢复完成」的信号
+  const titles2 = tabbar2 ? await waitForTabbarRepoTitles(tabbar2, ['fixture-a', 'fixture-b'], 30000) : null;
   const active2 = tabbar2 ? await tabbarActiveIndex(tabbar2) : -1;
-  const order2Ok = Boolean(titles2) && titles2[0].includes('fixture-a') && titles2[1].includes('fixture-b') && active2 === 0;
+  const order2Ok = Boolean(titles2) && active2 === 0;
   assert('恢复场景：恢复后标签顺序与激活项与首轮一致（fixture-a 在前且激活）', order2Ok, `titles=${JSON.stringify(titles2)} activeIndex=${active2}`);
+
+  // 为两个应用页建立长会话并启用对话框免疫，存活期覆盖整个崩溃重启窗口：
+  // kill 服务瞬间页面在途请求失败可能弹出页面自身的阻塞式 alert 挂起渲染层，
+  // 自动 accept 与新文档桩必须在 kill 发生前就挂上（会话关闭后事件兜底失效）
+  const pageConns2 = [];
+  for (const target of targets2) {
+    const conn = await connectCdpPage(cdpPort2, target.id);
+    await armDialogImmunity(conn);
+    pageConns2.push(conn);
+  }
 
   // 页面数据为最新：每个恢复标签内凭据注入可用、服务接口可拉取
   const dataStatuses = [];
-  for (const target of targets2) {
-    const conn = await connectCdpPage(cdpPort2, target.id);
+  for (const conn of pageConns2) {
     dataStatuses.push(await conn.evaluate('fetch("/api/projects").then(function (r) { return r.status; })'));
-    conn.close();
   }
   assert('恢复场景：恢复后的页面数据为最新（各标签 /api/projects 均 200）', dataStatuses.length === 2 && dataStatuses.every((status) => status === 200), JSON.stringify(dataStatuses));
 
@@ -1153,11 +1204,21 @@ async function runTabRestoreCheck(baseCtx) {
   }, 20000);
   assert('恢复场景：服务被强杀后自动重启（新 servicePid）', Boolean(restarted2), restarted2 ? `新 servicePid=${restarted2.servicePid}` : '20s 内未重启');
 
-  const targets2AfterCrash = restarted2 ? await waitForAppTargets(cdpPort2, prefix2, 2, 15000) : null;
+  // 重启后端口可能复用成功（同源 reload）也可能被抢占回退随机端口（查询串
+  // 重放到新 origin），两种结果都必须保住「2 个标签、各自查询串」。统计口径
+  // 按重启后实际服务端口取全量应用目标（不断言端口不变）；内容断言加严为
+  // fixture-a/fixture-b 各恰一个，钉死「标签-项目映射不串位」。
+  const prefixAfterCrash = restarted2 ? `http://127.0.0.1:${restarted2.port}` : '';
+  // 换端口重放是跨源导航：Electron 按站点隔离为新标签换 renderer 进程，
+  // 提交耗时数秒且随负载波动，等待窗口给足 30s（断言语义不变）
+  const targets2AfterCrash = restarted2 ? await waitForAppTargets(cdpPort2, prefixAfterCrash, 2, 30000) : null;
   const crashKeepOk = Boolean(targets2AfterCrash)
-    && targets2AfterCrash.some((item) => String(item.url).includes('fixture-a'))
-    && targets2AfterCrash.some((item) => String(item.url).includes('fixture-b'));
-  assert('恢复场景：崩溃重启不破坏恢复态（2 个标签保持、查询串不变）', crashKeepOk, targets2AfterCrash ? JSON.stringify(targets2AfterCrash.map((item) => item.url)) : '标签丢失或未恢复');
+    && targets2AfterCrash.filter((item) => String(item.url).includes('fixture-a')).length === 1
+    && targets2AfterCrash.filter((item) => String(item.url).includes('fixture-b')).length === 1;
+  assert('恢复场景：崩溃重启不破坏恢复态（2 个标签保持、查询串不变）', crashKeepOk, targets2AfterCrash ? `${JSON.stringify(targets2AfterCrash.map((item) => item.url))}（重启后端口 ${restarted2.port}${restarted2.port === ready2.port ? '，复用原端口' : '，原端口被抢占回退后按查询串重放'}）` : '标签丢失或未恢复');
+
+  // 崩溃窗口结束，长会话与对话框免疫完成使命
+  for (const conn of pageConns2) conn.close();
 
   app2.child.kill('SIGTERM');
   const exit2 = await waitExit(app2.child, 15000);
