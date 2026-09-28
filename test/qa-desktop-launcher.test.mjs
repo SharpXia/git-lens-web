@@ -50,6 +50,18 @@ test('桌面启动器环境构造：E2E 钩子、服务配置与 git 隔离全�
   assert.equal(withGitDir.GIT_DIR, undefined);
 });
 
+test('桌面启动器环境构造：suffix 产出独立实例目录（多标签第二实例隔离单实例锁与就绪文件）', () => {
+  const qaRoot = path.join(os.tmpdir(), 'qa-desktop-env-fake');
+  const env = buildDesktopEnv({ qaRoot, runId: 'qa-run-8', suffix: 'mtab' });
+
+  assert.equal(env.GIT_LENS_USER_DATA, path.join(qaRoot, 'electron-user-data-mtab'), 'userData 带后缀');
+  assert.equal(env.GIT_LENS_E2E_READY_FILE, path.join(qaRoot, 'artifacts-mtab', 'ready.json'), '就绪文件独立目录');
+  assert.equal(env.GIT_LENS_E2E_TOKEN_FILE, path.join(qaRoot, 'artifacts-mtab', 'token.txt'), '凭据文件独立目录');
+  // git 隔离与主实例共用同一 qa-root 内目录（fixture 仓库可直接复用）
+  assert.equal(env.HOME, path.join(qaRoot, 'git-home'));
+  assert.ok(env.GIT_LENS_USER_DATA.startsWith(qaRoot + path.sep));
+});
+
 test('桌面启动器入口：未知参数立即失败且不创建 qa-root', async () => {
   try {
     await execFileAsync(process.execPath, ['scripts/qa/run-desktop.mjs', '--bogus'], {

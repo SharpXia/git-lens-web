@@ -17,7 +17,13 @@
  *      视觉截图集（G4 视觉基线）。
  *   4. 崩溃恢复（含恢复页截图与选中仓库经 sessionStorage 恢复；Shell 重启固定加载
  *      根路径，深层 URL 态不保留——diff 选中态恢复由 reload 场景覆盖）。
- *   5. strict CSP 全程收集并硬断言真实违规为零。
+ *   5. 多标签场景（契约 §15，独立第二实例，m1-m6）：经 tabbar 新建/切换/关闭、
+ *      标题同步、sessionStorage 按标签隔离、就近激活、关闭全部标签触发退出协议、
+ *      多标签下 strict CSP 真实违规为零。
+ *   6. strict CSP 全程收集并硬断言真实违规为零。
+ *
+ * 页面通道：多标签架构（§15）下 BrowserWindow 是空壳，应用页经 desktop-shared 的
+ * 页面级 CDP 会话驱动；`_electron` 句柄仅用于 app 级操作（主进程 evaluate、close）。
  *
  * 用法：
  *   npm run test:desktop:full
@@ -36,17 +42,24 @@ import { promisify } from 'node:util';
 import { GUARD_ERROR_CODES, assertPathInsideRoot, performHandshake } from './guard.mjs';
 import { buildFixtures, createQaRoot, makeRunId, updateManifest } from './fixtures.mjs';
 import {
-  attachCspCollector,
+  buildDesktopEnv,
   captureBaseline,
   closeAndVerify,
+  createCspRegistry,
   createResults,
+  createTabbarDriver,
+  openDesktopChannel,
   parseDesktopArgs,
   pollPage,
   pollUntil,
+  pollUntilAsync,
   readReadyFile,
   requestJson,
+  setAppZoom,
   startDesktopApp,
   validateReady,
+  verifyAppExit,
+  writeScanConfigInto,
   writeServiceScanConfig
 } from './desktop-shared.mjs';
 
@@ -76,6 +89,10 @@ async function main() {
   let qaRoot = null;
   let app = null;
   let page = null;
+  let hub = null;
+  let cspRegistry = null;
+  let mtabApp = null;
+  let mtabHub = null;
   let ready = null;
   let baseUrl = null;
   let token = null;
@@ -84,12 +101,16 @@ async function main() {
   let cspSummary = { realViolationCount: 0, realViolations: [], electronDevWarningCount: 0, strictMode: true };
 
   process.on('exit', () => {
-    if (app) {
-      try { app.process().kill('SIGKILL'); } catch { /* 已退出 */ }
+    for (const liveApp of [app, mtabApp]) {
+      if (liveApp) {
+        try { liveApp.process().kill('SIGKILL'); } catch { /* 已退出 */ }
+      }
     }
   });
   process.on('SIGINT', () => {
-    if (app) app.process().kill('SIGKILL');
+    for (const liveApp of [app, mtabApp]) {
+      if (liveApp) liveApp.process().kill('SIGKILL');
+    }
     process.exit(130);
   });
 
@@ -106,17 +127,24 @@ async function main() {
     console.log('[qa-desktop-full] 启动桌面应用…');
     const launched = await startDesktopApp({ qaRoot, runId });
     app = launched.app;
-    page = launched.page;
+    // CDP 通道尽早就位（调试端口文件早于就绪文件出现），console 收集同步启动，
+    // 尽量覆盖首屏加载期的 CSP 违规
+    cspRegistry = createCspRegistry();
+    hub = await openDesktopChannel({ env: launched.env, registry: cspRegistry });
     const readyFile = launched.env.GIT_LENS_E2E_READY_FILE;
     ready = await pollUntil(() => {
       const value = readReadyFile(readyFile);
       return value && Number.isInteger(value.port) && value.port > 0 ? value : null;
     }, 30000, { describe: '就绪文件' });
     ({ baseUrl } = validateReady(ready));
+    hub.appPrefix = `${baseUrl}/`;
     await updateManifest(qaRoot, { service: { port: ready.port, pid: ready.servicePid } });
+    const [appTarget] = await hub.waitForAppTargets(1, 15000);
+    page = await hub.pageFor(appTarget.id, appTarget.url);
+    console.log(`[qa-desktop-full] CDP 通道就绪：cdpPort=${hub.cdpPort} 应用目标=${appTarget.url}`);
     await page.waitForTimeout(500);
     // 首屏基线：标题与仓库下拉就绪后才出图
-    await captureBaseline(app, page, qaRoot, 'a', 'first-screen', () => {
+    await captureBaseline(page, qaRoot, 'a', 'first-screen', () => {
       const h1 = document.querySelector('header h1');
       const options = document.querySelectorAll('#repoSelect option');
       const tabs = document.getElementById('tabOverview');
@@ -124,7 +152,6 @@ async function main() {
     });
 
     token = (await fs.readFile(launched.env.GIT_LENS_E2E_TOKEN_FILE, 'utf8')).trim();
-    const cspCollector = attachCspCollector(page);
 
     // 握手（带凭据）：任何业务请求前的身份核验
     let handshake = null;
@@ -169,7 +196,7 @@ async function main() {
     // ================= 1. Diff 视图 =================
     // Inspect 基线（总览视图）：worktree/分支列表渲染完成后出图
     await waitInspect(mainRepo);
-    await captureBaseline(app, page, qaRoot, 'd', 'inspect-view', () => {
+    await captureBaseline(page, qaRoot, 'd', 'inspect-view', () => {
       const overviewVisible = document.getElementById('viewOverview')?.style.display !== 'none';
       const rows = document.querySelectorAll('#wtList .list-item').length;
       return overviewVisible && rows > 0;
@@ -227,7 +254,7 @@ async function main() {
       uiDiffDetail.push(`${combo.name}:${ok ? '命中' : '未命中'}${combo.expectFile}`);
       if (combo.name === 'ww') {
         // Diff 视图基线（文本差异态）：视图可见 + 模式切换条出现 + 文件命中后才出图
-        await captureBaseline(app, page, qaRoot, 'd', 'diff-text', () => {
+        await captureBaseline(page, qaRoot, 'd', 'diff-text', () => {
           const view = document.getElementById('viewDiff');
           return Boolean(view) && view.style.display !== 'none' && Boolean(view.offsetParent)
             && Boolean(document.getElementById('diffModeControl'))
@@ -298,7 +325,7 @@ async function main() {
     record('d5-uncommitted-view', '未提交改动视图含修改/staged/untracked 三类文件', uncommittedOk ? 'pass' : 'fail',
       uncommittedOk ? '' : uncommittedText.slice(0, 200));
     // Diff 视图基线（未提交态）：三类文件可见后才出图
-    await captureBaseline(app, page, qaRoot, 'd', 'diff-uncommitted', () => {
+    await captureBaseline(page, qaRoot, 'd', 'diff-uncommitted', () => {
       const view = document.getElementById('viewDiff');
       return Boolean(view) && view.style.display !== 'none' && Boolean(view.offsetParent)
         && ['notes.txt', 'staged-file.txt', 'untracked-file.txt'].every((f) => document.getElementById('diffResultsContainer').textContent.includes(f));
@@ -374,13 +401,17 @@ async function main() {
       `count=${afterMore.count} unique=${afterMore.uniqueHashes} 旧卡展开=${afterMore.firstExpanded}`);
 
     // SHA 复制：页面按钮触发写剪贴板，主进程 clipboard 轮询读取（Electron 共享系统剪贴板）；
-    // 剪贴板写入是异步系统调用，读取失败时重试数次，仍失败则降级为「按钮可点且点击无异常」断言
+    // 剪贴板写入是异步系统调用，读取失败时重试数次。无头环境下 navigator.clipboard.writeText
+    // 可能因焦点限制静默失败，且宿主机剪贴板可能有陈旧内容：先采样点击前基线，
+    // 点击后「变为合法 SHA」为强断言；「未变化」降级为按钮可点且无异常（留人工复核）；
+    // 「变化但非 SHA」才是真失败
+    const clipboardBaseline = await app.evaluate(({ clipboard }) => clipboard.readText()).catch(() => null);
     const copyState = await page.evaluate(() => {
       const first = document.querySelector('#commitsDrawerBody .commit-item [data-action="commit-copy-hash"]');
       first?.click();
       return { clicked: Boolean(first) };
     });
-    let clipboardText = '';
+    let clipboardText = clipboardBaseline ?? '';
     for (let attempt = 0; attempt < 4 && !/^[0-9a-f]{7,40}$/i.test(clipboardText); attempt++) {
       await page.waitForTimeout(300);
       try {
@@ -390,16 +421,16 @@ async function main() {
       }
     }
     const shaLike = /^[0-9a-f]{7,40}$/i.test(clipboardText);
-    // Electron 无头环境下 navigator.clipboard.writeText 可能因焦点限制静默失败：
-    // 系统剪贴板读到合法 SHA 时为强断言；否则降级为「按钮存在且已绑定、点击无异常」，
-    // 剪贴板内容留人工复核（报告与结果中说明方式）
+    const unchanged = clipboardText === (clipboardBaseline ?? '');
     record('c4-copy-sha', 'SHA 复制按钮写入系统剪贴板（页面按钮触发 + 主进程读取）',
-      copyState.clicked && (shaLike || clipboardText === '') ? (shaLike ? 'pass' : 'skip') : 'fail',
+      copyState.clicked && (shaLike || unchanged) ? (shaLike ? 'pass' : 'skip') : 'fail',
       shaLike
         ? `clipboard=${JSON.stringify(clipboardText.slice(0, 45))}`
-        : `clicked=${copyState.clicked} clipboard 为空（无头焦点限制，降级断言按钮已绑定且点击无异常），剪贴板内容留人工复核`);
+        : unchanged
+          ? `clicked=${copyState.clicked} 剪贴板未变化（无头焦点限制写入未生效，降级断言按钮已绑定且点击无异常），剪贴板内容留人工复核`
+          : `clicked=${copyState.clicked} 剪贴板变化但非 SHA：${JSON.stringify(clipboardText.slice(0, 60))}`);
     // 提交抽屉基线：抽屉可见且分页卡片 ≥30 后才出图
-    await captureBaseline(app, page, qaRoot, 'c', 'commits-drawer', () => {
+    await captureBaseline(page, qaRoot, 'c', 'commits-drawer', () => {
       const drawer = document.getElementById('commitsDrawer');
       return Boolean(drawer) && drawer.style.display !== 'none'
         && document.querySelectorAll('#commitsDrawerBody .commit-item').length >= 30;
@@ -418,7 +449,7 @@ async function main() {
       window.fetchAndRenderRefDiff('committed', true);
     }, restoreCombo);
     await waitDiff();
-    const urlBeforeReload = page.url();
+    const urlBeforeReload = await page.url();
     await page.reload();
     await page.waitForLoadState('domcontentloaded');
     // 恢复是异步链（loadProjects → inspect → populate → 应用 diff 态），轮询直到选中态匹配
@@ -446,9 +477,8 @@ async function main() {
     let zoomOk = true;
     const zoomDetail = [];
     for (const factor of [1.0, 1.25, 1.5]) {
-      await app.evaluate(({ BrowserWindow }, f) => {
-        BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(f);
-      }, factor);
+      // 多标签架构：BrowserWindow.webContents 是空壳，缩放作用于应用标签视图
+      await setAppZoom(app, hub.appPrefix, factor);
       await page.waitForTimeout(400);
       const overflow = await page.evaluate(() => {
         const el = document.documentElement;
@@ -461,19 +491,19 @@ async function main() {
       const ok = overflow.doc <= 2 && overflow.body <= 2;
       if (!ok) zoomOk = false;
       zoomDetail.push(`${factor}x 溢出=${overflow.doc}/${overflow.body}`);
-      // 缩放基线：以窗口 capturePage 完整捕获（视口截图在放大内容时会裁切），出图前断言 Diff 视图可见
-      await captureBaseline(app, page, qaRoot, 'z', `zoom-${String(factor).replace('.', '_')}`, () => {
+      // 缩放基线：以 CDP 页截图捕获应用标签（内容随视口放大，无裁切），出图前断言 Diff 视图可见
+      await captureBaseline(page, qaRoot, 'z', `zoom-${String(factor).replace('.', '_')}`, () => {
         const view = document.getElementById('viewDiff');
         return Boolean(view) && view.style.display !== 'none' && Boolean(view.offsetParent);
       });
     }
     record('z1-zoom-levels', '缩放 1.0/1.25/1.5 关键容器无横向溢出', zoomOk ? 'pass' : 'fail', zoomDetail.join('；'));
 
+    // 上一个缩放档位的残留会让 innerWidth 按 zoom 缩小，窄窗断言前先复位 1.0；
+    // 窗口尺寸调整仍走窗口级 setSize（空壳窗口尺寸即内容区尺寸）
+    await setAppZoom(app, hub.appPrefix, 1.0);
     await app.evaluate(({ BrowserWindow }) => {
-      const win = BrowserWindow.getAllWindows()[0];
-      // 上一个缩放档位的残留会让 innerWidth 按 zoom 缩小，窄窗断言前先复位 1.0
-      win.webContents.setZoomFactor(1.0);
-      win.setSize(960, 600);
+      BrowserWindow.getAllWindows()[0].setSize(960, 600);
     });
     await page.waitForTimeout(400);
     const narrow = await page.evaluate(() => ({
@@ -482,8 +512,8 @@ async function main() {
       footerVisible: Boolean(document.querySelector('footer.app-footer')?.offsetParent),
       overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
     }));
-    // 窄窗基线：断言关键元素可见且无溢出后，按窗口完整捕获出图
-    await captureBaseline(app, page, qaRoot, 'z', 'narrow-960x600', () => {
+    // 窄窗基线：断言关键元素可见且无溢出后，按应用标签 CDP 截图出图
+    await captureBaseline(page, qaRoot, 'z', 'narrow-960x600', () => {
       const tabs = document.getElementById('tabOverview');
       const footer = document.querySelector('footer.app-footer');
       return Boolean(tabs?.offsetParent) && Boolean(footer?.offsetParent)
@@ -492,9 +522,7 @@ async function main() {
     const narrowOk = narrow.w <= 962 && narrow.h <= 602 && narrow.tabsVisible && narrow.footerVisible && narrow.overflow <= 2;
     record('z2-narrow-window', '窄窗 960×600 关键元素可见且无布局崩坏', narrowOk ? 'pass' : 'fail', JSON.stringify(narrow));
     await app.evaluate(({ BrowserWindow }) => {
-      const win = BrowserWindow.getAllWindows()[0];
-      win.setSize(1280, 800);
-      win.webContents.setZoomFactor(1.0);
+      BrowserWindow.getAllWindows()[0].setSize(1280, 800);
     });
     await page.waitForTimeout(300);
 
@@ -678,7 +706,7 @@ async function main() {
     await waitInspect(fixture.mr.repo);
     await page.evaluate(() => { window.switchTab('mr'); });
     try {
-      await captureBaseline(app, page, qaRoot, 'm', 'mr-list', () => {
+      await captureBaseline(page, qaRoot, 'm', 'mr-list', () => {
         const view = document.getElementById('viewMr');
         const list = document.getElementById('mrList');
         return Boolean(view) && view.style.display !== 'none' && Boolean(list)
@@ -721,7 +749,7 @@ async function main() {
       row?.querySelector('[data-action="mr-open-detail"]')?.click();
     });
     try {
-      await captureBaseline(app, page, qaRoot, 'm', 'mr-detail', () => {
+      await captureBaseline(page, qaRoot, 'm', 'mr-detail', () => {
         const drawer = document.getElementById('mrDrawer');
         // 标题渲染在抽屉头（mrDrawerTitle），描述/状态渲染在 body
         const title = document.getElementById('mrDrawerTitle')?.textContent || '';
@@ -822,7 +850,7 @@ async function main() {
     }, null, RESTART_TIMEOUT_MS);
     // 恢复遮罩基线：拍摄应用同文档遮罩态（深色主题变量样式由视觉审阅复核）
     try {
-      await captureBaseline(app, page, qaRoot, 'e', 'recovery-page', () => {
+      await captureBaseline(page, qaRoot, 'e', 'recovery-page', () => {
         if (location.protocol === 'data:') return true;
         const overlay = document.getElementById('serviceStateOverlay');
         return (overlay && overlay.style.display !== 'none' && overlay.style.display !== '')
@@ -869,23 +897,179 @@ async function main() {
     void sameOrigin;
 
     // ================= 7. strict CSP 与退出协议 =================
-    cspSummary = { ...cspCollector.summarize(), strictMode: strictCsp };
+    cspSummary = { ...cspRegistry.summarize(), strictMode: strictCsp };
     record('h1-csp-strict', 'CSP 真实违规为零（--strict-csp 硬断言）', cspSummary.realViolationCount === 0 ? 'pass' : 'fail',
       `真实违规=${cspSummary.realViolationCount}，${JSON.stringify(cspSummary.realViolations).slice(0, 300)}；Electron 开发提醒=${cspSummary.electronDevWarningCount}（打包前固有，仅记录）`);
 
     const exit = await closeAndVerify({ app, ready });
     app = null;
+    await hub.dispose().catch(() => { /* 会话已随应用退出 */ });
+    hub = null;
     record('i1-exit-protocol', 'app.close() 后服务退出、端口释放、主进程退出、无 Electron 孤儿', exit.ok ? 'pass' : 'fail',
       `服务退出=${exit.serviceGone} 端口释放=${exit.portClosed} 主进程退出=${exit.mainGone} 孤儿=${exit.orphanCount}（close 耗时 ${exit.closeElapsed}ms）`);
+
+    // ================= 8. 多标签场景（契约 §15，独立第二实例） =================
+    // 主实例已在 i1 验证 app.close() 应用级退出；多标签改用独立实例（独立 userData/
+    // 就绪文件/凭据文件），避免两条退出路径互相干扰。m5 以「关闭最后一个标签」触发
+    // 退出（⌘W 同语义路径），与 i1 互为补充。
+    console.log('[qa-desktop-full] 启动多标签场景独立实例…');
+    const mtabEnv = buildDesktopEnv({ qaRoot, runId, suffix: 'mtab' });
+    await fs.mkdir(path.join(qaRoot, 'artifacts-mtab'), { recursive: true });
+    await writeScanConfigInto(path.join(mtabEnv.GIT_LENS_USER_DATA, 'git-lens-config'), qaRoot);
+    const mtabCspRegistry = createCspRegistry();
+    mtabApp = (await startDesktopApp({ qaRoot, runId: `${runId}-mtab`, env: mtabEnv })).app;
+    mtabHub = await openDesktopChannel({ env: mtabEnv, registry: mtabCspRegistry });
+    const mtabReady = await pollUntil(() => {
+      const value = readReadyFile(mtabEnv.GIT_LENS_E2E_READY_FILE);
+      return value && Number.isInteger(value.port) && value.port > 0 ? value : null;
+    }, 30000, { describe: '多标签实例就绪文件' });
+    const mtabValid = validateReady(mtabReady);
+    mtabHub.appPrefix = `${mtabValid.baseUrl}/`;
+    const [mtabT1] = await mtabHub.waitForAppTargets(1, 15000);
+    const mtabTabbar = await mtabHub.waitForTabbarReady(15000);
+    const tabbar = createTabbarDriver(mtabTabbar);
+    // 创建顺序列表：/json/list 顺序不代表创建顺序，以「恰一个新目标」逐个锁定
+    const creationOrder = [mtabT1.id];
+
+    // m1 经 tabbar「+」新建 2 个标签（共 3 个应用目标），全部同端口同源
+    let m1Ok = true;
+    try {
+      for (let expected = 2; expected <= 3; expected += 1) {
+        await tabbar.clickNew();
+        const created = await mtabHub.waitForNewAppTarget(creationOrder, 15000);
+        creationOrder.push(created.id);
+      }
+    } catch (err) {
+      m1Ok = false;
+    }
+    const m1Targets = await mtabHub.listAppTargets();
+    m1Ok = m1Ok && creationOrder.length === 3 && m1Targets.length === 3
+      && creationOrder.every((id) => m1Targets.some((t) => t.id === id))
+      && m1Targets.every((t) => t.url.startsWith(mtabHub.appPrefix));
+    record('m1-multitab-create', '经 tabbar「+」新建 2 个标签，共 3 个应用目标且同端口同源', m1Ok ? 'pass' : 'fail',
+      `目标数=${m1Targets.length} 创建次序=${creationOrder.join(' → ')}`);
+
+    if (m1Ok) {
+      const mtabPages = [];
+      for (const id of creationOrder) mtabPages.push(await mtabHub.pageFor(id));
+
+      // m2 标签标题随页面 title 更新并同步到标签条；最新创建的标签处于激活态（.active）
+      const mtabPageTitles = [];
+      for (const [index, tabPage] of mtabPages.entries()) {
+        await pollUntilAsync(
+          () => tabPage.title().then((t) => (typeof t === 'string' && t.includes('Git Lens') ? t : null)),
+          15000, { intervalMs: 200, describe: `标签 ${index + 1} 页面 title 就绪` }
+        ).catch(() => { /* 超时由下方断言兜底 */ });
+        mtabPageTitles.push(await tabPage.title());
+      }
+      const mtabBarTitles = (await tabbar.titles()) || [];
+      const mtabActiveIndex = await tabbar.activeIndex();
+      const m2Ok = mtabPageTitles.every((t) => typeof t === 'string' && t.includes('Git Lens'))
+        && mtabBarTitles.length === 3
+        && mtabPageTitles.every((t) => mtabBarTitles.includes(t))
+        && mtabActiveIndex === 2;
+      record('m2-multitab-titles', '标签条标题取自各页面 title 且新建标签处于激活态（.active）', m2Ok ? 'pass' : 'fail',
+        `页标题=${JSON.stringify(mtabPageTitles)} 条标题=${JSON.stringify(mtabBarTitles)} 激活下标=${mtabActiveIndex}`);
+
+      // m3 sessionStorage 按标签隔离：标签 A 选中仓库，标签 B 保持自身默认仓库；
+      // 经 tabbar 切走再切回，A 的选中保持、B 不受影响（激活切换不销毁不重载视图）
+      await tabbar.clickTab(1);
+      await pollPage(mtabPages[1], () => Boolean(document.getElementById('repoSelect')?.value), null, 20000);
+      const bDefaultRepo = await mtabPages[1].evaluate(() => document.getElementById('repoSelect')?.value || '');
+      // A 的目标仓库避开 B 的默认仓库，保证「互不串」断言非空洞
+      const repoForA = bDefaultRepo === fixture.main.repo ? fixture.chinese.repo : fixture.main.repo;
+      await tabbar.clickTab(0);
+      await mtabPages[0].waitForTimeout(400);
+      await mtabPages[0].evaluate((p) => { window.selectRepo(p); }, repoForA);
+      const aSelected = await pollPage(mtabPages[0], (p) => document.getElementById('repoSelect')?.value === p, repoForA, 20000);
+      const aSessionRepo = await mtabPages[0].evaluate(() => {
+        try { return JSON.parse(sessionStorage.getItem('git_lens_tab_state') || '{}').repo || ''; } catch { return '(解析失败)'; }
+      });
+      const bRepoBefore = await mtabPages[1].evaluate(() => document.getElementById('repoSelect')?.value || '');
+      await tabbar.clickTab(1);
+      await mtabPages[1].waitForTimeout(400);
+      const bRepoAfter = await mtabPages[1].evaluate(() => document.getElementById('repoSelect')?.value || '');
+      await tabbar.clickTab(0);
+      await mtabPages[0].waitForTimeout(400);
+      const aRepoBack = await mtabPages[0].evaluate(() => document.getElementById('repoSelect')?.value || '');
+      const m3Ok = aSelected && aSessionRepo === repoForA
+        && bRepoBefore !== repoForA && bRepoAfter !== repoForA
+        && aRepoBack === repoForA;
+      record('m3-multitab-session-isolation', 'sessionStorage 按标签隔离：A 选仓库经切换往返保持，B 默认仓库不串', m3Ok ? 'pass' : 'fail',
+        `A 选中=${aRepoBack || '(空)'}（会话存储=${aSessionRepo || '(空)'}） B 前后=${bRepoBefore || '(空)'}/${bRepoAfter || '(空)'} A 目标=${repoForA}`);
+
+      // m4 关闭中间标签：应用目标销毁（/json/list 消失）、其余标签存活、激活就近转移。
+      // ⌘W 契约语义是关闭「当前」标签——先激活中间标签再点其 ×（真实用户路径），
+      // 关闭后台标签不会转移激活（closeTab 仅在被关标签为激活态时就近激活）
+      const closedMiddleId = creationOrder[1];
+      await tabbar.clickTab(1);
+      await mtabPages[1].waitForTimeout(300);
+      await tabbar.clickClose(1);
+      const m4Gone = await pollUntilAsync(async () => {
+        const targets = await mtabHub.listAppTargets();
+        return targets.length === 2 && targets.every((t) => t.id !== closedMiddleId) ? targets : null;
+      }, 10000, { intervalMs: 150, describe: '被关标签的应用目标销毁' }).catch(() => null);
+      const m4Active = await tabbar.activeIndex();
+      const survivorsOk = (await mtabPages[0].evaluate(() => document.title)).includes('Git Lens')
+        && (await mtabPages[2].evaluate(() => document.title)).includes('Git Lens');
+      const m4Ok = Boolean(m4Gone) && m4Active === 1 && survivorsOk;
+      record('m4-multitab-close-middle', '关闭中间标签：目标销毁、其余标签存活、激活就近转移至右侧', m4Ok ? 'pass' : 'fail',
+        `目标销毁=${Boolean(m4Gone)} 激活下标=${m4Active}（期望 1） 存活标签可求值=${survivorsOk}`);
+
+      // m5 依次关闭剩余标签：最后一个触发关窗退出协议（服务退出/端口释放/无孤儿）
+      await tabbar.clickClose(0);
+      await pollUntilAsync(async () => (await mtabHub.listAppTargets()).length === 1, 10000, {
+        intervalMs: 150, describe: '应用目标降至 1 个'
+      }).catch(() => { /* 下方退出断言兜底 */ });
+      await tabbar.clickClose(0);
+      // 必须传原始就绪文件形态（含 mainPid/servicePid）：validateReady 只回 baseUrl/port，
+      // pid 缺失会让退出校验变成空洞通过
+      const mtabExit = await verifyAppExit({ ready: mtabReady, closeTimeoutMs: 20000, waitMainGoneMs: 20000 });
+      record('m5-multitab-exit-protocol', '依次关闭全部标签后应用退出：主进程退出、服务退出、端口释放、无孤儿',
+        mtabExit.mainGone && mtabExit.serviceGone && mtabExit.portClosed && mtabExit.orphanCount === 0 ? 'pass' : 'fail',
+        `主进程退出=${mtabExit.mainGone} 服务退出=${mtabExit.serviceGone} 端口释放=${mtabExit.portClosed} 孤儿=${mtabExit.orphanCount}`);
+    } else {
+      // m1 未通过：不再执行依赖 3 标签的后续场景，记录 skip 并强杀实例防残留
+      for (const [id, name] of [
+        ['m2-multitab-titles', '标签条标题取自各页面 title 且新建标签处于激活态（.active）'],
+        ['m3-multitab-session-isolation', 'sessionStorage 按标签隔离：A 选仓库经切换往返保持，B 默认仓库不串'],
+        ['m4-multitab-close-middle', '关闭中间标签：目标销毁、其余标签存活、激活就近转移至右侧'],
+        ['m5-multitab-exit-protocol', '依次关闭全部标签后应用退出：主进程退出、服务退出、端口释放、无孤儿']
+      ]) {
+        record(id, name, 'skip', '前置场景 m1 未通过，未执行');
+      }
+      try { mtabApp.process().kill('SIGKILL'); } catch { /* 已退出 */ }
+      mtabApp = null;
+    }
+    const mtabCsp = mtabCspRegistry.summarize();
+    record('m6-multitab-csp', '多标签下 CSP 真实违规为零（--strict-csp 硬断言）', mtabCsp.realViolationCount === 0 ? 'pass' : 'fail',
+      `真实违规=${mtabCsp.realViolationCount}，${JSON.stringify(mtabCsp.realViolations).slice(0, 240)}；收集范围含 tabbar（file://，不在服务 CSP 响应头范围，仅记录对照）与空壳；Electron 开发提醒=${mtabCsp.electronDevWarningCount}`);
+    if (mtabHub) {
+      await mtabHub.dispose().catch(() => { /* 会话已随应用退出 */ });
+      mtabHub = null;
+    }
 
     outcome = results.some((r) => r.status === 'fail') ? 'failed' : 'passed';
   } catch (err) {
     outcome = 'failed';
     record('launcher', '桌面全量启动器执行', 'fail', err.message);
   } finally {
+    if (hub) {
+      await hub.dispose().catch(() => { /* 会话已随应用退出 */ });
+      hub = null;
+    }
+    if (mtabHub) {
+      await mtabHub.dispose().catch(() => { /* 会话已随应用退出 */ });
+      mtabHub = null;
+    }
     if (app) {
       try { await app.close(); } catch { /* 已处理 */ }
       app = null;
+    }
+    if (mtabApp) {
+      // 多标签实例可能仍存活（场景中断），强杀防残留
+      try { mtabApp.process().kill('SIGKILL'); } catch { /* 已退出 */ }
+      mtabApp = null;
     }
 
     if (qaRoot) {
