@@ -2,3 +2,11 @@ node_modules/
 .DS_Store
 logs/
 *.log
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+coverage/
+.config/
