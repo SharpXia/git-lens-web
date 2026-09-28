@@ -201,3 +201,13 @@ Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'
 - `/api/raw-file` 以 `Content-Type` 呈现图片，页面不得引入远程资源。验收：任何 CSP 违规（console 报警）视为 G3 失败项。
 
 E2E 工具锁定：`playwright`（devDependency，协调分支持有；Electron 以 `_electron.launch` + `executablePath` 驱动 node_modules 内二进制，不下载浏览器）。
+
+## 15. 多标签架构（G7 增量：WebContentsView 多 tab，Shell 实现，QA 消费）
+
+- 单窗口多标签：主窗口顶部为固定高度标签条（Shell 自有 chrome UI：`electron/tabbar.html` + 专用 preload，主进程持有，不属于应用页面契约范围），内容区为各标签对应的 `WebContentsView` 栈。
+- **每个标签一个 WebContentsView**：加载 `http://127.0.0.1:<port>/`（可带页面自身支持的仓库状态参数），复用现有 preload（`window.gitLens` 全量可用）与凭据注入（仍按 `127.0.0.1:<port>/api/*` 过滤）；每个视图独立 `sessionStorage`，既有 URL/sessionStorage 恢复机制按标签天然隔离。**`public/**` 页面代码零改动**。
+- 标签标题取自各视图 `page-title-updated`；新建标签初始标题「新标签页」，加载无仓库参数的页面。
+- 交互冻结：标签条 `+` 新建、`×` 关闭、点击切换；快捷键 ⌘T 新建、⌘W 关闭当前、Ctrl+Tab 循环切换（菜单项同步提供）。关闭最后一个标签等同关闭窗口（走既有退出协议）；关闭窗口关闭全部标签。
+- 单实例锁、窗口状态持久化、§13 E2E 钩子语义不变；ready 文件以**首个**内容视图完成首次加载为准。
+- 本期不做（留后续）：标签拖拽重排、标签集合跨启动持久化、单标签崩溃的独立恢复（视图崩溃按服务不可用路径处理）。
+- E2E 通道：Playwright `_electron` 不把 WebContentsView 暴露为 page；桌面 E2E 以 `--remote-debugging-port=0` 启动，从 `<userData>/DevToolsActivePort` 读取调试端口，用 `chromium.connectOverCDP` 枚举并驱动各标签视图。
