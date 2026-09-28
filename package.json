@@ -4,12 +4,18 @@
   "description": "Local Git Project Lens - Clean & Worktree Inspector",
   "type": "module",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "test:isolated": "node scripts/qa/run.mjs",
+    "test:desktop:isolated": "node scripts/qa/run-desktop.mjs",
+    "test:desktop:full": "node scripts/qa/run-desktop-full.mjs"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.2",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "playwright": "^1.63.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.0"
@@ -17,5 +23,8 @@
   "dependencies": {
     "cors": "^2.8.6",
     "express": "^5.2.1"
+  },
+  "allowScripts": {
+    "electron@44.4.5": true
   }
 }

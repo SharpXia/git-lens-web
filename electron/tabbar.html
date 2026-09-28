@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Git Lens 标签条</title>
+<style>
+  /* 自足样式：深色主题与应用一致（取 public/app.css :root 变量同款配色）。
+     本页为 Shell 自有 chrome（file:// 本地加载、无远程资源），不属于契约 §14
+     的服务端 CSP 范围；所有动态文案一律经 textContent 写入，无注入面。 */
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #010409;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #bar {
+    display: flex;
+    align-items: stretch;
+    height: 38px;
+    border-bottom: 1px solid #30363d;
+  }
+  #tabs {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    /* 隐藏横向滚动条：标签多时靠压缩宽度而不是出滚动条 */
+    scrollbar-width: none;
+  }
+  #tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    box-sizing: border-box;
+    min-width: 120px;
+    max-width: 220px;
+    flex: 0 1 auto;
+    padding: 0 8px 0 12px;
+    border-right: 1px solid #30363d;
+    color: #8b949e;
+    font-size: 12px;
+    line-height: 1;
+    cursor: default;
+  }
+  .tab.active {
+    background: #161b22;
+    color: #f0f6fc;
+    /* 激活态顶边高亮，与编辑器类应用的标签语义一致 */
+    box-shadow: inset 0 2px 0 #58a6ff;
+  }
+  .tab-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tab-close {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .tab-close:hover { background: #30363d; color: #f0f6fc; }
+  #new-tab {
+    flex: none;
+    width: 34px;
+    border: none;
+    border-left: 1px solid #30363d;
+    background: transparent;
+    color: #8b949e;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  #new-tab:hover { background: #161b22; color: #f0f6fc; }
+</style>
+</head>
+<body>
+<div id="bar" role="tablist" aria-label="标签页">
+  <div id="tabs"></div>
+  <button id="new-tab" type="button" title="新建标签页 (⌘T)" aria-label="新建标签页">+</button>
+</div>
+<script>
+  'use strict';
+  var tabsEl = document.getElementById('tabs');
+  var newTabEl = document.getElementById('new-tab');
+
+  // 每个标签元素记录其主进程侧 id，事件经委托回传，避免为每个标签挂监听
+  function render(state) {
+    tabsEl.textContent = '';
+    for (var tab of state.tabs) {
+      var item = document.createElement('div');
+      item.className = 'tab' + (tab.active ? ' active' : '');
+      item.setAttribute('role', 'tab');
+      item.setAttribute('aria-selected', tab.active ? 'true' : 'false');
+      item.dataset.tabId = String(tab.id);
+
+      var title = document.createElement('span');
+      title.className = 'tab-title';
+      title.textContent = tab.title;
+      title.title = tab.title;
+      item.appendChild(title);
+
+      var close = document.createElement('button');
+      close.type = 'button';
+      close.className = 'tab-close';
+      close.textContent = '×';
+      close.setAttribute('aria-label', '关闭标签页 ' + tab.title);
+      close.addEventListener('click', function (event) {
+        // 阻止冒泡：点击 × 只关标签，不触发整条标签的切换
+        event.stopPropagation();
+        var id = Number(event.currentTarget.parentElement.dataset.tabId);
+        window.gitLensTabbar.closeTab(id);
+      });
+      item.appendChild(close);
+
+      item.addEventListener('click', function (event) {
+        var id = Number(event.currentTarget.dataset.tabId);
+        window.gitLensTabbar.activateTab(id);
+      });
+      tabsEl.appendChild(item);
+    }
+  }
+
+  window.gitLensTabbar.onTabsChanged(render);
+  newTabEl.addEventListener('click', function () {
+    window.gitLensTabbar.newTab();
+  });
+</script>
+</body>
+</html>
