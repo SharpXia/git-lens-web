@@ -29,6 +29,8 @@ files:
   - electron/main.js
   - electron/service-main.js
   - electron/preload.cjs
+  - electron/tabbar.html
+  - electron/tabbar-preload.cjs
   - src/**
   - public/**
   - "!**/.DS_Store"
