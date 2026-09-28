@@ -39,6 +39,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+import { resolveServiceConfigDir } from './service-config-dir.js';
+
 const execFileAsync = promisify(execFile);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -162,9 +164,24 @@ function isPidAlive(pid) {
   }
 }
 
-/** 桌面模式服务配置目录：固定在 userData 下（契约 §5） */
+/**
+ * 桌面模式服务配置目录解析（契约 §5 第三次修订「配置互通」），三条规则按序生效：
+ *  1. GIT_LENS_CONFIG_DIR 已设置 → 用它（与浏览器版完全同一配置，web/桌面互通；
+ *     E2E/QA 亦经此通道保持隔离）；
+ *  2. 未设置且未设 GIT_LENS_USER_DATA（真实用户启动）→ ~/.config/git-lens-web
+ *    （与 web 共享同一配置目录，互通为默认行为）；
+ *  3. 兜底（GIT_LENS_USER_DATA 隔离场景，如 E2E/smoke）→ <userData>/git-lens-config。
+ * 规则 2/3 的分支只依赖「是否设置了 GIT_LENS_USER_DATA」这一事实，直接使用模块
+ * 顶部已解析的 e2eUserDataDir（setPath('userData') 在此之前已完成），不重复解析。
+ * 解析实现抽为纯函数（service-config-dir.js）供冒烟自验注入式复用——规则 2 无法
+ * 在自验中整进程安全验证，共用实现保证单测覆盖与生产行为一致。
+ * @returns {string} 服务配置目录（规则 1 为与 web 一致的原样值，规则 2/3 为绝对路径）
+ */
 function getServiceConfigDir() {
-  return path.join(app.getPath('userData'), 'git-lens-config');
+  return resolveServiceConfigDir({
+    configDirEnv: process.env.GIT_LENS_CONFIG_DIR,
+    userDataEnv: e2eUserDataDir,
+  });
 }
 
 /** 当前应用页面源（服务实际端口就绪后才有意义） */
