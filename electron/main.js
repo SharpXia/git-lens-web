@@ -1,5 +1,5 @@
 /**
- * Git Lens Web 桌面版 Electron 主进程。
+ * Git Lens 桌面版 Electron 主进程。
  *
  * 职责（计划书 §3 / 契约 §4、§6、§13）：
  *  - 单实例锁：第二次启动转为激活已有窗口；
@@ -50,6 +50,7 @@ import { promisify } from 'node:util';
 
 import { resolveServiceConfigDir } from './service-config-dir.js';
 import { windowChromeOptions } from './window-chrome.js';
+import { migrateLegacyStateFiles } from './user-data-migration.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -96,8 +97,16 @@ const GIT_SEARCH_DIRS = {
   win32: ['C:\\Program Files\\Git\\cmd', 'C:\\Program Files (x86)\\Git\\cmd', 'C:\\Git\\cmd'],
 };
 
-// 应用名先于任何窗口/菜单创建设置，macOS 菜单栏与 userData 默认名都依赖它
-app.setName('Git Lens Web');
+// 应用名先于任何窗口/菜单创建设置，macOS 菜单栏与 userData 默认名都依赖它。
+// 契约 §20（用户定则）：应用名统一为 Git Lens，不再沿用旧名；
+// 打包版 productName 已是 Git Lens，这里的运行名随之对齐。
+app.setName('Git Lens');
+
+// 旧应用名对应的默认 userData 目录名（契约 §20 改名前的历史遗留路径），
+// 以拼接构造而非字面量书写：该字符串仅作为「历史目录名」存在而非品牌文案，
+// 拼接让「electron/** 无旧品牌字符串残留」的冒烟走查可用全树 grep 一票断言，
+// 未来任何位置重新引入品牌字符串都会被拦下。
+const LEGACY_USER_DATA_DIR_NAME = ['Git Lens', ' Web'].join('');
 
 // ---- E2E 钩子（契约 §13）：全部可选，生产用户不设置时零影响 ----
 // GIT_LENS_USER_DATA 必须先于任何 userData 读写重定向，因此固定放在模块顶部；
@@ -1320,7 +1329,7 @@ function createMainWindow() {
     ...(restored ? { x: restored.bounds.x, y: restored.bounds.y } : {}),
     minWidth: WINDOW_MIN_WIDTH,
     minHeight: WINDOW_MIN_HEIGHT,
-    title: 'Git Lens Web',
+    title: 'Git Lens',
     show: true,
     backgroundColor: '#0d1117',
     // 契约 §17：窗口 chrome 融合——标签条兼任标题栏。darwin 用 hiddenInset 隐藏
@@ -1571,7 +1580,7 @@ function buildRecoveryPageUrl(state, reason, autoRecover) {
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>Git Lens Web</title>
+<title>Git Lens</title>
 <style>
   /* 深色主题与应用一致：取 public/app.css :root 既有变量值 */
   /* 契约 §17：恢复页 body 兼任拖拽区（原生标题栏已融合隐藏），窗口可拖动；
@@ -1641,7 +1650,7 @@ async function copyDiagnostics() {
   const payload = {
     copiedAt: new Date().toISOString(),
     app: {
-      name: 'Git Lens Web',
+      name: 'Git Lens',
       version: app.getVersion(),
       electron: process.versions.electron,
       platform: process.platform,
@@ -1670,7 +1679,7 @@ function showAboutDialog() {
   dialog.showMessageBox({
     type: 'info',
     title: '关于',
-    message: 'Git Lens Web',
+    message: 'Git Lens',
     detail: `本地 Git 仓库透镜\n版本 ${app.getVersion()}\nElectron ${process.versions.electron} · ${process.platform}/${process.arch}`,
   });
 }
@@ -1791,7 +1800,7 @@ function buildApplicationMenu() {
       label: '帮助',
       role: 'help',
       submenu: [
-        { label: '关于 Git Lens Web', click: showAboutDialog },
+        { label: '关于 Git Lens', click: showAboutDialog },
         { label: '复制诊断信息', click: copyDiagnostics },
       ],
     },
@@ -1856,10 +1865,31 @@ function registerIpc() {
 // ---- 应用生命周期 ----
 
 /**
- * 应用引导：Git 发现 → 权限拒绝 → IPC → 菜单 → 启动服务监督。
+ * 一次性迁移旧应用名状态目录（契约 §20）：
+ *  - setName 改名后 Electron 默认 userData 目录名随之变化（旧目录名见
+ *    LEGACY_USER_DATA_DIR_NAME），把旧目录中的 window-state.json / tab-state.json
+ *    补缺复制到新目录，改名不会让用户的窗口几何与标签存档"丢失"；
+ *  - E2E 显式重定向（GIT_LENS_USER_DATA）时直接跳过：重定向目录是测试私有
+ *    环境，与真实用户的旧默认目录毫无关系，且测试临时根目录下若恰好存在
+ *    同名旧目录会被误搬，污染用例隔离；
+ *  - 必须先于任何 userData 读写（loadWindowState / 标签存档 / Chromium 自身
+ *    落盘）执行，因此挂在 bootstrap 最前；实际复制逻辑抽为纯函数
+ *    （user-data-migration.js）供冒烟自验注入式复用。
+ */
+async function migrateLegacyUserData() {
+  if (e2eUserDataDir) return;
+  const currentDir = app.getPath('userData');
+  const legacyDir = path.join(path.dirname(currentDir), LEGACY_USER_DATA_DIR_NAME);
+  await migrateLegacyStateFiles({ legacyDir, currentDir, log });
+}
+
+/**
+ * 应用引导：旧状态目录一次性迁移 → Git 发现 → 权限拒绝 → IPC → 菜单 → 启动服务监督。
  * Git 发现不阻塞服务启动，仅影响诊断展示。
  */
 async function bootstrap() {
+  await migrateLegacyUserData();
+
   // macOS Dock 图标与 Web favicon 共用同一份浅色资产，避免开发运行与打包应用出现品牌分裂。
   if (process.platform === 'darwin' && app.dock) {
     app.dock.setIcon(path.join(__dirname, '../public/assets/git-lens-icon-light.png'));
@@ -1915,7 +1945,7 @@ if (!gotSingleInstanceLock) {
   app.whenReady().then(() => {
     bootstrap().catch((err) => {
       log(`应用启动失败：${err.message}`);
-      dialog.showErrorBox('Git Lens Web 启动失败', `应用初始化出现错误：${err.message}`);
+      dialog.showErrorBox('Git Lens 启动失败', `应用初始化出现错误：${err.message}`);
       app.quit();
     });
   });

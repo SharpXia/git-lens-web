@@ -1,5 +1,5 @@
 /**
- * Git Lens Web 桌面版 preload 脚本。
+ * Git Lens 桌面版 preload 脚本。
  *
  * 运行环境：sandbox: true + contextIsolation: true（契约 §6）。
  * 沙箱化 preload 只能使用 CommonJS 且仅能 require 限定的 Electron 内置模块；

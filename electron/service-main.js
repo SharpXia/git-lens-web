@@ -1,5 +1,5 @@
 /**
- * Git Lens Web 桌面版服务子进程入口。
+ * Git Lens 桌面版服务子进程入口。
  *
  * 由 Electron 主进程经 `utilityProcess.fork` 启动（实测支持 ESM 入口与 MessagePort
  * 传递，选型依据见 G2 交付报告；`child_process.fork` 仅作兼容性备选，不采用）。

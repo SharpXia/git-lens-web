@@ -1,5 +1,5 @@
 /**
- * Git Lens Web 桌面壳冒烟自验脚本。
+ * Git Lens 桌面壳冒烟自验脚本。
  *
  * 以完全受控的临时环境启动完整 Electron 应用（userData/就绪文件/测试模式
  * 全部指向 mkdtemp 临时目录，不触碰 9527 主实例与真实配置），逐项断言：
@@ -37,13 +37,19 @@
  *    body.fullscreen 类与 #bar 计算左内边距变化（78px↔0px）；运行期断言
  *    switch-tab-0..9 十项 id/加速键齐全、prev/next-tab-cmd-arrow 已移除、
  *    全菜单加速键无重复（⌘0 归属第 10 个标签，「实际大小」改绑 ⇧⌘0）。
+ * 14. 应用名统一 Git Lens（契约 §20，场景七）：运行期经主进程 inspector 断言
+ *    app.getName()==='Git Lens'（场景三内）；electron/** 全树无旧品牌字符串
+ *    残留走查；dev-brand.mjs 幂等修补本 worktree 真实 node_modules 的
+ *    Electron.app Info.plist 并 plutil 读回验证；旧状态目录迁移纯函数用例
+ *    （补缺复制/旧目录保留/幂等/旧目录不存在零副作用）；E2E 显式重定向
+ *    （GIT_LENS_USER_DATA）时迁移被跳过的源码守卫与真实启动验证。
  *
  * 运行：node electron/checks/smoke.mjs
  * 纯 GUI 项（菜单、原生对话框、窗口状态恢复的视觉表现）无法自动化，
  * 以文末「人工验证清单」输出。
  */
 
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -54,6 +60,8 @@ import { fileURLToPath } from 'node:url';
 import { resolveServiceConfigDir } from '../service-config-dir.js';
 // 场景六复用主进程同一份窗口 chrome 选项纯函数（契约 §17），逐字段断言防实现漂移
 import { windowChromeOptions, TABBAR_HEIGHT_DIP } from '../window-chrome.js';
+// 场景七复用主进程同一份旧状态目录迁移纯函数（契约 §20），mkdtemp 注入式驱动
+import { migrateLegacyStateFiles } from '../user-data-migration.js';
 
 const require = createRequire(import.meta.url);
 
@@ -493,6 +501,16 @@ const mainSetFullScreenExpr = (on) => `(function () {
 })()`;
 
 /**
+ * 主进程内读取运行期应用名的表达式（契约 §20 验收「app.getName()==='Git Lens'」）。
+ * setName 在主进程模块顶部执行，运行期读回即最终生效值（菜单栏/Dock/默认
+ * userData 均以此为准）。
+ */
+const APP_NAME_EXPR = `(function () {
+  var req = (typeof require === "function") ? require : process.mainModule.require;
+  return req("electron").app.getName();
+})()`;
+
+/**
  * 主进程内采集应用菜单快捷键快照的表达式（契约 §17.1 第四次修订/§17.1.2 的
  * 运行期断言通道）。MenuItem.accelerator 为字符串基元，String() 直接还原
  * 加速键原文；getMenuItemById 对不存在的 id 返回 null。
@@ -822,7 +840,15 @@ async function runMultiTabCheck(baseCtx) {
     assert('chrome 融合（菜单）：全菜单加速键无重复（无两项争抢同一加速键）', false, '主进程 inspector 未就绪');
     assert('chrome 融合（全屏吸附）：进入全屏后 body.fullscreen 生效且 darwin 左安全区取消（78px→0px）', false, '主进程 inspector 未就绪，无法驱动 setFullScreen');
     assert('chrome 融合（全屏吸附）：退出全屏后 fullscreen 类移除且 darwin 左安全区恢复', false, '主进程 inspector 未就绪');
+    assert('应用名（运行期）：app.getName() 为 Git Lens（契约 §20 setName 生效）', false, '主进程 inspector 未就绪');
   } else {
+    // 运行期应用名断言（契约 §20）：读取真实运行中的 app 对象，比源码走查更强
+    const runtimeAppName = await inspector.evaluate(APP_NAME_EXPR);
+    assert(
+      '应用名（运行期）：app.getName() 为 Git Lens（契约 §20 setName 生效）',
+      runtimeAppName === 'Git Lens',
+      `app.getName()=${JSON.stringify(runtimeAppName)}`,
+    );
     // 菜单运行期断言（契约 §17.1 第四次修订/§17.1.2）：比静态走查更强的证据——
     // 直接读取真实构建出的应用菜单
     const menuSnapshot = await inspector.evaluate(MENU_SNAPSHOT_EXPR);
@@ -918,10 +944,10 @@ async function runMultiTabCheck(baseCtx) {
   assert('多标签场景：3 个标签 webContents 均确认销毁（destroyed 回执日志 ≥3）', destroyedLogs >= 3, `日志计数=${destroyedLogs}`);
 
   tabbar.close();
-  // chrome 融合前缀的运行期断言（平台注入/截图/全屏吸附/菜单）同属本场景，
-  // 失败时同样保留临时目录供排查
+  // chrome 融合与应用名前缀的运行期断言（平台注入/截图/全屏吸附/菜单/运行名）
+  // 同属本场景，失败时同样保留临时目录供排查
   const failedHere = results.some((item) => !item.ok
-    && (item.name.startsWith('多标签场景') || item.name.startsWith('chrome 融合')));
+    && (item.name.startsWith('多标签场景') || item.name.startsWith('chrome 融合') || item.name.startsWith('应用名')));
   if (!failedHere) {
     try {
       await fsp.rm(root3, { recursive: true, force: true });
@@ -1665,10 +1691,211 @@ async function runWindowChromeCheck() {
   assert('chrome 融合（走查）：「实际大小」改绑 ⇧⌘0（⌘0 归属第 10 个标签，无重复加速键）', zoomOk);
 }
 
+// ---- 场景七：应用名统一 Git Lens 与旧状态目录迁移（契约 §20） ----
+
+/**
+ * 场景七：应用名统一 Git Lens（契约 §20，用户定则：不用 GitLens、不用旧名）。
+ *
+ * 四层验证：
+ *  - 走查层：electron/** 全树无旧品牌字符串残留。检索词动态拼接（本文件自身
+ *    亦不会命中），配合 main.js 把历史目录名常量同样以拼接构造，全树可以用
+ *    一票 grep 断言钉死「品牌不再回潮」；
+ *  - 品牌补丁层：对本 worktree 真实 node_modules 的 Electron.app Info.plist
+ *    执行 dev-brand.mjs（plutil -replace 天然幂等），plutil 读回
+ *    CFBundleName/CFBundleDisplayName 均为 Git Lens，重复执行值不变；
+ *    非 darwin 平台改为断言脚本打印中文指引并以非 0 退出；
+ *  - 迁移纯函数层：mkdtemp 造旧应用名目录（含假状态文件）+ 不存在的新目录，
+ *    注入式调用主进程同一份 migrateLegacyStateFiles（同 service-config-dir.js
+ *    模式），断言补缺复制、旧目录保留、二次调用幂等、旧目录不存在时零副作用；
+ *  - E2E 重定向守卫层：走查 main.js 迁移编排的 e2eUserDataDir 早退守卫，并
+ *    真实启动一次应用（GIT_LENS_USER_DATA 重定向到与假「旧目录」同级），
+ *    断言旧目录未被搬动、重定向目录内的状态文件是应用退出协议自己写的而非
+ *    迁移复制来的。
+ */
+async function runBrandAndMigrationCheck(baseCtx) {
+  const devBrandPath = path.resolve(__dirname, '../dev-brand.mjs');
+  // 动态拼接旧品牌检索词：让「无残留」断言覆盖包括本文件在内的 electron/** 全树，
+  // 而检索词自身不以字面量出现在任何源码中
+  const legacyBrandNeedle = ['Git Lens', ' Web'].join('');
+
+  // 1. 走查：electron/** 全树无旧品牌字符串残留（契约 §20「全部清理」）
+  const offenders = [];
+  async function walkForLegacyBrand(dir) {
+    for (const entry of await fsp.readdir(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) await walkForLegacyBrand(full);
+      else if (entry.isFile() && /\.(js|mjs|cjs|html)$/.test(entry.name)
+        && fs.readFileSync(full, 'utf-8').includes(legacyBrandNeedle)) {
+        offenders.push(path.relative(projectRoot, full));
+      }
+    }
+  }
+  await walkForLegacyBrand(path.resolve(__dirname, '..'));
+  assert(
+    '应用名（走查）：electron/** 全树无旧品牌字符串残留（契约 §20 全部清理）',
+    offenders.length === 0,
+    offenders.length ? `残留文件：${offenders.join(', ')}` : '全树无命中',
+  );
+
+  // 2. dev 品牌补丁：真实执行并验证幂等（写的是本 worktree 的 node_modules，
+  //    不触碰任何 git 状态；重装依赖后由开发者手动重跑）
+  if (process.platform === 'darwin') {
+    const plistPath = path.join(projectRoot, 'node_modules', 'electron', 'dist', 'Electron.app', 'Contents', 'Info.plist');
+    const runPatch = () => spawnSync(process.execPath, [devBrandPath], { encoding: 'utf-8' });
+    const readPlistValue = (key) => execFileSync('plutil', ['-extract', key, 'raw', plistPath], { encoding: 'utf-8' }).trim();
+    const firstRun = runPatch();
+    assert(
+      '应用名（品牌补丁）：dev-brand.mjs 执行成功并输出「重装依赖后需重跑」提示',
+      firstRun.status === 0 && (firstRun.stdout || '').includes('开发模式应用名已设为 Git Lens'),
+      firstRun.status === 0 ? (firstRun.stdout || '').trim() : `status=${firstRun.status} stderr=${(firstRun.stderr || '').trim()}`,
+    );
+    const nameFirst = readPlistValue('CFBundleName');
+    const displayFirst = readPlistValue('CFBundleDisplayName');
+    const secondRun = runPatch();
+    const nameSecond = readPlistValue('CFBundleName');
+    const displaySecond = readPlistValue('CFBundleDisplayName');
+    assert(
+      '应用名（品牌补丁）：Info.plist CFBundleName/CFBundleDisplayName 均为 Git Lens 且重复执行幂等',
+      nameFirst === 'Git Lens' && displayFirst === 'Git Lens'
+        && secondRun.status === 0 && nameSecond === nameFirst && displaySecond === displayFirst,
+      `首轮=(${nameFirst}, ${displayFirst}) 二轮=(${nameSecond}, ${displaySecond}) 二轮status=${secondRun.status}`,
+    );
+  } else {
+    const run = spawnSync(process.execPath, [devBrandPath], { encoding: 'utf-8' });
+    const guidanceOk = run.status !== 0 && /此补丁仅适用于 macOS/.test(`${run.stderr || ''}${run.stdout || ''}`);
+    assert(
+      '应用名（品牌补丁）：非 darwin 下 dev-brand.mjs 打印中文指引并以非 0 退出',
+      guidanceOk,
+      `status=${run.status}`,
+    );
+  }
+
+  // 3. 迁移纯函数层（与主进程共用 user-data-migration.js 同一实现）
+  const migRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'glwt-smoke-mig-'));
+  try {
+    const legacyDir = path.join(migRoot, legacyBrandNeedle);
+    const currentDir = path.join(migRoot, 'Git Lens');
+    // 假状态数据用真实窗口不可能取到的几何值，供「复制 vs 自写」判别
+    const legacyWindowState = `${JSON.stringify({ x: 111111, y: 222222, width: 3333, height: 4444, isMaximized: false }, null, 2)}\n`;
+    const legacyTabState = `${JSON.stringify({ version: 1, activeIndex: 0, tabs: [{ search: '?repo=%2Flegacy-marker' }] }, null, 2)}\n`;
+    await fsp.mkdir(legacyDir, { recursive: true });
+    await fsp.writeFile(path.join(legacyDir, 'window-state.json'), legacyWindowState, 'utf-8');
+    await fsp.writeFile(path.join(legacyDir, 'tab-state.json'), legacyTabState, 'utf-8');
+
+    const firstPass = await migrateLegacyStateFiles({ legacyDir, currentDir, log: () => {} });
+    const copiedState = await fsp.readFile(path.join(currentDir, 'window-state.json'), 'utf-8');
+    const copiedTab = await fsp.readFile(path.join(currentDir, 'tab-state.json'), 'utf-8');
+    assert(
+      '应用名（迁移）：旧目录状态文件补缺复制到新目录且内容逐字节一致',
+      firstPass.legacyExists === true
+        && firstPass.copied.length === 2
+        && firstPass.copied.includes('window-state.json')
+        && firstPass.copied.includes('tab-state.json')
+        && copiedState === legacyWindowState
+        && copiedTab === legacyTabState,
+      `copied=${JSON.stringify(firstPass.copied)}`,
+    );
+    assert(
+      '应用名（迁移）：旧目录保留不删除（保守迁移，改名可逆）',
+      fs.existsSync(path.join(legacyDir, 'window-state.json')) && fs.existsSync(path.join(legacyDir, 'tab-state.json')),
+      `旧目录仍保留：${legacyDir}`,
+    );
+
+    const secondPass = await migrateLegacyStateFiles({ legacyDir, currentDir, log: () => {} });
+    assert(
+      '应用名（迁移）：二次调用幂等——新目录已有文件不覆盖，无需迁移标记文件',
+      secondPass.copied.length === 0
+        && (await fsp.readFile(path.join(currentDir, 'window-state.json'), 'utf-8')) === legacyWindowState,
+      `二次 copied=${JSON.stringify(secondPass.copied)} skipped=${JSON.stringify(secondPass.skipped)}`,
+    );
+
+    // 旧目录不存在（全新安装/从未以旧名运行）：零副作用，不误建新目录
+    const absentPass = await migrateLegacyStateFiles({
+      legacyDir: path.join(migRoot, 'never-existed'),
+      currentDir: path.join(migRoot, 'fresh'),
+    });
+    assert(
+      '应用名（迁移）：旧目录不存在时零副作用（全新安装不误建目录）',
+      absentPass.legacyExists === false && absentPass.copied.length === 0
+        && !fs.existsSync(path.join(migRoot, 'fresh')),
+      `legacyExists=${absentPass.legacyExists} copied=${JSON.stringify(absentPass.copied)}`,
+    );
+  } finally {
+    // 纯函数用例固定清理（mkdtemp 自足，不依赖断言成败；失败时日志已含 copied 细节）
+    await fsp.rm(migRoot, { recursive: true, force: true }).catch(() => {});
+  }
+
+  // 4. E2E 重定向守卫层
+  const source = mainJsSource();
+  const guardOk = source.includes('async function migrateLegacyUserData()')
+    && source.includes('if (e2eUserDataDir) return;');
+  assert(
+    '应用名（迁移）：main.js 迁移编排对 E2E 显式重定向早退跳过（源码守卫）',
+    guardOk,
+    `编排存在=${source.includes('async function migrateLegacyUserData()')} 守卫存在=${source.includes('if (e2eUserDataDir) return;')}`,
+  );
+
+  const brandRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'glwt-smoke-brand-'));
+  try {
+    const supportDir = path.join(brandRoot, 'app-support');
+    // 假「旧目录」与重定向 userData 同级——若守卫失效，迁移会把假旧目录搬进
+    // 重定向目录，恰好用内容判别暴露出来
+    const fakeLegacyDir = path.join(supportDir, legacyBrandNeedle);
+    const redirectedUserData = path.join(supportDir, 'Git Lens');
+    const markerState = `${JSON.stringify({ x: 999999, y: 888888, width: 777, height: 666, isMaximized: true }, null, 2)}\n`;
+    await fsp.mkdir(fakeLegacyDir, { recursive: true });
+    await fsp.mkdir(path.join(brandRoot, 'xdg-config'), { recursive: true });
+    await fsp.writeFile(path.join(fakeLegacyDir, 'window-state.json'), markerState, 'utf-8');
+
+    const ctxBrand = {
+      root: brandRoot,
+      readyFile: path.join(brandRoot, 'ready.json'),
+      tokenFile: path.join(brandRoot, 'token.txt'),
+      runId: `${baseCtx.runId}-brand`,
+    };
+    // extraEnv 置于 buildAppEnv 最后，覆盖其默认 user-data 重定向（契约 §13 E2E 钩子）
+    const appBrand = launchApp(ctxBrand, 'brand', [], { GIT_LENS_USER_DATA: redirectedUserData });
+    const readyBrand = await waitForReadyAndToken(ctxBrand);
+    assert(
+      '应用名（迁移）：E2E 显式重定向场景应用正常启动',
+      Boolean(readyBrand),
+      readyBrand ? `port=${readyBrand.port}` : '就绪超时\n' + appBrand.tail(),
+    );
+    if (readyBrand) {
+      await terminateApp(appBrand);
+      const legacyUntouched = (await fsp.readFile(path.join(fakeLegacyDir, 'window-state.json'), 'utf-8')) === markerState;
+      // 退出协议会向重定向目录写本次会话自己的 window-state.json（真实几何），
+      // 内容不可能等于注入的假标记；若相等说明迁移把旧文件复制了进来
+      let redirectedState = null;
+      try {
+        redirectedState = await fsp.readFile(path.join(redirectedUserData, 'window-state.json'), 'utf-8');
+      } catch {
+        redirectedState = null;
+      }
+      assert(
+        '应用名（迁移）：E2E 显式重定向时迁移被跳过——假旧目录未动、重定向目录未收到复制',
+        legacyUntouched && redirectedState !== markerState,
+        `旧目录未动=${legacyUntouched} 重定向目录状态文件=${redirectedState === null ? '无' : `存在且为应用自写（≠标记=${redirectedState !== markerState}）`}`,
+      );
+    } else {
+      appBrand.child.kill('SIGKILL');
+    }
+  } finally {
+    const failedHere = results.some((item) => !item.ok && item.name.startsWith('应用名'));
+    if (!failedHere) {
+      await fsp.rm(brandRoot, { recursive: true, force: true }).catch(async () => {
+        console.log(`应用名场景临时目录保留（清理失败）：${brandRoot}`);
+      });
+    } else {
+      console.log(`应用名场景存在失败项，临时目录保留供排查：${brandRoot}`);
+    }
+  }
+}
+
 // ---- 入口 ----
 
 async function main() {
-  console.log('=== Git Lens Web 桌面壳 G2 冒烟自验 ===');
+  console.log('=== Git Lens 桌面壳冒烟自验（契约 §20 起应用名统一为 Git Lens） ===');
   console.log(`主进程入口: ${mainJsPath}`);
 
   if (!electronBinary || !fs.existsSync(electronBinary)) {
@@ -1705,6 +1932,8 @@ async function main() {
     await runTabRestoreCheck(ctx);
     console.log('');
     await runWindowChromeCheck();
+    console.log('');
+    await runBrandAndMigrationCheck(ctx);
   } finally {
     const failed = results.filter((item) => !item.ok);
     console.log('');
