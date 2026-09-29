@@ -57,6 +57,28 @@ const gitLensTabbar = {
     };
   },
 
+  /**
+   * 订阅窗口全屏态变化（契约 §17.1.1：主进程在进出全屏及标签条加载完成时推送）。
+   * @param {(fullscreen: boolean) => void} callback - 全屏态回调（true=全屏中）
+   * @returns {() => void} 取消订阅函数
+   */
+  onFullscreenChanged(callback) {
+    assertFunction(callback, 'onFullscreenChanged');
+    const listener = (_event, payload) => {
+      // 只把全屏态为布尔的载荷交给页面，异常数据静默丢弃
+      if (!payload || typeof payload.fullscreen !== 'boolean') return;
+      try {
+        callback(payload.fullscreen);
+      } catch {
+        // 页面回调异常不应影响 IPC 链路
+      }
+    };
+    ipcRenderer.on('git-lens-tabbar:fullscreen-changed', listener);
+    return () => {
+      ipcRenderer.removeListener('git-lens-tabbar:fullscreen-changed', listener);
+    };
+  },
+
   /** 请求新建标签（加载应用首页，契约 §15） */
   newTab() {
     ipcRenderer.send('git-lens-tabbar:new-tab');

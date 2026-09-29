@@ -9,6 +9,12 @@
  *  - 多标签架构（契约 §15）：BrowserWindow 仅作空壳，顶部为自有 chrome 标签条
  *    （tabbar.html + 专用 preload），内容区为各标签对应的 WebContentsView 栈；
  *    每个标签复用应用 preload 与凭据注入（defaultSession 级过滤天然覆盖全部视图）；
+ *  - 窗口 chrome 融合（契约 §17）：标签条兼任标题栏——darwin hiddenInset 红绿灯
+ *    内嵌标签条、win/linux titleBarOverlay（真机未验收）；标签条拖拽区与两侧
+ *    系统控件安全区；darwin 全屏时取消左侧安全区吸附靠左（§17.1.1）；
+ *  - 标签快捷键（契约 §17.1 第四次修订）：⌘1…⌘9 与 ⌘0（第 10 个标签）显式列出
+ *    全部 10 项菜单、越界无操作；⌘←/→ 不再切换标签，移交页面 keydown 处理
+ *    （§17.1.2），标签循环保留在 Ctrl±Tab；
  *  - 原生能力 IPC（契约 §6）：运行时信息、目录选择、服务状态推送、外链打开；
  *  - 应用菜单：标签页（新建/关闭/切换）、编辑与视图操作（作用于激活标签）、
  *    帮助（关于 + 复制诊断信息）、退出；
@@ -43,6 +49,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { resolveServiceConfigDir } from './service-config-dir.js';
+import { windowChromeOptions } from './window-chrome.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -678,6 +685,17 @@ function isTabbarSender(sender) {
 }
 
 /**
+ * 向标签条推送当前窗口全屏态（契约 §17.1.1：macOS 全屏时系统隐藏红绿灯，
+ * 标签条需取消 78px 左侧安全区让标签吸附靠左，退出全屏恢复）。
+ * 载荷固定为 `{ fullscreen: <Boolean> }`；标签条未就绪（加载中/已销毁）时
+ * 静默跳过——其 did-finish-load 会同步一次当前全屏态，不会永久失步。
+ */
+function pushTabbarFullscreen() {
+  if (!isViewAlive(tabbarView) || !mainWindow || mainWindow.isDestroyed()) return;
+  tabbarView.webContents.send('git-lens-tabbar:fullscreen-changed', { fullscreen: mainWindow.isFullScreen() === true });
+}
+
+/**
  * 同步内容区所有视图 bounds（DIP）：标签条固定占顶部 TABBAR_HEIGHT，
  * 内容标签铺满其余区域。窗口 resize/最大化/全屏切换时由窗口事件驱动。
  */
@@ -712,10 +730,15 @@ function createTabbarView() {
   });
   view.setBackgroundColor('#010409');
   attachTabbarGuards(view);
-  view.webContents.loadFile(path.join(__dirname, 'tabbar.html'));
-  // 加载完成（含崩溃重建后的重载）即回填当前标签集合，避免状态失步
+  // 契约 §17：经 loadFile query 注入平台标识，标签条页面据此做红绿灯安全区 /
+  // overlay 控件区的 CSS 分支（body[data-platform]）
+  view.webContents.loadFile(path.join(__dirname, 'tabbar.html'), { query: { platform: process.platform } });
+  // 加载完成（含崩溃重建后的重载）即回填当前标签集合与全屏态，避免状态失步
   view.webContents.on('did-finish-load', () => {
     pushTabbarState();
+    // 契约 §17.1.1：标签条加载完成时同步当前全屏态（此前窗口若已进入全屏，
+    // 事件推送会错过未就绪的标签条，这里兜底对齐）
+    pushTabbarFullscreen();
   });
   return view;
 }
@@ -939,6 +962,19 @@ function cycleTab(offset) {
   const currentIndex = Math.max(0, tabs.findIndex((item) => item.id === activeTabId));
   const next = tabs[(currentIndex + offset + tabs.length) % tabs.length];
   activateTab(next.id);
+}
+
+/**
+ * 按下标激活标签（契约 §17.1 第四次修订：⌘1…⌘9 与 ⌘0=第 10 个标签）。
+ * 实现通用支持 0–9 下标（对应 ⌘1–⌘9、⌘0），菜单显式列出全部 10 项；
+ * 下标越界（超出当前标签数量）一律无操作。
+ * @param {number} index - 目标标签下标（0 起）
+ */
+function activateTabIndex(index) {
+  if (!Number.isInteger(index) || index < 0 || index > 9) return;
+  const tab = tabs[index];
+  if (!tab) return;
+  activateTab(tab.id);
 }
 
 /**
@@ -1287,6 +1323,11 @@ function createMainWindow() {
     title: 'Git Lens Web',
     show: true,
     backgroundColor: '#0d1117',
+    // 契约 §17：窗口 chrome 融合——标签条兼任标题栏。darwin 用 hiddenInset 隐藏
+    // 原生标题栏并把红绿灯压进 38px 标签条（trafficLightPosition 近似垂直居中）；
+    // win/linux 用系统绘制的 titleBarOverlay（⚠️ 真机未验收，契约 §1 平台矩阵）。
+    // 选项定义抽为 window-chrome.js 纯模块，冒烟自验 import 同一份定义断言防漂移
+    ...windowChromeOptions(process.platform),
     // 空壳窗口不挂应用 preload：preload 只属于内容标签视图（契约 §6 暴露面不变）
     webPreferences: {
       contextIsolation: true,
@@ -1312,8 +1353,16 @@ function createMainWindow() {
     activeTabId = null;
   });
   // 标签条与全部内容标签的布局随窗口几何变化全量同步（resize/maximize/全屏）
-  for (const event of ['resize', 'maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen']) {
+  for (const event of ['resize', 'maximize', 'unmaximize']) {
     mainWindow.on(event, syncTabBounds);
+  }
+  // 契约 §17.1.1：全屏切换除同步布局外，还须把全屏态推给标签条——darwin 全屏
+  // 时系统隐藏红绿灯，标签条取消左侧安全区吸附靠左，退出全屏恢复
+  for (const event of ['enter-full-screen', 'leave-full-screen']) {
+    mainWindow.on(event, () => {
+      syncTabBounds();
+      pushTabbarFullscreen();
+    });
   }
   tabbarView = createTabbarView();
   mainWindow.contentView.addChildView(tabbarView);
@@ -1525,8 +1574,11 @@ function buildRecoveryPageUrl(state, reason, autoRecover) {
 <title>Git Lens Web</title>
 <style>
   /* 深色主题与应用一致：取 public/app.css :root 既有变量值 */
+  /* 契约 §17：恢复页 body 兼任拖拽区（原生标题栏已融合隐藏），窗口可拖动；
+     交互按钮显式 no-drag，避免点击被窗口拖拽吞掉 */
   body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-         font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #0d1117; color: #c9d1d9; }
+         font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #0d1117; color: #c9d1d9;
+         -webkit-app-region: drag; }
   .card { max-width: 440px; margin: 0 16px; padding: 28px 32px; background: #161b22; border: 1px solid #30363d;
           border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.4); text-align: center; word-break: break-word; }
   h1 { font-size: 17px; margin: 0 0 8px; color: #f0f6fc; }
@@ -1534,7 +1586,8 @@ function buildRecoveryPageUrl(state, reason, autoRecover) {
   .reason { font-size: 12px; }
   .countdown { font-size: 13px; color: #58a6ff; margin-top: 14px; }
   button { margin-top: 16px; padding: 7px 22px; font-size: 13px; border: 1px solid #30363d;
-           border-radius: 6px; background: transparent; color: #c9d1d9; cursor: pointer; }
+           border-radius: 6px; background: transparent; color: #c9d1d9; cursor: pointer;
+           -webkit-app-region: no-drag; }
   button:hover { background: #21262d; }
 </style>
 </head>
@@ -1687,6 +1740,19 @@ function buildApplicationMenu() {
         { type: 'separator' },
         { label: '下一个标签页', accelerator: 'Ctrl+Tab', click: () => cycleTab(1) },
         { label: '上一个标签页', accelerator: 'Ctrl+Shift+Tab', click: () => cycleTab(-1) },
+        { type: 'separator' },
+        // 契约 §17.1 第四次修订：⌘1…⌘9 与 ⌘0（0=第 10 个标签）显式列出全部 10 项，
+        // activateTabIndex 通用支持下标 0–9；下标越界（超出当前标签数量）一律无操作。
+        // 稳定 id 供 E2E 经 Menu.getApplicationMenu().getMenuItemById(id).click()
+        // 程序化触发（加速键本身无法自动化合成）。菜单变长可接受（Chrome 同款）。
+        // 契约 §17.1.2：⌘←/→ 已不再切换窗口标签（循环保留在 Ctrl±Tab），改由
+        // 页面 keydown 接管主视图切换，此处不再提供同名菜单加速键
+        ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 0].map((number) => ({
+          label: `切换到标签页 ${number}`,
+          id: `switch-tab-${number}`,
+          accelerator: `CmdOrCtrl+${number}`,
+          click: () => activateTabIndex(number === 0 ? 9 : number - 1),
+        })),
       ],
     },
     {
@@ -1712,7 +1778,10 @@ function buildApplicationMenu() {
         { type: 'separator' },
         { label: '放大', accelerator: 'CmdOrCtrl+=', click: withTabTarget((wc) => wc.setZoomLevel(wc.getZoomLevel() + 0.5)) },
         { label: '缩小', accelerator: 'CmdOrCtrl+-', click: withTabTarget((wc) => wc.setZoomLevel(wc.getZoomLevel() - 0.5)) },
-        { label: '实际大小', accelerator: 'CmdOrCtrl+0', click: withTabTarget((wc) => wc.setZoomLevel(0)) },
+        // ⌘0 已划给「切换到标签页 0」（第 10 个标签，契约 §17.1 第四次修订）；
+        // 同一加速键在原生菜单中由先注册者胜出，「实际大小」原 ⌘0 会静默失效，
+        // 故改绑 ⇧⌘0（沿用本菜单 ⌘R/⇧⌘R 的同键位分层约定）
+        { label: '实际大小', accelerator: 'Shift+CmdOrCtrl+0', click: withTabTarget((wc) => wc.setZoomLevel(0)) },
         { type: 'separator' },
         // 全屏是窗口级操作，内建 role 语义正确
         { role: 'togglefullscreen', label: '全屏' },
@@ -1807,9 +1876,15 @@ async function bootstrap() {
     log(`已发现 git：${gitInfo.path}（${gitInfo.version || '未知版本'}）`);
   }
 
-  // 一律拒绝渲染层权限请求（摄像头/定位/通知等，契约 §3.3）
-  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
-  session.defaultSession.setPermissionCheckHandler(() => false);
+  // 渲染层权限兜底拒绝保持不变（摄像头/定位/通知等，契约 §3.3），仅显式放行
+  // clipboard-sanitized-write：页面复制按钮的 navigator.clipboard.writeText 所需
+  // （契约 §17.2，计划书 §3.3「确有需求时按来源逐项开放」的落地项，DEF-007）。
+  // clipboard-read 等其余权限继续拒绝；request 与 check 两个处理器都要放行——
+  // Electron 不同版本对剪贴板写入可能走任一条通道，只放行其一仍会被静默拒绝
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permission === 'clipboard-sanitized-write');
+  });
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => permission === 'clipboard-sanitized-write');
 
   registerIpc();
   buildApplicationMenu();

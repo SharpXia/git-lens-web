@@ -233,3 +233,40 @@ E2E 工具锁定：`playwright`（devDependency，协调分支持有；Electron 
   - `POST /api/stars` → body `{"repoPath":string,"starred":boolean}` → 增删一项并返回 `{"ok":true,"starred":[...]}`；`repoPath` 非空字符串、列表去重保序；文件不存在视为空列表。
 - **页面迁移**：启动拉取 `/api/stars` 为唯一事实源；首次加载时若服务端为空且 localStorage 有旧星标，则导入服务端并清除该 localStorage 键（一次性迁移，向后兼容）。
 - **验证**：端点单测（增删/去重/损坏文件容错/边界拒绝）；页面行为由既有视觉与交互场景覆盖，星标跨重启断言列入桌面 E2E 后续增量。
+
+## 17. 窗口 chrome 融合（G9 增量：标签条兼任标题栏，Shell 实现）
+
+- 动机：原生标题栏与深色内容配色割裂；标签条上移兼任标题栏。
+- **macOS**：主窗口 `titleBarStyle: 'hiddenInset'` + `trafficLightPosition` 使红绿灯在 38px 标签条内垂直居中；不再存在原生标题栏带。
+- **Windows/Linux**：`titleBarOverlay: { color:'#010409', symbolColor:'#c9d1d9', height:38 }`（窗口控制按钮由 Electron 绘制在右上角；**随 §1 标注未验收**，以真机为准）。
+- **标签条拖拽区**：标签条根元素 `-webkit-app-region: drag`（空区域拖动窗口、系统双击行为沿用）；交互元素（标签项、关闭 ×、新建 +）一律 `no-drag`。macOS 下标签条左侧留红绿灯安全区（≥78px），win/linux 右侧为 overlay 控件留位（标签条经 loadFile query 获知平台，body 加平台类做样式分支）。
+- **bounds 不变**：标签条仍为顶部 38px 内容视图，内容区布局、E2E 钩子、恢复页/遮罩语义全部不变；独立恢复页 body 同时设 drag 区以便窗口可拖动。
+- **验收**：smoke 回归全绿 + 标签条截图供协调者视觉审阅；拖拽/双击缩放/红绿灯不遮标签/全屏表现为人工清单项。
+
+### 17.1.1 全屏吸附（第三次修订，Shell）
+
+- macOS 全屏时系统隐藏红绿灯，标签条不再需要 78px 左侧安全区：主进程经 `enter-full-screen`/`leave-full-screen` 窗口事件向标签条推送状态（`git-lens-tabbar:` 通道），标签条 body 加/去 fullscreen 类，全屏时左内边距恢复正常（标签吸附靠左），退出全屏恢复安全区。标签条加载时同步当前全屏态。
+
+### 17.1.2 ⌘←/→ 语义变更（第四次修订，Shell+UI）
+
+- ⌘←/→ 不再切换窗口标签（该能力保留在 Ctrl±Tab），改为**切换页面主视图 tab**（仓库总览与管理 → Worktree 差异对比 → Merge Requests 循环）：Shell 移除菜单中 prev/next-tab-cmd-arrow 两项的加速键绑定；页面 app.js 以 keydown 处理（metaKey+ArrowLeft/Right），**目标为 input/textarea/select/contentEditable 时不劫持**（保留文本光标跳转，原已知取舍随之消解）；浏览器/桌面两模式一致。
+- 页面切换视图沿用既有 switchTab 入口与 URL 状态同步；E2E 可经 CDP `Input.dispatchKeyEvent` 合成 metaKey+Arrow 键断言视图切换。
+
+### 17.2 剪贴板权限开放（第三次修订，DEF-007 修复）
+
+- 权限兜底"一律拒绝"保持，但**显式放行 `clipboard-sanitized-write`**（页面复制按钮的 `navigator.clipboard.writeText` 所必需，计划书 §3.3"确有需求时按来源逐项开放"的落地项）；`clipboard-read`、摄像头、定位、通知等继续拒绝。
+- 页面复制动作（copyText）必须在**写入成功后**才提示"已复制"；失败时回退 execCommand 路径，仍失败给非阻断失败提示（复用 DEF-006 的 notifyRequestFailure）。
+- 验收：smoke/桌面 E2E 经"页面点击复制 → 主进程 `clipboard.readText()`"断言真实写入（替代原剪贴板降级 skip 项）。
+
+### 17.1 标签快捷键（第二次修订，Shell）
+
+- `Cmd+1`…`Cmd+9` 与 `Cmd+0`（**第四次修订：菜单显式列出全部 10 项，0=第 10 个标签**；超出当前标签数时无操作）切换到对应下标标签；**连带裁决（协调批准）：⌘0 原属「视图 → 实际大小」，改绑 ⇧⌘0**（沿用 ⌘R/⇧⌘R 分层惯例），避免重复加速键静默争抢；`Cmd+←`/`Cmd+→` 等价既有 Ctrl+Tab 的上/下一个标签循环。
+- 已知取舍：菜单加速键全局生效，会遮蔽文本输入框内 `Cmd+←/→` 的行首/行尾光标跳转（用户明确要求，已知悉）；页面返回/前进仍为 `Cmd+[`/`Cmd+]`。
+- 菜单项须设稳定 id（如 `switch-tab-1`…、`next-tab`、`prev-tab`），供 E2E 经 `Menu.getApplicationMenu().getMenuItemById(id).click()` 程序化触发（加速键本身无法自动化合成）。
+
+### 18. 触摸板滑动历史导航（UI 实现，等价 Chrome 双指滑动）
+
+- 行为：macOS 触摸板双指**右滑 = 历史返回、左滑 = 前进**（与 Chrome 一致），作用于页面会话历史（pushState/replaceState 条目），等价 `Cmd+[`/`Cmd+]`；全部标签生效，浏览器模式同样可用。
+- 实现位置：`public/app.js` 页面内 wheel 手势识别（主进程不注入）：仅当事件为横向意图（|deltaX| ≥ |deltaY|）且文档无横向滚动空间（`scrollWidth <= clientWidth + 1`）且事件目标不在可横向滚动的祖先内时累积；阈值触发 `history.back()/forward()`，单次触摸相位只触发一次（滚动停止 200ms 重置）；方向符号以 E2E 合成 wheel（CDP `Input.dispatchMouseEvent` type=mouseWheel 带 deltaX）实测校准为准。
+- 浏览器模式与桌面模式行为一致；不与纵向滚动、Diff 代码块的横向滚动冲突（守卫优先）。E2E 以合成 wheel 事件断言历史切换；真实触摸板手感留人工清单。
+- （第二次修订）滑动监听改为 **window 捕获阶段**（capture: true），使右侧抽屉等自行 stopPropagation 的滚动守卫不再挡住手势——光标停在抽屉上时侧滑前进/后退照常生效；抽屉纵向滚动行为不变（手势不 preventDefault）。

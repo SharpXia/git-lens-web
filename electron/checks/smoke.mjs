@@ -21,7 +21,22 @@
  * 10. 跨启动标签恢复（契约 §15 第二次修订，场景五）：同一 userData 三轮启动，
  *    覆盖预写扫描目录发现 fixture、运行期防抖落盘、退出同步落盘（仅查询串）、
  *    二轮自动恢复（顺序/激活项一致、查询串重放到新端口、页面数据最新）、
- *    服务崩溃重启不破坏恢复态、存档损坏按无存档容错回落单标签首页。
+ *    服务崩溃重启不破坏恢复态、存档损坏按无存档容错回落单标签首页；
+ * 11. 剪贴板真实写入（契约 §17.2 / DEF-007，场景五内）：经 CDP Input 真实鼠标
+ *    点击 inspect 视图 worktree「复制」按钮（合成 click 无用户激活会被 Chromium
+ *    在权限层直接拒绝）→ 断言按钮「已复制!」反馈仅在写入成功后出现 →
+ *    经主进程 inspector（--inspect=0，无 Playwright electronApp 句柄时的等价
+ *    evaluate 通道）读取 clipboard.readText() 断言与被复制文本一致；
+ * 12. 窗口 chrome 融合（契约 §17/§17.1，场景六）：主进程与脚本 import 同一份
+ *    window-chrome.js 纯函数逐字段断言 darwin/非 darwin 窗口选项，源码走查
+ *    标签条拖拽区/平台安全区/平台 query 注入/恢复页 drag 区/全屏吸附 CSS/
+ *    §17.1 快捷键菜单 id；场景三内另有标签条平台注入运行期断言与 CDP 截图落盘
+ *    （固定 /tmp/glwt-smoke-tabbar.png，供协调者视觉审阅）。
+ * 13. 全屏吸附与标签快捷键菜单（契约 §17.1.1/§17.1 第四次修订/§17.1.2，场景三内）：
+ *    经主进程 inspector 驱动 BrowserWindow.setFullScreen 往返，轮询标签条
+ *    body.fullscreen 类与 #bar 计算左内边距变化（78px↔0px）；运行期断言
+ *    switch-tab-0..9 十项 id/加速键齐全、prev/next-tab-cmd-arrow 已移除、
+ *    全菜单加速键无重复（⌘0 归属第 10 个标签，「实际大小」改绑 ⇧⌘0）。
  *
  * 运行：node electron/checks/smoke.mjs
  * 纯 GUI 项（菜单、原生对话框、窗口状态恢复的视觉表现）无法自动化，
@@ -37,6 +52,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 // 场景四复用主进程同一份配置解析纯函数（契约 §5 第三次修订），注入参数断言三条规则
 import { resolveServiceConfigDir } from '../service-config-dir.js';
+// 场景六复用主进程同一份窗口 chrome 选项纯函数（契约 §17），逐字段断言防实现漂移
+import { windowChromeOptions, TABBAR_HEIGHT_DIP } from '../window-chrome.js';
 
 const require = createRequire(import.meta.url);
 
@@ -396,15 +413,15 @@ async function fetchCdpTargets(cdpPort) {
 }
 
 /**
- * 建立到指定页面目标的 CDP WebSocket 连接（Node 内置 WebSocket），
+ * 建立到指定 DevTools WebSocket 地址的 CDP 会话（Node 内置 WebSocket），
  * 封装 Runtime.evaluate（returnByValue + awaitPromise）、任意域命令发送
- * 与事件订阅（对话框免疫等场景使用）。
- * @param {number} cdpPort - 调试端口
- * @param {string} targetId - 页面目标 id
+ * 与事件订阅（对话框免疫等场景使用）。应用页面目标与主进程 inspector
+ * （--inspect 端口暴露同一套协议）共用本核心。
+ * @param {string} wsUrl - 完整 ws:// 连接地址
  */
-function connectCdpPage(cdpPort, targetId) {
+function connectDevtoolsWs(wsUrl) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${cdpPort}/devtools/page/${targetId}`);
+    const ws = new WebSocket(wsUrl);
     let seq = 0;
     const pending = new Map();
     const listeners = new Map();
@@ -442,8 +459,88 @@ function connectCdpPage(cdpPort, targetId) {
         for (const handler of listeners.get(message.method)) handler(message.params || {});
       }
     };
-    ws.onerror = () => reject(new Error(`CDP WebSocket 连接失败：target ${targetId}`));
+    ws.onerror = () => reject(new Error(`CDP WebSocket 连接失败：${wsUrl}`));
   });
+}
+
+/**
+ * 建立到指定页面目标的 CDP WebSocket 连接。
+ * @param {number} cdpPort - 调试端口
+ * @param {string} targetId - 页面目标 id
+ */
+function connectCdpPage(cdpPort, targetId) {
+  return connectDevtoolsWs(`ws://127.0.0.1:${cdpPort}/devtools/page/${targetId}`);
+}
+
+/**
+ * 主进程内读取剪贴板的表达式（契约 §17.2 验收「主进程 clipboard.readText()」）。
+ * inspector 全局作用域没有 require（它是模块内变量），经 process.mainModule
+ * 兜底取主模块的 require；主进程与页面同进程读取的是同一份系统剪贴板。
+ */
+const MAIN_CLIPBOARD_READ_EXPR = '(function () { var req = (typeof require === "function") ? require : process.mainModule.require; return req("electron").clipboard.readText(); })()';
+
+/**
+ * 主进程内驱动主窗口全屏往返的表达式（契约 §17.1.1 的 smoke 驱动通道）。
+ * setFullScreen 为异步过渡，调用后由调用方在标签条 DOM 上轮询等待生效。
+ * @param {boolean} on - true=进入全屏，false=退出全屏
+ */
+const mainSetFullScreenExpr = (on) => `(function () {
+  var req = (typeof require === "function") ? require : process.mainModule.require;
+  var win = req("electron").BrowserWindow.getAllWindows()[0];
+  if (!win) return false;
+  win.setFullScreen(${on ? 'true' : 'false'});
+  return true;
+})()`;
+
+/**
+ * 主进程内采集应用菜单快捷键快照的表达式（契约 §17.1 第四次修订/§17.1.2 的
+ * 运行期断言通道）。MenuItem.accelerator 为字符串基元，String() 直接还原
+ * 加速键原文；getMenuItemById 对不存在的 id 返回 null。
+ */
+const MENU_SNAPSHOT_EXPR = `(function () {
+  var req = (typeof require === "function") ? require : process.mainModule.require;
+  var menu = req("electron").Menu.getApplicationMenu();
+  if (!menu) return null;
+  var ids = [];
+  for (var n = 1; n <= 9; n++) ids.push('switch-tab-' + n);
+  ids.push('switch-tab-0');
+  var snapshot = { switchTabs: {}, arrows: { prev: false, next: false }, duplicates: [] };
+  ids.forEach(function (id) {
+    var item = menu.getMenuItemById(id);
+    snapshot.switchTabs[id] = item && item.accelerator ? String(item.accelerator) : null;
+  });
+  snapshot.arrows.prev = Boolean(menu.getMenuItemById('prev-tab-cmd-arrow'));
+  snapshot.arrows.next = Boolean(menu.getMenuItemById('next-tab-cmd-arrow'));
+  // 全菜单可见项加速键唯一性：同一加速键被两项注册时原生菜单只响应先注册者，
+  // 另一项会静默失效（⌘0 归属冲突曾为此类隐患，此断言防回归）
+  var seen = {};
+  (function walk(items) {
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+      if (item.submenu) { walk(item.submenu.items); continue; }
+      if (item.accelerator) {
+        var key = String(item.accelerator);
+        if (seen[key]) snapshot.duplicates.push(key);
+        else seen[key] = true;
+      }
+    }
+  })(menu.items);
+  return snapshot;
+})()`;
+
+/**
+ * 等待主进程 inspector 监听并返回其 DevTools WebSocket 地址。
+ * Electron 对 --inspect=0 的处理与 Node 一致（随机端口 + 监听行打到输出），
+ * 据此解析地址，避免预选固定端口的占用竞态。
+ * @param {{tail: () => string}} app - launchApp 返回的输出收集器
+ * @param {number} [timeoutMs] - 总超时
+ * @returns {Promise<string|null>} ws:// 地址；超时返回 null
+ */
+function waitMainInspectorUrl(app, timeoutMs = 15000) {
+  return waitFor(() => {
+    const match = app.tail().match(/Debugger listening on (ws:\/\/127\.0\.0\.1:\d+\/[0-9a-f-]+)/);
+    return match ? match[1] : null;
+  }, timeoutMs, 200);
 }
 
 /**
@@ -494,7 +591,22 @@ async function runMultiTabCheck(baseCtx) {
   await fsp.mkdir(path.join(ctx.root, 'xdg-config'), { recursive: true });
   const userDataDir = path.join(ctx.root, 'user-data');
 
-  const app = launchApp(ctx, 'tabs', ['--remote-debugging-port=0']);
+  // 标题断言依赖「仓库感知终态」（与 QA m2 同款判别），须先给标签制造仓库上下文：
+  // 预置一个最小 fixture 仓库。仅 GIT_LENS_USER_DATA 时服务配置目录按规则 3 落在
+  // <userData>/git-lens-config（场景四已验证该解析），启动前预写扫描目录，
+  // 页面仓库下拉即有项可选
+  const fixturePath = createFixtureRepo(path.join(root3, 'fixtures'), 'fixture-smoke');
+  const serviceConfigDir = path.join(userDataDir, 'git-lens-config');
+  await fsp.mkdir(serviceConfigDir, { recursive: true });
+  await fsp.writeFile(
+    path.join(serviceConfigDir, 'config.json'),
+    `${JSON.stringify({ customDirectories: [fixturePath] }, null, 2)}\n`,
+    'utf-8',
+  );
+
+  // --inspect=0 为菜单运行期断言与全屏吸附驱动开主进程 inspector 通道
+  // （等价 evaluate：契约 §17.1/§17.1.1 均要求驱动或读取主进程对象）
+  const app = launchApp(ctx, 'tabs', ['--remote-debugging-port=0', '--inspect=0']);
 
   // 1. 就绪文件出现（由首个内容视图的首次加载触发，契约 §13 + §15）
   const ready = await waitFor(() => {
@@ -554,6 +666,24 @@ async function runMultiTabCheck(baseCtx) {
     activeIndex: () => tabbar.evaluate('Array.from(document.querySelectorAll(".tab")).findIndex(function (e) { return e.classList.contains("active"); })'),
   };
 
+  /** 等待应用页加载出仓库选项（下拉列表已渲染 ≥1 项，场景三仅预置 1 个 fixture） */
+  const waitForRepoOptions = (conn) => waitFor(async () => {
+    const count = await conn.evaluate('document.querySelectorAll("#repoDropdownList .repo-item").length');
+    return count >= 1 ? count : null;
+  }, 15000);
+
+  /** 在应用页内经真实仓库下拉（#repoTrigger + .repo-item 点击）切换到指定仓库 */
+  const selectRepoViaUi = (conn, repoPath) => conn.evaluate(`(function () {
+    var trigger = document.getElementById('repoTrigger');
+    if (!trigger) { return false; }
+    trigger.click();
+    var items = document.querySelectorAll('#repoDropdownList .repo-item');
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].dataset.repoPath === ${JSON.stringify(repoPath)}) { items[i].click(); return true; }
+    }
+    return false;
+  })()`);
+
   // 4. 经「+」逐个新建标签，每建一个就发现新目标——保证 creationOrder 与
   //    创建顺序严格一致（/json/list 的数组顺序不保证反映创建顺序）
   for (let expected = 2; expected <= 3; expected += 1) {
@@ -578,23 +708,38 @@ async function runMultiTabCheck(baseCtx) {
     conns.set(id, await connectCdpPage(cdpPort, id));
   }
 
-  // 5. 标题按 page title 更新并同步到标签条（先等各页面加载出真实 title，
-  //    避免读到加载中途的空标题）
+  // 5. 标题按 page title 更新并同步到标签条。终态判别与 QA m2 同款（仓库感知）：
+  //    首屏 HTML 的通用初始标题「Git Lens · 本地仓库透镜与代码 Diff 审计」同样含
+  //    "Git Lens"，仅 includes 判别会让轮询被瞬间满足——页面 title 的终态事件稍后
+  //    才经 page-title-updated → IPC 到标签条，两侧快照可能失配。故页面与标签条
+  //    两侧都等 `<仓库> · <视图> | Git Lens` 形态后再取快照。
+  //    前提对齐 QA m1/m2：3 个标签先各经页面下拉切到 fixture 仓库（选择失败由
+  //    下方终态等待超时与断言 detail 兜底暴露，不单列断言）
+  const isSettledTitle = (title) => typeof title === 'string'
+    && title.endsWith('| Git Lens') && !title.startsWith('Git Lens ·');
   for (const id of creationOrder) {
+    const conn = conns.get(id);
+    await waitForRepoOptions(conn);
+    await selectRepoViaUi(conn, fixturePath);
     await waitFor(async () => {
-      const title = await conns.get(id).evaluate('document.title');
-      return typeof title === 'string' && title.includes('Git Lens') ? title : null;
-    }, 10000);
+      const title = await conn.evaluate('document.title');
+      return isSettledTitle(title) ? title : null;
+    }, 15000);
   }
   const pageTitles = [];
   for (const id of creationOrder) {
     pageTitles.push(await conns.get(id).evaluate('document.title'));
   }
-  const barTitles = (await tabbarDom.titles()) || [];
-  const titlesOk = pageTitles.every((title) => typeof title === 'string' && title.includes('Git Lens'))
+  // 标签条标题同样等全部到达终态再比对：page-title-updated → IPC → tabbar 渲染
+  // 晚于页面 title 生效，直接读可能拿到上一态
+  const barTitles = await waitFor(async () => {
+    const titles = (await tabbarDom.titles()) || [];
+    return titles.length === 3 && titles.every(isSettledTitle) ? titles : null;
+  }, 15000) || [];
+  const titlesOk = pageTitles.every(isSettledTitle)
     && barTitles.length === 3
     && barTitles.every((title) => pageTitles.includes(title));
-  assert('多标签场景：3 个标签标题均取自页面 title 并同步到标签条', titlesOk, JSON.stringify({ pageTitles, barTitles }));
+  assert('多标签场景：3 个标签标题均取自页面 title 并同步到标签条（仓库感知终态判别）', titlesOk, JSON.stringify({ pageTitles, barTitles }));
 
   // 6. sessionStorage 标签间隔离：各自写入标记互不串扰
   for (const [index, id] of creationOrder.entries()) {
@@ -625,9 +770,114 @@ async function runMultiTabCheck(baseCtx) {
   }
   assert('多标签场景：每个标签内 /api/projects 均 200（凭据过滤覆盖全部视图）', statuses.length === 3 && statuses.every((status) => status === 200), JSON.stringify(statuses));
 
+  // 8. chrome 融合动态证据（契约 §17）：
+  //    a) loadFile query 注入的平台标识已在标签条 body[data-platform] 生效（CSS 安全区分支的前提）；
+  //    b) 对 tabbar 目标 Page.captureScreenshot 落固定 /tmp 路径，供协调者视觉审阅配色融合
+  const platformAttr = await tabbar.evaluate('document.body.dataset.platform');
+  assert('chrome 融合：标签条 body[data-platform] 与宿主平台一致（loadFile query 注入生效）', platformAttr === process.platform, `data-platform=${platformAttr} 宿主=${process.platform}`);
+  const tabbarScreenshotPath = '/tmp/glwt-smoke-tabbar.png';
+  let tabbarShotOk = false;
+  try {
+    // Page.captureScreenshot 无需先 Page.enable；标签条仅 38px 高，截图即窄条
+    const shot = await tabbar.send('Page.captureScreenshot', { format: 'png' });
+    await fsp.writeFile(tabbarScreenshotPath, Buffer.from(shot.data, 'base64'));
+    tabbarShotOk = fs.existsSync(tabbarScreenshotPath) && fs.statSync(tabbarScreenshotPath).size > 0;
+  } catch (err) {
+    console.log(`标签条截图失败：${err && err.message ? err.message : err}`);
+  }
+  assert('chrome 融合：标签条 CDP 截图已落盘（含 3 个标签与平台安全区，供视觉审阅）', tabbarShotOk, `截图路径=${tabbarScreenshotPath}`);
+
+  // 8c. 全屏吸附（契约 §17.1.1）：主进程 inspector 驱动 BrowserWindow.setFullScreen
+  //     往返，在标签条 DOM 上轮询 body.fullscreen 类与 #bar 计算左内边距。
+  //     setFullScreen 为异步（macOS 有系统全屏过渡），一律轮询等待而非立即断言；
+  //     左内边距断言仅 darwin 有意义（非 darwin 无左安全区分支，只断言类切换）
+  const isDarwin = process.platform === 'darwin';
+  const expectedRestPadding = isDarwin ? '78px' : '0px';
+  const readFullscreenState = () => tabbar.evaluate(`(function () {
+    var bar = document.getElementById('bar');
+    return {
+      fullscreenClass: document.body.classList.contains('fullscreen'),
+      paddingLeft: bar ? getComputedStyle(bar).paddingLeft : null,
+    };
+  })()`);
+  const initialFs = await readFullscreenState();
+  assert(
+    'chrome 融合（全屏吸附）：非全屏初始态无 fullscreen 类且 darwin 左安全区 78px',
+    Boolean(initialFs) && initialFs.fullscreenClass === false && (!isDarwin || initialFs.paddingLeft === '78px'),
+    `平台=${process.platform} 状态=${JSON.stringify(initialFs)}`,
+  );
+
+  let inspector = null;
+  try {
+    const inspectorUrl = await waitMainInspectorUrl(app);
+    if (inspectorUrl) inspector = await connectDevtoolsWs(inspectorUrl);
+  } catch {
+    inspector = null;
+  }
+
+  if (!inspector) {
+    // inspector 是菜单运行期断言与全屏驱动的唯一通道，缺失即 fail，不给空洞通过
+    assert('chrome 融合（菜单）：switch-tab-0..9 十项 id 齐全且加速键为 CmdOrCtrl+0..9（运行期 Menu 断言）', false, '主进程 inspector 未就绪（--inspect=0）');
+    assert('chrome 融合（菜单）：prev/next-tab-cmd-arrow 已移除（⌘←/→ 移交页面，契约 §17.1.2）', false, '主进程 inspector 未就绪');
+    assert('chrome 融合（菜单）：全菜单加速键无重复（无两项争抢同一加速键）', false, '主进程 inspector 未就绪');
+    assert('chrome 融合（全屏吸附）：进入全屏后 body.fullscreen 生效且 darwin 左安全区取消（78px→0px）', false, '主进程 inspector 未就绪，无法驱动 setFullScreen');
+    assert('chrome 融合（全屏吸附）：退出全屏后 fullscreen 类移除且 darwin 左安全区恢复', false, '主进程 inspector 未就绪');
+  } else {
+    // 菜单运行期断言（契约 §17.1 第四次修订/§17.1.2）：比静态走查更强的证据——
+    // 直接读取真实构建出的应用菜单
+    const menuSnapshot = await inspector.evaluate(MENU_SNAPSHOT_EXPR);
+    const switchTabEntries = menuSnapshot ? Object.entries(menuSnapshot.switchTabs) : [];
+    const switchTabsOk = switchTabEntries.length === 10
+      && switchTabEntries.every(([id, accelerator]) => accelerator === `CmdOrCtrl+${id.slice(-1)}`);
+    assert(
+      'chrome 融合（菜单）：switch-tab-0..9 十项 id 齐全且加速键为 CmdOrCtrl+0..9（运行期 Menu 断言）',
+      switchTabsOk,
+      menuSnapshot ? JSON.stringify(menuSnapshot.switchTabs) : '菜单快照为空',
+    );
+    const arrowsGone = Boolean(menuSnapshot) && menuSnapshot.arrows.prev === false && menuSnapshot.arrows.next === false;
+    assert(
+      'chrome 融合（菜单）：prev/next-tab-cmd-arrow 已移除（⌘←/→ 移交页面，契约 §17.1.2）',
+      arrowsGone,
+      menuSnapshot ? `prev=${menuSnapshot.arrows.prev} next=${menuSnapshot.arrows.next}` : '菜单快照为空',
+    );
+    const noDuplicateAccelerators = Boolean(menuSnapshot) && menuSnapshot.duplicates.length === 0;
+    assert(
+      'chrome 融合（菜单）：全菜单加速键无重复（无两项争抢同一加速键）',
+      noDuplicateAccelerators,
+      menuSnapshot ? (menuSnapshot.duplicates.length ? `重复：${menuSnapshot.duplicates.join(', ')}` : '无重复') : '菜单快照为空',
+    );
+
+    // 全屏进入：驱动 → 轮询（类 + darwin 左内边距取消）
+    const enterTriggered = await inspector.evaluate(mainSetFullScreenExpr(true));
+    const entered = await waitFor(async () => {
+      const state = await readFullscreenState();
+      return state && state.fullscreenClass === true && (!isDarwin || state.paddingLeft === '0px') ? state : null;
+    }, 10000);
+    assert(
+      'chrome 融合（全屏吸附）：进入全屏后 body.fullscreen 生效且 darwin 左安全区取消（78px→0px）',
+      enterTriggered === true && Boolean(entered),
+      `驱动=${enterTriggered} 终态=${JSON.stringify(entered)}`,
+    );
+
+    // 全屏退出：恢复断言（类移除 + 左安全区回到 78px），恢复完成后再继续关标签，
+    // 避免退出协议与全屏过渡竞态
+    const exitTriggered = await inspector.evaluate(mainSetFullScreenExpr(false));
+    const exited = await waitFor(async () => {
+      const state = await readFullscreenState();
+      return state && state.fullscreenClass === false && (!isDarwin || state.paddingLeft === expectedRestPadding) ? state : null;
+    }, 10000);
+    assert(
+      'chrome 融合（全屏吸附）：退出全屏后 fullscreen 类移除且 darwin 左安全区恢复',
+      exitTriggered === true && Boolean(exited),
+      `驱动=${exitTriggered} 终态=${JSON.stringify(exited)}`,
+    );
+
+    inspector.close();
+  }
+
   for (const conn of conns.values()) conn.close();
 
-  // 8. 点击「×」关闭第 3 个标签 → 对应 CDP 目标消失（webContents 销毁）
+  // 9. 点击「×」关闭第 3 个标签 → 对应 CDP 目标消失（webContents 销毁）
   const closedId = creationOrder[2];
   await tabbarDom.clickClose(2);
   const destroyedThird = await waitFor(async () => {
@@ -636,7 +886,7 @@ async function runMultiTabCheck(baseCtx) {
   }, 10000);
   assert('多标签场景：点击「×」后第 3 个标签视图销毁（CDP 目标消失）', destroyedThird === true, `closedTarget=${closedId}`);
 
-  // 9. 逐个关闭剩余标签；关闭最后一个触发关窗退出协议
+  // 10. 逐个关闭剩余标签；关闭最后一个触发关窗退出协议
   await tabbarDom.clickClose(0);
   await new Promise((resolve) => setTimeout(resolve, 800));
   await tabbarDom.clickClose(0);
@@ -663,12 +913,15 @@ async function runMultiTabCheck(baseCtx) {
   }, 8000);
   assert('多标签场景：服务端口已释放', portFreed === true, `port=${ready.port}`);
 
-  // 10. 销毁回执：主进程日志逐标签记录 webContents 已销毁（isDestroyed 证据）
+  // 11. 销毁回执：主进程日志逐标签记录 webContents 已销毁（isDestroyed 证据）
   const destroyedLogs = (app.tail().match(/webContents 已销毁/g) || []).length;
   assert('多标签场景：3 个标签 webContents 均确认销毁（destroyed 回执日志 ≥3）', destroyedLogs >= 3, `日志计数=${destroyedLogs}`);
 
   tabbar.close();
-  const failedHere = results.some((item) => !item.ok && item.name.startsWith('多标签场景'));
+  // chrome 融合前缀的运行期断言（平台注入/截图/全屏吸附/菜单）同属本场景，
+  // 失败时同样保留临时目录供排查
+  const failedHere = results.some((item) => !item.ok
+    && (item.name.startsWith('多标签场景') || item.name.startsWith('chrome 融合')));
   if (!failedHere) {
     try {
       await fsp.rm(root3, { recursive: true, force: true });
@@ -1027,7 +1280,8 @@ async function runTabRestoreCheck(baseCtx) {
 
   // ---- 第一轮：构造状态（两个标签分别指向 fixture-a / fixture-b，激活标签 1） ----
   await resetE2eFiles();
-  const app1 = launchApp(ctx, 'restore-1', ['--remote-debugging-port=0']);
+  // --inspect=0 为剪贴板断言开主进程 inspector 通道（见下方「剪贴板真实写入」块）
+  const app1 = launchApp(ctx, 'restore-1', ['--remote-debugging-port=0', '--inspect=0']);
   const ready1 = await waitForReadyAndToken(ctx);
   assert('恢复场景：首轮启动就绪（30s 内）', Boolean(ready1), ready1 ? `port=${ready1.port}` : '就绪文件超时\n' + app1.tail());
   if (!ready1) {
@@ -1064,6 +1318,78 @@ async function runTabRestoreCheck(baseCtx) {
     return safeDecode(value).includes('fixture-a') ? value : null;
   }, 15000);
   assert('恢复场景：标签 1 经页面下拉切到 fixture-a（URL 出现 ?repo= 查询串）', Boolean(search1), `search=${search1}`);
+
+  // ---- 剪贴板真实写入（契约 §17.2 / DEF-007，替代原「剪贴板降级」skip 项）----
+  // 触发路径选择：inspect 视图 worktree item 的「复制」按钮，经 CDP Input 域
+  // 真实鼠标点击。两个备选均不可行：
+  //  - 直接调用页面 copy 通道：app.js 整体在 IIFE 内、copyText 未暴露全局；
+  //  - 合成 DOM click()：不产生 transient user activation，writeText 会在
+  //    Chromium 权限请求层被直接拒绝（探针实测），真实用户的鼠标点击天然
+  //    带激活——故必须走 Input 真实输入管线，同时验证权限放行与页面时序。
+  const copyBtnReady = await waitFor(async () => {
+    const present = await conn1.evaluate('Boolean(document.querySelector("#wtList [data-action=wt-copy-path]"))');
+    return present === true ? true : null;
+  }, 30000);
+  assert('恢复场景：inspect 视图渲染出 worktree「复制」按钮（剪贴板断言前置就绪）', copyBtnReady === true, copyBtnReady ? '按钮已渲染' : '30s 内未渲染，inspect 未完成');
+
+  // 「已复制!」反馈仅存活 1500ms 后自动还原，轮询读 DOM 有错过窗口的竞态；
+  // 先挂 MutationObserver 锁存瞬时反馈，再触发真实点击，断言无竞态
+  let armed = false;
+  let feedbackSeen = null;
+  let clipRead = null;
+  if (copyBtnReady === true) {
+    armed = await conn1.evaluate(`(function () {
+      var btn = document.querySelector('#wtList [data-action=wt-copy-path]');
+      if (!btn) return false;
+      var item = btn.closest('.list-item');
+      var pathEl = item ? item.querySelector('.item-path-text') : null;
+      window.__glwtCopyExpected = pathEl ? pathEl.textContent : null;
+      window.__glwtCopyFeedbackSeen = false;
+      var observer = new MutationObserver(function () {
+        if (btn.textContent === '已复制!') window.__glwtCopyFeedbackSeen = true;
+      });
+      observer.observe(btn, { childList: true, characterData: true, subtree: true });
+      return true;
+    })()`);
+    // 取按钮视口中心坐标并滚入视野，供 Input 真实鼠标点击
+    const clickPoint = armed === true
+      ? await conn1.evaluate(`(function () {
+        var btn = document.querySelector('#wtList [data-action=wt-copy-path]');
+        btn.scrollIntoView({ block: 'center' });
+        var r = btn.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      })()`)
+      : null;
+    if (armed === true && clickPoint) {
+      await conn1.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: clickPoint.x, y: clickPoint.y });
+      await conn1.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: clickPoint.x, y: clickPoint.y, button: 'left', clickCount: 1 });
+      await conn1.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: clickPoint.x, y: clickPoint.y, button: 'left', clickCount: 1 });
+      feedbackSeen = await waitFor(async () => {
+        const seen = await conn1.evaluate('window.__glwtCopyFeedbackSeen === true');
+        return seen === true ? true : null;
+      }, 8000);
+
+      // 主进程真实剪贴板读取：spawn 启动没有 Playwright electronApp 句柄，
+      // 经 --inspect 暴露的主进程 inspector 通道等价完成（同一 DevTools 协议）
+      try {
+        const inspectorUrl = await waitMainInspectorUrl(app1);
+        if (!inspectorUrl) throw new Error('15s 内未出现主进程 inspector 监听行');
+        const inspector = await connectDevtoolsWs(inspectorUrl);
+        clipRead = await waitFor(async () => {
+          const expected = await conn1.evaluate('window.__glwtCopyExpected || null');
+          const actual = await inspector.evaluate(MAIN_CLIPBOARD_READ_EXPR);
+          return typeof expected === 'string' && actual === expected ? { expected, actual } : null;
+        }, 8000);
+        inspector.close();
+      } catch (err) {
+        clipRead = { error: err && err.message ? err.message : String(err) };
+      }
+    }
+  }
+  const feedbackOk = armed === true && feedbackSeen === true;
+  assert('恢复场景：点击复制按钮后按钮反馈「已复制!」（写入成功后才提示，契约 §17.2 时序）', feedbackOk, feedbackOk ? '瞬时反馈已锁存' : `触发=${armed} 反馈=${feedbackSeen}`);
+  const clipboardOk = Boolean(clipRead) && clipRead.expected === clipRead.actual;
+  assert('恢复场景：主进程 clipboard.readText() 与被复制文本一致（权限放行 + 真实写入）', clipboardOk, clipboardOk ? `写入 ${clipRead.actual.length} 字符与页面展示路径一致` : JSON.stringify(clipRead));
 
   const tabbarTarget1 = (await fetchCdpTargets(cdpPort1)).find((item) => item.type === 'page' && item.url.includes('tabbar.html'));
   if (!tabbarTarget1) {
@@ -1257,6 +1583,88 @@ async function runTabRestoreCheck(baseCtx) {
   }
 }
 
+// ---- 场景六：窗口 chrome 融合（契约 §17/§17.1，纯函数断言 + 源码走查） ----
+
+/**
+ * 场景六：窗口 chrome 融合（契约 §17/§17.1）。
+ *
+ * 运行中的 BrowserWindow 构造参数与菜单 accelerator 无法从外部进程直接断言，
+ * 按场景四既有模式分两层覆盖：
+ *  - 纯函数层：主进程与冒烟脚本 import 同一份 window-chrome.js 的
+ *    windowChromeOptions，逐字段断言 darwin（hiddenInset + trafficLightPosition）
+ *    与 win32/linux（titleBarOverlay）两分支取值，钉死「实现与期望不漂移」；
+ *  - 静态走查层：源码文本断言主窗口构造处展开该纯函数、标签条拖拽区与
+ *    平台安全区 CSS、平台 query 注入链路、恢复页 drag 区、§17.1 快捷键
+ *    菜单项 id 与越界守卫全部就位。
+ * 运行期证据（平台注入实际生效、标签条截图）见场景三内「chrome 融合」断言。
+ */
+async function runWindowChromeCheck() {
+  const source = mainJsSource();
+  const tabbarSource = fs.readFileSync(path.resolve(__dirname, '../tabbar.html'), 'utf-8');
+
+  // 1. 纯函数：darwin → hiddenInset + trafficLightPosition（红绿灯压进 38px 标签条内近似垂直居中）
+  const darwinChrome = windowChromeOptions('darwin');
+  const darwinOk = darwinChrome.titleBarStyle === 'hiddenInset'
+    && Boolean(darwinChrome.trafficLightPosition)
+    && darwinChrome.trafficLightPosition.x === 12
+    && darwinChrome.trafficLightPosition.y === 13;
+  assert('chrome 融合（纯函数）：darwin 为 hiddenInset + trafficLightPosition{x:12,y:13}', darwinOk, JSON.stringify(darwinChrome));
+
+  // 2. 纯函数：win32/linux → titleBarOverlay（底色/前景色与标签条一致，高度同标签条 38px；⚠️ 真机未验收）
+  const overlayWin = windowChromeOptions('win32');
+  const overlayLinux = windowChromeOptions('linux');
+  const overlayOk = Boolean(overlayWin.titleBarOverlay)
+    && overlayWin.titleBarOverlay.color === '#010409'
+    && overlayWin.titleBarOverlay.symbolColor === '#c9d1d9'
+    && overlayWin.titleBarOverlay.height === TABBAR_HEIGHT_DIP
+    && JSON.stringify(overlayLinux) === JSON.stringify(overlayWin);
+  assert('chrome 融合（纯函数）：win32/linux 为 titleBarOverlay(#010409/#c9d1d9/38px) 且两平台一致', overlayOk, JSON.stringify(overlayWin));
+
+  // 3. 走查：主窗口构造处确实展开共享纯函数（平台分支由 process.platform 决定）
+  assert(
+    'chrome 融合（走查）：createMainWindow 展开共享 windowChromeOptions(process.platform)',
+    source.includes('...windowChromeOptions(process.platform)'),
+    'main.js 构造参数接入点',
+  );
+
+  // 4. 走查：标签条拖拽区、交互元素 no-drag、darwin/非 darwin 安全区与全屏吸附 CSS（契约 §17/§17.1.1）
+  const dragOk = tabbarSource.includes('-webkit-app-region: drag')
+    && tabbarSource.includes('.tab, .tab-close, #new-tab { -webkit-app-region: no-drag; }')
+    && tabbarSource.includes('body[data-platform="darwin"] #bar { padding-left: 78px; }')
+    && tabbarSource.includes('body.fullscreen[data-platform="darwin"] #bar { padding-left: 0; }')
+    && tabbarSource.includes('body:not([data-platform="darwin"]) #bar { padding-right: 140px; }');
+  assert('chrome 融合（走查）：标签条 #bar 拖拽区、交互元素 no-drag、两侧平台安全区与全屏吸附 CSS 就位', dragOk);
+
+  // 5. 走查：平台注入链路（loadFile query → 页面 body[data-platform]，运行期断言见场景三）
+  const platformQueryOk = source.includes("loadFile(path.join(__dirname, 'tabbar.html'), { query: { platform: process.platform } })");
+  assert('chrome 融合（走查）：tabbar.html 经 loadFile query 注入 process.platform', platformQueryOk);
+
+  // 6. 走查：独立恢复页 body 为拖拽区、「退出应用」按钮 no-drag（契约 §17；main.js 内联样式恰两处）
+  const recoveryOk = source.includes('-webkit-app-region: drag; }') && source.includes('-webkit-app-region: no-drag; }');
+  assert('chrome 融合（走查）：恢复页 body 拖拽区且「退出应用」按钮 no-drag', recoveryOk);
+
+  // 7. 走查：§17.1 第四次修订——switch-tab 全 10 项（1..9、0=第 10 个标签）显式
+  //    列出、activateTabIndex 通用支持 0–9 且越界无操作；§17.1.2——⌘←/→ 菜单项
+  //    已整项移除（移交页面 keydown，标签循环保留在 Ctrl±Tab）
+  const hotkeysOk = source.includes('id: `switch-tab-${number}`')
+    && source.includes('[1, 2, 3, 4, 5, 6, 7, 8, 9, 0].map')
+    && source.includes('accelerator: `CmdOrCtrl+${number}`')
+    && source.includes('activateTabIndex(number === 0 ? 9 : number - 1)')
+    && source.includes('index > 9) return')
+    && !source.includes('cmd-arrow')
+    && source.includes("accelerator: 'Ctrl+Tab'")
+    && source.includes("accelerator: 'Ctrl+Shift+Tab'")
+    && source.includes('click: () => cycleTab(-1)')
+    && source.includes('click: () => cycleTab(1)');
+  assert('chrome 融合（走查）：标签快捷键菜单（switch-tab-0..9 全列 / ⌘←→ 已移除 / Ctrl±Tab 保留 / activateTabIndex 0–9 越界守卫）就位', hotkeysOk);
+
+  // 8. 走查：⌘0 已划给 switch-tab-0（第 10 个标签），「实际大小」改绑 ⇧⌘0，
+  //    菜单不再存在硬编码的 CmdOrCtrl+0 加速键（防两项争抢回归）
+  const zoomOk = source.includes("accelerator: 'Shift+CmdOrCtrl+0'")
+    && !source.includes("accelerator: 'CmdOrCtrl+0'");
+  assert('chrome 融合（走查）：「实际大小」改绑 ⇧⌘0（⌘0 归属第 10 个标签，无重复加速键）', zoomOk);
+}
+
 // ---- 入口 ----
 
 async function main() {
@@ -1295,6 +1703,8 @@ async function main() {
     await runSharedConfigCheck(ctx);
     console.log('');
     await runTabRestoreCheck(ctx);
+    console.log('');
+    await runWindowChromeCheck();
   } finally {
     const failed = results.filter((item) => !item.ok);
     console.log('');
@@ -1311,7 +1721,7 @@ async function main() {
     }
     console.log('');
     console.log('=== 人工验证清单（GUI 项，无法自动化） ===');
-    console.log('1. 应用菜单：刷新(Cmd+R)、返回/前进、缩放(Cmd+=/-/0)、复制/粘贴、帮助(关于/复制诊断信息) 均生效且作用于页面；');
+    console.log('1. 应用菜单：刷新(Cmd+R)、返回/前进、缩放(Cmd+=/-，实际大小 ⇧⌘0)、复制/粘贴、帮助(关于/复制诊断信息) 均生效且作用于页面；');
     console.log('2. 「帮助 → 复制诊断信息」剪贴板内容完整（含 git 版本与服务状态）；');
     console.log('3. 原生目录选择对话框（页面添加扫描目录 / window.gitLens.chooseDirectory()）可选目录、取消返回空；');
     console.log('4. 服务崩溃恢复遮罩：深色中文文案、倒计时与「退出应用」按钮表现；恢复期间应用文档不导航（sessionStorage 保留），重启后同端口 reload；');
@@ -1322,6 +1732,9 @@ async function main() {
   console.log('   标签标题过长时省略号截短；窗口缩放/最大化时标签条与内容区布局同步；服务崩溃时各标签呈现恢复遮罩。');
   console.log('9. 跨启动标签恢复（真实使用路径）：正常使用数个标签后退出重开，标签集合/顺序/激活项恢复；');
   console.log('   macOS 关窗后经 Dock 重开同样恢复；删除/损坏 tab-state.json 后启动回落单标签首页。');
+  console.log('10. 窗口 chrome 融合（契约 §17）：标签条空白区可拖动窗口、双击标签条缩放；红绿灯位于标签条内垂直居中且不遮挡首标签；');
+  console.log('11. 标签快捷键（契约 §17.1 第四次修订/§17.1.2）：⌘1–⌘9、⌘0（第 10 个标签）按下标切换、超出当前标签数时无操作；⌘←/⌘→ 不再切换标签，由页面接管主视图切换（文本输入框内光标跳转不再被遮蔽）；Ctrl±Tab 循环切换保留；返回/前进仍为 ⌘[/⌘]；');
+  console.log('12. 全屏吸附（契约 §17.1.1）：真实进出全屏（视图 → 全屏或 ⌃⌘F）时标签条吸附靠左（红绿灯安全区取消）、退出后恢复 78px 安全区；全屏过渡动画期间无布局跳动。');
     process.exit(failed.length === 0 ? 0 : 1);
   }
 }

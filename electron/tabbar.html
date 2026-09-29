@@ -21,7 +21,19 @@
     align-items: stretch;
     height: 38px;
     border-bottom: 1px solid #30363d;
+    /* 契约 §17：标签条兼任标题栏——空白区可拖动窗口，系统双击缩放行为沿用 */
+    -webkit-app-region: drag;
   }
+  /* 契约 §17：交互元素一律 no-drag（标签项、关闭 ×、新建 +），保证点击可达 */
+  .tab, .tab-close, #new-tab { -webkit-app-region: no-drag; }
+  /* darwin：左侧红绿灯安全区（hiddenInset 红绿灯组约占 78px，避免遮挡标签） */
+  body[data-platform="darwin"] #bar { padding-left: 78px; }
+  /* 契约 §17.1.1：darwin 全屏时系统隐藏红绿灯，取消左侧安全区让标签吸附靠左；
+     退出全屏恢复 78px。仅覆盖 darwin 分支，非 darwin 的右侧 overlay 留白与全屏无关 */
+  body.fullscreen[data-platform="darwin"] #bar { padding-left: 0; }
+  /* 非 darwin（含 unknown 回落）：右侧为系统 overlay 窗口控制按钮留位（≥140px，
+     契约 §17；win/linux 真机未验收） */
+  body:not([data-platform="darwin"]) #bar { padding-right: 140px; }
   #tabs {
     display: flex;
     flex: 1;
@@ -30,6 +42,10 @@
     overflow-y: hidden;
     /* 隐藏横向滚动条：标签多时靠压缩宽度而不是出滚动条 */
     scrollbar-width: none;
+    /* #tabs 不设 no-drag：标签未占满的空白区随 #bar 拖动窗口（浏览器惯例）。
+       横向滚动只发生在标签溢出时——溢出后可视区几乎全被 .tab（no-drag）覆盖，
+       滚轮事件落在 no-drag 元素上不受拖拽区吞事件影响；不溢出时无滚动需求。
+       取舍详见交付报告。 */
   }
   #tabs::-webkit-scrollbar { display: none; }
   .tab {
@@ -98,6 +114,19 @@
 </div>
 <script>
   'use strict';
+  // 契约 §17：主进程经 loadFile query 注入平台标识，置到 body[data-platform]
+  // 驱动 CSS 分支（darwin 左侧红绿灯安全区 / 其余平台右侧 overlay 控件区）。
+  // 白名单外的取值一律按 unknown 处理，样式回落非 darwin 分支（保守预留右留白）
+  var KNOWN_PLATFORMS = ['darwin', 'win32', 'linux'];
+  var platform = 'unknown';
+  try {
+    var requested = new URLSearchParams(location.search).get('platform');
+    if (KNOWN_PLATFORMS.indexOf(requested) !== -1) platform = requested;
+  } catch (err) {
+    // query 解析失败按 unknown 处理
+  }
+  document.body.dataset.platform = platform;
+
   var tabsEl = document.getElementById('tabs');
   var newTabEl = document.getElementById('new-tab');
 
@@ -139,6 +168,11 @@
   }
 
   window.gitLensTabbar.onTabsChanged(render);
+  // 契约 §17.1.1：订阅窗口全屏态（主进程在进出全屏及本页加载完成时推送），
+  // body.fullscreen 驱动 CSS 取消 darwin 左侧红绿灯安全区（标签吸附靠左）
+  window.gitLensTabbar.onFullscreenChanged(function (fullscreen) {
+    document.body.classList.toggle('fullscreen', Boolean(fullscreen));
+  });
   newTabEl.addEventListener('click', function () {
     window.gitLensTabbar.newTab();
   });
