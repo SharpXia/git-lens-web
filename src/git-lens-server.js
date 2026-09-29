@@ -14,6 +14,7 @@ import {
   deleteBranch,
   removeWorktree,
   pruneWorktrees,
+  pullWorktree,
   checkBranchExists,
   checkWorktreeExists,
   getWorktreeDiff,
@@ -57,7 +58,9 @@ const CONTENT_SECURITY_POLICY = "default-src 'self'; script-src 'self'; style-sr
 /** 静态资源精确白名单：pathname 相等匹配，天然免疫目录遍历与编码变形 */
 const STATIC_FILE_WHITELIST = {
   '/app.js': { file: 'app.js', contentType: 'text/javascript; charset=utf-8' },
-  '/app.css': { file: 'app.css', contentType: 'text/css; charset=utf-8' }
+  '/app.css': { file: 'app.css', contentType: 'text/css; charset=utf-8' },
+  '/manifest.webmanifest': { file: 'manifest.webmanifest', contentType: 'application/manifest+json; charset=utf-8' },
+  '/assets/git-lens-icon-light.png': { file: 'assets/git-lens-icon-light.png', contentType: 'image/png' }
 };
 
 /**
@@ -1094,6 +1097,24 @@ export function createGitLensServer(options) {
         const out = await pruneWorktrees(repoPath);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: true, output: out }));
+      }
+
+      // 12. API: 主工作区 Pull（契约 §19）。仅快进拉取（--ff-only）；git 层失败
+      // （非快进/无上游/超时等）不抛错，按 200 + ok:false 返回原始输出与中文修复提示；
+      // 缺参/非仓库路径由 pullWorktree 抛带 statusCode 的 400 中文错误。Host/Origin/
+      // 会话凭据/请求体限制由入口统一执行（§4），此处无特例。
+      if (pathname === '/api/worktree-pull' && req.method === 'POST') {
+        const { worktree } = await readJson();
+        if (typeof worktree !== 'string' || worktree.trim() === '') {
+          return sendJson(res, 400, { ok: false, error: 'worktree 必须为非空字符串' });
+        }
+        try {
+          const result = await pullWorktree(worktree);
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
       }
 
       // 静态资源白名单（UI 已将内联脚本/样式外置）：仅 pathname 精确相等命中，

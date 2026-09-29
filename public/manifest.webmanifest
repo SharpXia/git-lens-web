@@ -1,0 +1,17 @@
+{
+  "name": "Git Lens Web",
+  "short_name": "Git Lens",
+  "description": "本地 Git 仓库、Worktree、分支与代码 Diff 检查工具",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#0d1117",
+  "icons": [
+    {
+      "src": "/assets/git-lens-icon-light.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

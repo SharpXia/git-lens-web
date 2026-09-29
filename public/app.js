@@ -35,10 +35,6 @@
       diff: '差异对比',
       mr: 'Merge Request'
     };
-    const PROJECT_ICON_COLORS = [
-      '#238636', '#1f6feb', '#8957e5', '#bf8700', '#db6d28', '#d1242f', '#0f766e', '#8250df'
-    ];
-
     /**
      * 取出仓库的展示名称；扫描列表尚未完成时回退到路径末级目录。
      */
@@ -59,44 +55,10 @@
     }
 
     /**
-     * favicon 在浏览器标签中很小，只取一个首字母以保持可读。
-     */
-    function getProjectInitial(name) {
-      return (Array.from(String(name || 'Git Lens').trim())[0] || 'G').toLocaleUpperCase();
-    }
-
-    /**
-     * SVG 文本只允许进入 favicon 的 text 节点，避免项目名破坏 SVG 结构。
-     */
-    function escapeSvgText(value) {
-      return String(value)
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&apos;');
-    }
-
-    /**
-     * 根据仓库路径稳定选择颜色，让同一项目在不同刷新和浏览器标签中保持一致。
-     */
-    function getProjectIconColor(value) {
-      let hash = 0;
-      for (const char of String(value || 'git-lens')) {
-        hash = ((hash << 5) - hash + char.codePointAt(0)) | 0;
-      }
-      return PROJECT_ICON_COLORS[Math.abs(hash) % PROJECT_ICON_COLORS.length];
-    }
-
-    /**
-     * 生成带项目首字母和 Git Lens 放大镜标记的 data URI favicon。
+     * 返回统一的浅色 App icon，浏览器和 Electron 使用同一份品牌资产。
      */
     function buildProjectFavicon(repo) {
-      const name = getCurrentRepoTitleName(repo);
-      const initial = escapeSvgText(getProjectInitial(name));
-      const color = getProjectIconColor(repo?.path || name);
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="${color}"/><text x="29" y="46" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,sans-serif" font-size="39" font-weight="700" fill="white">${initial}</text><circle cx="48" cy="43" r="8" fill="${color}" stroke="white" stroke-width="3"/><path d="m54 49 6 6" fill="none" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>`;
-      return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+      return '/assets/git-lens-icon-light.png';
     }
 
     /**
@@ -1445,6 +1407,7 @@
               ${wt.existsOnDisk ? `<button class="btn-outline" data-action="wt-open-commits" title="${wt.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>` : ''}
               <button class="btn-outline" data-action="wt-diff-vs-main">与主干对比</button>
             </div>
+            ${wt.isMain ? '<button class="btn-outline" data-action="wt-pull" title="从远程拉取当前分支最新提交（仅快进，分叉时不会自动合并）">Pull</button>' : ''}
             ${!isSafeMain ? `<button class="btn-danger btn-remove-wt" id="btn-rm-wt-${encodeURIComponent(wt.path).replace(/%/g, '_')}" data-action="wt-remove">移除</button>` : ''}
           </div>
         `;
@@ -1454,6 +1417,7 @@
           'wt-uncommitted-diff': () => viewUncommittedDiff(wt.path),
           'wt-open-commits': () => openCommitsDrawer(wt.path),
           'wt-diff-vs-main': () => viewDiffAgainstMain(wt.path),
+          'wt-pull': (el) => pullMainWorktree(el, wt.path),
           'wt-remove': () => removeWt(wt.path)
         });
         container.appendChild(div);
@@ -1552,6 +1516,51 @@
       if (itemDom) {
         // 仅替换解除绑定的分支条目，保留其他列表项和滚动位置。
         itemDom.replaceWith(createBranchItemDom(branch, currentMainBranch));
+      }
+    }
+
+    /**
+     * 主工作区 Pull 按钮（契约 §19）：对主工作区执行仅快进拉取并做非阻断反馈。
+     * 反馈时序遵循 §17.2 教训：只有服务确认结果后才提示——changed 提示「已拉取最新」
+     * 并复用 inspectRepo 刷新当前仓库，未变化提示「已是最新」，失败按输出末行的
+     * 中文修复提示摘要提示；网络层异常走 notifyRequestFailure。按钮全程置忙，
+     * finally 恢复（刷新重渲染后按钮已随 DOM 重建，恢复操作对游离节点无害）。
+     * @param {HTMLButtonElement} btn - 触发本次拉取的 Pull 按钮
+     * @param {string} worktreePath - 主工作区绝对路径
+     */
+    async function pullMainWorktree(btn, worktreePath) {
+      if (!btn || btn.disabled) return;
+      const originalText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '拉取中…';
+      try {
+        const res = await fetch('/api/worktree-pull', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ worktree: worktreePath })
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          // 简要原因优先取输出末行（后端把中文修复提示固定追加在末尾），
+          // 无 output 时（参数/边界类 400）退回 error 字段
+          const reason = (typeof data.output === 'string' && data.output.trim())
+            ? data.output.trim().split('\n').filter(Boolean).pop()
+            : (data.error || 'git 命令执行失败');
+          showToast('拉取失败：' + reason);
+          return;
+        }
+        if (!data.changed) {
+          showToast('已是最新');
+          return;
+        }
+        showToast('已拉取最新');
+        // 拉取到新提交后主工作区的 ahead/最新提交展示已过时，复用既有刷新入口全量刷新
+        if (currentRepo) await inspectRepo(currentRepo);
+      } catch (err) {
+        notifyRequestFailure(err, '拉取失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
       }
     }
 
@@ -2652,24 +2661,61 @@
       }
     }
 
-    function copyText(text, btn) {
-      if (!navigator.clipboard) {
+    /**
+     * 复制文本到剪贴板，且只在真实写入成功后才显示「已复制」按钮反馈（DEF-007）。
+     * 时序契约（§17.2）：桌面壳放行 clipboard-sanitized-write 权限后，优先走
+     * navigator.clipboard.writeText 并 await 其结果；API 不可用或写入被拒时
+     * 回退 textarea + execCommand('copy') 路径并检查其返回值；两路都失败时给
+     * 非阻断失败提示（与 DEF-006 的 notifyRequestFailure 同源的 toast 路径，
+     * 不落入其 alert 分支——剪贴板失败与服务状态无关，阻塞弹框无必要），
+     * 绝不显示「已复制」。
+     * @param {string} text - 要复制的文本
+     * @param {HTMLElement} [btn] - 触发复制的按钮；恢复原文案的定时器按按钮
+     *   实例持有，多个按钮共用本函数时反馈互不串扰
+     * @returns {Promise<void>}
+     */
+    async function copyText(text, btn) {
+      let copied = false;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        try {
+          await navigator.clipboard.writeText(text);
+          copied = true;
+        } catch {
+          // 权限被拒 / 写入失败：静默转入下方 execCommand 回退路径
+        }
+      }
+      if (!copied) {
+        // 回退路径：execCommand('copy') 虽已废弃，仍是剪贴板 API 不可用时的兜底；
+        // textarea 移出视口而非 display:none——后者在部分内核下 select() 不生效
         const ta = document.createElement('textarea');
         ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
         document.body.appendChild(ta);
         ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-      } else {
-        navigator.clipboard.writeText(text);
+        try {
+          copied = document.execCommand('copy');
+        } catch {
+          copied = false;
+        } finally {
+          document.body.removeChild(ta);
+        }
+      }
+      if (!copied) {
+        showToast('复制失败：文本未能写入剪贴板');
+        return;
       }
       if (btn) {
+        // 同一按钮快速重复点击时先清旧定时器，避免前一轮恢复文案覆盖本轮反馈
+        if (btn.copyFeedbackTimer) clearTimeout(btn.copyFeedbackTimer);
         const orig = btn.textContent;
         btn.textContent = '已复制!';
         btn.style.color = 'var(--success)';
-        setTimeout(() => {
+        btn.copyFeedbackTimer = setTimeout(() => {
           btn.textContent = orig;
           btn.style.color = '';
+          btn.copyFeedbackTimer = null;
         }, 1500);
       }
     }
@@ -4515,8 +4561,11 @@
       document.getElementById('serviceStoppedBar').style.display = 'none';
     }
 
-    /* crashed 态「复制诊断信息」：写入运行时信息与时间戳，便于用户粘贴反馈；
-       剪贴板 API 不可用时回退到隐藏 textarea 方案（与 copyText 一致） */
+    /* crashed 态「复制诊断信息」：写入运行时信息与时间戳，便于用户粘贴反馈。
+       时序与 copyText 的 DEF-007 修复同款：writeText await 成功才提示成功；
+       失败回退 textarea + execCommand('copy') 并检查返回值；两路都失败走
+       非阻断 toast（复用 showToast，不走 alert）。剪贴板失败与服务状态无关，
+       即使恢复遮罩场景 serviceKnownDown 为真也直接提示，不走静默分支 */
     async function copyServiceDiagnostics(btn) {
       const payload = JSON.stringify({
         state: 'crashed',
@@ -4525,19 +4574,46 @@
         userAgent: navigator.userAgent,
         runtime: desktopRuntimeInfo || null
       }, null, 2);
-      try {
-        await navigator.clipboard.writeText(payload);
-      } catch (err) {
+      let copied = false;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        try {
+          await navigator.clipboard.writeText(payload);
+          copied = true;
+        } catch {
+          // 权限被拒 / 写入失败：静默转入下方 execCommand 回退路径
+        }
+      }
+      if (!copied) {
+        // 回退路径与 copyText 一致：textarea 移出视口而非 display:none——
+        // 后者在部分内核下 select() 不生效；execCommand 返回值必须检查，
+        // 不检查会把回退失败误报成「已复制」（本缺陷的同型根源）
         const ta = document.createElement('textarea');
         ta.value = payload;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
         document.body.appendChild(ta);
         ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
+        try {
+          copied = document.execCommand('copy');
+        } catch {
+          copied = false;
+        } finally {
+          document.body.removeChild(ta);
+        }
+      }
+      if (!copied) {
+        showToast('复制失败：诊断信息未能写入剪贴板');
+        return;
       }
       if (btn) {
+        // 同一按钮快速重复点击时先清旧定时器，避免前一轮恢复文案覆盖本轮反馈
+        if (btn.copyFeedbackTimer) clearTimeout(btn.copyFeedbackTimer);
         btn.textContent = '已复制诊断信息';
-        setTimeout(() => { btn.textContent = '复制诊断信息'; }, 1500);
+        btn.copyFeedbackTimer = setTimeout(() => {
+          btn.textContent = '复制诊断信息';
+          btn.copyFeedbackTimer = null;
+        }, 1500);
       }
     }
 
@@ -4635,4 +4711,108 @@
       }
     });
 
+    /* ⌘←/→ 切换页面主视图（契约 §17.1.2）：窗口标签循环保留在 Ctrl±Tab，⌘←/→ 改为
+       切换页面主视图 tab（仓库总览与管理 → Worktree 差异对比 → Merge Requests 循环），
+       复用既有 switchTab 入口（内含 URL 状态同步），浏览器/桌面两模式一致。桩测试按
+       下方起止标记截取本段源码在沙箱内验证。 */
+    /* §17.1.2-CMD-ARROW-START */
+    const TAB_CYCLE_ORDER = ['overview', 'diff', 'mr']; // 循环顺序与顶栏 tab 按钮排列一致：⌘→ 依次前进
+    // 非 mac 用 Ctrl 兜底（Windows/Linux 上 Ctrl+←/→ 无浏览器默认行为，不冲突）；
+    // mac 上 Ctrl+←/→ 属系统空间切换，页面通常收不到，故 mac 仅认 ⌘
+    const CMD_ARROW_IS_MAC = /Mac/i.test(navigator.platform);
+    document.addEventListener('keydown', (e) => {
+      // 输入守卫（契约硬性）：焦点在输入类元素时直接放行，保留 ⌘←/→ 的行首/行尾光标跳转
+      const target = e.target;
+      if (target && (target.isContentEditable || (target.tagName && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)))) return;
+      // 修饰键匹配：mac 只认 ⌘；非 mac ⌘/Ctrl 皆可（Windows 的 ⌘ 位是 Win 键，系统窗口吸附优先）
+      if (!(e.metaKey || (!CMD_ARROW_IS_MAC && e.ctrlKey))) return;
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      // 拦截浏览器默认行为：Chrome 下 ⌘←/→ 是历史前进/后退快捷键，不拦截会与视图切换叠加
+      e.preventDefault();
+      const delta = e.key === 'ArrowRight' ? 1 : -1;
+      const nextTab = TAB_CYCLE_ORDER[(TAB_CYCLE_ORDER.indexOf(activeTab) + delta + TAB_CYCLE_ORDER.length) % TAB_CYCLE_ORDER.length];
+      switchTab(nextTab);
+    });
+    /* §17.1.2-CMD-ARROW-END */
+
+    /* 触摸板双指滑动历史导航（契约 §18 第二次修订）：双指右滑=返回、左滑=前进，与 Chrome
+       双指滑动一致。识别做在页面层（主进程不注入），浏览器/桌面模式行为一致、模式无关；
+       全程只监听不 preventDefault，滚动行为本身零影响。桩测试按下方起止标记截取本段源码
+       在沙箱内验证。 */
+    /* §18-SWIPE-NAV-START */
+    const SWIPE_NAV_THRESHOLD = 80;     // 触发阈值：累计横向位移绝对值（像素），可按手感微调
+    const SWIPE_NAV_COOLDOWN_MS = 200;  // 触发后冷却：wheel 事件流静默此时长才复位，防长滑连发
+    const SWIPE_GUARD_DEPTH = 5;        // 目标级守卫向上遍历祖先的最大层数（同时控制热路径开销）
+    // 方向符号：累计 deltaX 与 SWIPE_BACK_SIGN 同号 ⇒ 返回，异号 ⇒ 前进。
+    // 为什么是 -1：macOS 默认开启"自然滚动"（内容随手走），手指右滑 ⇒ 内容右移 ⇒ 视口相对
+    // 内容左移 ⇒ deltaX 为负，故右滑=返回取 -1；已用 CDP Input.dispatchMouseEvent
+    // {type:'mouseWheel', deltaX:-100} 实测确认该符号触发 history.back()（校准见交付报告）。
+    // 用户关闭自然滚动时手指方向与 deltaX 符号整体反转，行为随 Chrome 一并反转，无需改码。
+    const SWIPE_BACK_SIGN = -1;
+
+    const swipeNavState = { accum: 0, cooled: true, quietTimer: null };
+
+    // 事件流静默计时：每个到达本监听的 wheel 事件都重排；到点说明事件流已停 200ms，
+    // 统一清掉残余累积并结束冷却（冷却期与普通累积期共用一套静默复位）
+    function scheduleSwipeNavQuietReset() {
+      if (swipeNavState.quietTimer) clearTimeout(swipeNavState.quietTimer);
+      swipeNavState.quietTimer = setTimeout(() => {
+        swipeNavState.quietTimer = null;
+        swipeNavState.accum = 0;
+        swipeNavState.cooled = true;
+      }, SWIPE_NAV_COOLDOWN_MS);
+    }
+
+    // 元素是否横向可滚：先比尺寸再取样式，让大多数不溢出的元素免走 getComputedStyle
+    function isHorizontallyScrollable(el) {
+      if (!el || el.scrollWidth <= el.clientWidth + 1) return false;
+      const overflowX = window.getComputedStyle(el).overflowX;
+      return overflowX === 'auto' || overflowX === 'scroll' || overflowX === 'overlay';
+    }
+
+    // 横向滚动守卫（优先级最高）：文档级或目标祖先级任一命中，横向滑动归滚动所有，不做导航
+    function isSwipeNavBlocked(event) {
+      // 文档级：页面本身有横向滚动空间时，横向滑动语义属于页面滚动（含 documentElement 自身）
+      const doc = document.documentElement;
+      if (doc.scrollWidth > doc.clientWidth + 1) return true;
+      // 目标级：从事件目标向上有限层检查（Diff 代码块等可横向滚动容器内不劫持）
+      let el = event.target instanceof Element ? event.target : null;
+      for (let depth = 0; el && depth < SWIPE_GUARD_DEPTH; depth += 1, el = el.parentElement) {
+        if (isHorizontallyScrollable(el)) return true;
+      }
+      return false;
+    }
+
+    function handleSwipeNavWheel(event) {
+      // 任何 wheel 事件都证明手势流仍在延续，先重排静默计时（见 scheduleSwipeNavQuietReset）
+      scheduleSwipeNavQuietReset();
+      // 冷却期：当次触摸相位已触发过，只维持计时直到事件流停止，不累积不触发（单相位单触发）
+      if (!swipeNavState.cooled) return;
+      // 横向意图：横向分量存在且不小于纵向分量才进入累积；纯纵向滚动完全不经过后续分支
+      if (event.deltaX === 0 || Math.abs(event.deltaX) < Math.abs(event.deltaY)) return;
+      // 守卫命中即作废当次累积：累积过程中持续校验，覆盖滑入 Diff 代码块等中途进入滚动态的场景
+      if (isSwipeNavBlocked(event)) {
+        swipeNavState.accum = 0;
+        return;
+      }
+      swipeNavState.accum += event.deltaX;
+      const signed = swipeNavState.accum * SWIPE_BACK_SIGN; // 乘符号后：正=返回方向，负=前进方向
+      if (Math.abs(signed) >= SWIPE_NAV_THRESHOLD) {
+        swipeNavState.accum = 0;   // 立即清零，防止同相位残余直接凑满下一次触发
+        swipeNavState.cooled = false;
+        if (signed > 0) window.history.back();
+        else window.history.forward();
+      }
+    }
+
+    // popstate 兜底：历史切换（含 Cmd+[、Cmd+]、抽屉恢复与本手势自身触发）后清空累积，
+    // 避免未完成的旧位移污染下一次手势
+    window.addEventListener('popstate', () => {
+      swipeNavState.accum = 0;
+    });
+    // 捕获阶段监听（第二次修订）：提交抽屉等容器对 wheel 做 stopPropagation（滚动链拦截），
+    // 冒泡阶段监听会在光标停于抽屉上时收不到事件、手势失效；capture 使本监听先于一切目标级
+    // 处理执行。e.target 在捕获阶段仍是事件真实目标，目标级横向滚动守卫语义不变。
+    window.addEventListener('wheel', handleSwipeNavWheel, { capture: true, passive: true });
+    /* §18-SWIPE-NAV-END */
 

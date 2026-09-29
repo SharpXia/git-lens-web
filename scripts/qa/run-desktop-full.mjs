@@ -1010,18 +1010,33 @@ async function main() {
       const mtabPages = [];
       for (const id of creationOrder) mtabPages.push(await mtabHub.pageFor(id));
 
-      // m2 标签标题随页面 title 更新并同步到标签条；最新创建的标签处于激活态（.active）
+      // m2 标签标题随页面 title 更新并同步到标签条；最新创建的标签处于激活态（.active）。
+      // 终态判别必须是「仓库感知」形态：首屏 HTML 的通用初始标题（`Git Lens · 本地仓库
+      // 透镜与代码 Diff 审计`）同样含 "Git Lens"，曾让轮询在扫描完成前瞬间满足——
+      // m1 刚建完标签就逐个轮询，落在窗口内的标签页标题快照是通用值，而其终态标题
+      // 事件稍后到达标签条，两侧比对必然失配（连续两轮 m2 失败的根因）。故页面与
+      // 标签条两侧都等 `<仓库> · <视图> | Git Lens` 形态后再取快照，保证双方均为终态
+      const isSettledTitle = (t) => typeof t === 'string'
+        && t.endsWith('| Git Lens') && !t.startsWith('Git Lens ·');
       const mtabPageTitles = [];
       for (const [index, tabPage] of mtabPages.entries()) {
         await pollUntilAsync(
-          () => tabPage.title().then((t) => (typeof t === 'string' && t.includes('Git Lens') ? t : null)),
-          15000, { intervalMs: 200, describe: `标签 ${index + 1} 页面 title 就绪` }
+          () => tabPage.title().then((t) => (isSettledTitle(t) ? t : null)),
+          15000, { intervalMs: 200, describe: `标签 ${index + 1} 页面 title 到达仓库感知终态` }
         ).catch(() => { /* 超时由下方断言兜底 */ });
         mtabPageTitles.push(await tabPage.title());
       }
-      const mtabBarTitles = (await tabbar.titles()) || [];
+      // 标签条标题同样等全部到达终态再比对：page-title-updated → IPC → tabbar 渲染
+      // 晚于页面 title 生效，直接读可能拿到上一态
+      const mtabBarTitles = await pollUntilAsync(async () => {
+        const titles = (await tabbar.titles()) || [];
+        return titles.length === 3 && titles.every(isSettledTitle) ? titles : null;
+      }, 15000, { intervalMs: 200, describe: '标签条 3 个标题均到达仓库感知终态' })
+        .catch(async () => (await tabbar.titles()) || []);
       const mtabActiveIndex = await tabbar.activeIndex();
-      const m2Ok = mtabPageTitles.every((t) => typeof t === 'string' && t.includes('Git Lens'))
+      // 激活下标断言依赖「最新创建的标签自动激活」；点击激活类断言（m3/m4/r1/r2）另见
+      // 各自处的时序说明——tabbar 点击经 IPC 到主进程切激活是异步的，断言前先轮询
+      const m2Ok = mtabPageTitles.every(isSettledTitle)
         && mtabBarTitles.length === 3
         && mtabPageTitles.every((t) => mtabBarTitles.includes(t))
         && mtabActiveIndex === 2;
@@ -1067,8 +1082,9 @@ async function main() {
         return targets.length === 2 && targets.every((t) => t.id !== closedMiddleId) ? targets : null;
       }, 10000, { intervalMs: 150, describe: '被关标签的应用目标销毁' }).catch(() => null);
       const m4Active = await tabbar.activeIndex();
-      const survivorsOk = (await mtabPages[0].evaluate(() => document.title)).includes('Git Lens')
-        && (await mtabPages[2].evaluate(() => document.title)).includes('Git Lens');
+      // 存活标签此处早已加载完成，理论上无初始态窗口；仍用终态判别保持断言语义一致
+      const survivorsOk = isSettledTitle(await mtabPages[0].evaluate(() => document.title))
+        && isSettledTitle(await mtabPages[2].evaluate(() => document.title));
       const m4Ok = Boolean(m4Gone) && m4Active === 1 && survivorsOk;
       record('m4-multitab-close-middle', '关闭中间标签：目标销毁、其余标签存活、激活就近转移至右侧', m4Ok ? 'pass' : 'fail',
         `目标销毁=${Boolean(m4Gone)} 激活下标=${m4Active}（期望 1） 存活标签可求值=${survivorsOk}`);
@@ -1196,7 +1212,10 @@ async function main() {
     await r1Page2.evaluate((p) => { window.selectRepo(p); }, restoreRepoB);
     const r1Repo2Set = await pollPage(r1Page2, (p) => document.getElementById('repoSelect')?.value === p, restoreRepoB, 20000);
     const r1Search2 = await r1Page2.evaluate('location.search');
-    // 退出前把激活项切回标签 1，锁定存档 activeIndex 语义（经 tabbar DOM .active 确认）
+    // 退出前把激活项切回标签 1，锁定存档 activeIndex 语义（经 tabbar DOM .active 确认）。
+    // 防御性说明（上轮 r1b 曾观察到激活漂移：存档 activeIndex=1 与预期 0 不符，复跑
+    // 转绿）：clickTab(0) 经 tabbar→IPC→主进程切激活是异步链路，轮询下方已覆盖切换
+    // 收敛；若漂移可稳定复现，应按产品缺陷登记（激活切换竞态）排查，不得放宽期望值
     await r1Tabs.clickTab(0);
     const r1ActiveBack = await pollUntilAsync(
       async () => ((await r1Tabs.activeIndex()) === 0 ? true : null),
@@ -1253,6 +1272,8 @@ async function main() {
       return Array.isArray(titles) && titles.length === 2 && titles.every((t) => t.includes('Git Lens')) ? titles : null;
     }, 15000, { describe: '恢复后标签条渲染 2 个标签' }).catch(() => null);
     const r2ActiveIndex = await r2Tabs.activeIndex();
+    // 激活一致性断言读取的是存档恢复后的 .active（非点击链路）；上轮 r1b 激活漂移
+    // （复跑转绿）的防御性说明见 r1 段 clickTab(0) 处，若再复现按缺陷登记处理
     const r2OrderOk = Boolean(r2Titles)
       && r2Titles[0].includes('repo-main') && r2Titles[1].includes('repo-mr')
       && r2ActiveIndex === (r1Archive?.activeIndex ?? -1);
