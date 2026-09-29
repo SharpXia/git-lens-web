@@ -1407,6 +1407,7 @@
               ${wt.existsOnDisk ? `<button class="btn-outline" data-action="wt-open-commits" title="${wt.isMain ? '查看主干完整提交历史' : '查看该分支相对主干的提交记录'}">提交记录</button>` : ''}
               <button class="btn-outline" data-action="wt-diff-vs-main">与主干对比</button>
             </div>
+            ${wt.isMain ? '<button class="btn-outline" data-action="wt-pull" title="从远程拉取当前分支最新提交（仅快进，分叉时不会自动合并）">Pull</button>' : ''}
             ${!isSafeMain ? `<button class="btn-danger btn-remove-wt" id="btn-rm-wt-${encodeURIComponent(wt.path).replace(/%/g, '_')}" data-action="wt-remove">移除</button>` : ''}
           </div>
         `;
@@ -1416,6 +1417,7 @@
           'wt-uncommitted-diff': () => viewUncommittedDiff(wt.path),
           'wt-open-commits': () => openCommitsDrawer(wt.path),
           'wt-diff-vs-main': () => viewDiffAgainstMain(wt.path),
+          'wt-pull': (el) => pullMainWorktree(el, wt.path),
           'wt-remove': () => removeWt(wt.path)
         });
         container.appendChild(div);
@@ -1514,6 +1516,51 @@
       if (itemDom) {
         // 仅替换解除绑定的分支条目，保留其他列表项和滚动位置。
         itemDom.replaceWith(createBranchItemDom(branch, currentMainBranch));
+      }
+    }
+
+    /**
+     * 主工作区 Pull 按钮（契约 §19）：对主工作区执行仅快进拉取并做非阻断反馈。
+     * 反馈时序遵循 §17.2 教训：只有服务确认结果后才提示——changed 提示「已拉取最新」
+     * 并复用 inspectRepo 刷新当前仓库，未变化提示「已是最新」，失败按输出末行的
+     * 中文修复提示摘要提示；网络层异常走 notifyRequestFailure。按钮全程置忙，
+     * finally 恢复（刷新重渲染后按钮已随 DOM 重建，恢复操作对游离节点无害）。
+     * @param {HTMLButtonElement} btn - 触发本次拉取的 Pull 按钮
+     * @param {string} worktreePath - 主工作区绝对路径
+     */
+    async function pullMainWorktree(btn, worktreePath) {
+      if (!btn || btn.disabled) return;
+      const originalText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '拉取中…';
+      try {
+        const res = await fetch('/api/worktree-pull', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ worktree: worktreePath })
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          // 简要原因优先取输出末行（后端把中文修复提示固定追加在末尾），
+          // 无 output 时（参数/边界类 400）退回 error 字段
+          const reason = (typeof data.output === 'string' && data.output.trim())
+            ? data.output.trim().split('\n').filter(Boolean).pop()
+            : (data.error || 'git 命令执行失败');
+          showToast('拉取失败：' + reason);
+          return;
+        }
+        if (!data.changed) {
+          showToast('已是最新');
+          return;
+        }
+        showToast('已拉取最新');
+        // 拉取到新提交后主工作区的 ahead/最新提交展示已过时，复用既有刷新入口全量刷新
+        if (currentRepo) await inspectRepo(currentRepo);
+      } catch (err) {
+        notifyRequestFailure(err, '拉取失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
       }
     }
 

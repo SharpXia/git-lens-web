@@ -2365,3 +2365,79 @@ export async function stashAction(worktreePath, action, extra = {}) {
   if (action === 'discard' || action === 'clean') await runGit(worktreePath, ['clean', '-fd']);
   return { ok: true, action };
 }
+
+/** `git pull --ff-only` 的超时毫秒数（契约 §19 冻结为 120 秒） */
+const PULL_TIMEOUT_MS = 120000;
+
+/**
+ * 对指定工作区执行 `git pull --ff-only`（契约 §19：主工作区 Pull 按钮）。
+ *
+ * 语义约定：
+ * - 仅快进拉取，绝不产生 merge commit，分叉时直接失败并引导用户手动处理；
+ * - changed 以执行前后 HEAD 是否变化判定，不猜测输出文案；
+ * - git 层失败（非快进/无上游/超时/网络等）不抛错，返回 ok:false 且 exitCode 保留，
+ *   并在原始输出之后按常见失败追加中文修复提示；
+ * - 参数/非仓库类校验失败抛带 statusCode 的 400 中文错误。
+ * @param {string} worktreePath - 工作区绝对路径
+ * @returns {Promise<{ok: boolean, changed: boolean, output: string, exitCode: number}>}
+ */
+export async function pullWorktree(worktreePath) {
+  if (!worktreePath || !path.isAbsolute(worktreePath)) {
+    throw Object.assign(new Error('worktree 路径必须为非空的绝对路径'), { statusCode: 400 });
+  }
+  // 非 Git 仓库（含路径不存在、普通目录）统一按 400 中文处理，
+  // 避免把 git 自身的英文报错透传成 500
+  if (!(await isGitRepo(worktreePath))) {
+    throw Object.assign(new Error('指定路径不是 Git 仓库，无法拉取'), { statusCode: 400 });
+  }
+
+  // 执行前 HEAD：空仓库等无法解析 HEAD 的场景按 null 处理，不阻断拉取
+  let headBefore = null;
+  try {
+    headBefore = await runGit(worktreePath, ['rev-parse', 'HEAD']);
+  } catch {}
+
+  let pullOk = true;
+  let stdout = '';
+  let stderr = '';
+  let exitCode = 0;
+  let killedByTimeout = false;
+  try {
+    const result = await exec(gitExecutable, ['pull', '--ff-only'], {
+      cwd: worktreePath,
+      timeout: PULL_TIMEOUT_MS,
+      maxBuffer: 20 * 1024 * 1024
+    });
+    stdout = String(result.stdout || '');
+    stderr = String(result.stderr || '');
+  } catch (err) {
+    // promisify(execFile) 失败时 stdout/stderr 挂在错误对象上，须一并保留供前端展示
+    pullOk = false;
+    stdout = String(err.stdout || '');
+    stderr = String(err.stderr || '');
+    killedByTimeout = err.killed === true;
+    // 超时被 kill 时 code 为 null（signal 记录 SIGTERM）；ENOENT 等非数字 code 按 -1 兜底
+    exitCode = typeof err.code === 'number' ? err.code : -1;
+  }
+
+  if (!pullOk) {
+    // 合并 stdout 与 stderr 为原始输出；修复提示的判定依据是 git 原始文案而非
+    // 退出码（不同版本/场景下退出码不稳定）
+    const merged = (stdout + stderr).trim();
+    // 提示顺序与契约 §19 列举顺序一致：非快进 → 无上游 → 超时
+    const hints = [];
+    if (/not possible to fast-forward/i.test(merged)) hints.push('无法快进：请先手动合并或变基后再拉取');
+    if (/no (upstream|tracking information)/i.test(merged)) hints.push('该分支没有配置上游分支');
+    if (killedByTimeout) hints.push('拉取超时');
+    // 中文修复提示固定追加在原始输出末尾，前端按末行提取 toast 摘要
+    const output = hints.length ? `${merged}\n${hints.join('\n')}` : merged;
+    return { ok: false, changed: false, output, exitCode };
+  }
+
+  // changed 用前后 HEAD 对比判定；空仓库首次建立 HEAD 时 before 为 null 同样判为有变化
+  let headAfter = null;
+  try {
+    headAfter = await runGit(worktreePath, ['rev-parse', 'HEAD']);
+  } catch {}
+  return { ok: true, changed: headBefore !== headAfter, output: (stdout + stderr).trim(), exitCode: 0 };
+}
