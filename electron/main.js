@@ -1860,6 +1860,11 @@ function registerIpc() {
  * Git 发现不阻塞服务启动，仅影响诊断展示。
  */
 async function bootstrap() {
+  // macOS Dock 图标与 Web favicon 共用同一份浅色资产，避免开发运行与打包应用出现品牌分裂。
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.setIcon(path.join(__dirname, '../public/assets/git-lens-icon-light.png'));
+  }
+
   // 测试专用：会话凭据落盘供 E2E 启动器核验（未设置 GIT_LENS_E2E_TOKEN_FILE 时跳过）
   if (e2eTokenFile) {
     try {

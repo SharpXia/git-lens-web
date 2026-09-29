@@ -35,10 +35,6 @@
       diff: '差异对比',
       mr: 'Merge Request'
     };
-    const PROJECT_ICON_COLORS = [
-      '#238636', '#1f6feb', '#8957e5', '#bf8700', '#db6d28', '#d1242f', '#0f766e', '#8250df'
-    ];
-
     /**
      * 取出仓库的展示名称；扫描列表尚未完成时回退到路径末级目录。
      */
@@ -59,44 +55,10 @@
     }
 
     /**
-     * favicon 在浏览器标签中很小，只取一个首字母以保持可读。
-     */
-    function getProjectInitial(name) {
-      return (Array.from(String(name || 'Git Lens').trim())[0] || 'G').toLocaleUpperCase();
-    }
-
-    /**
-     * SVG 文本只允许进入 favicon 的 text 节点，避免项目名破坏 SVG 结构。
-     */
-    function escapeSvgText(value) {
-      return String(value)
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&apos;');
-    }
-
-    /**
-     * 根据仓库路径稳定选择颜色，让同一项目在不同刷新和浏览器标签中保持一致。
-     */
-    function getProjectIconColor(value) {
-      let hash = 0;
-      for (const char of String(value || 'git-lens')) {
-        hash = ((hash << 5) - hash + char.codePointAt(0)) | 0;
-      }
-      return PROJECT_ICON_COLORS[Math.abs(hash) % PROJECT_ICON_COLORS.length];
-    }
-
-    /**
-     * 生成带项目首字母和 Git Lens 放大镜标记的 data URI favicon。
+     * 返回统一的浅色 App icon，浏览器和 Electron 使用同一份品牌资产。
      */
     function buildProjectFavicon(repo) {
-      const name = getCurrentRepoTitleName(repo);
-      const initial = escapeSvgText(getProjectInitial(name));
-      const color = getProjectIconColor(repo?.path || name);
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="${color}"/><text x="29" y="46" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,sans-serif" font-size="39" font-weight="700" fill="white">${initial}</text><circle cx="48" cy="43" r="8" fill="${color}" stroke="white" stroke-width="3"/><path d="m54 49 6 6" fill="none" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>`;
-      return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+      return '/assets/git-lens-icon-light.png';
     }
 
     /**

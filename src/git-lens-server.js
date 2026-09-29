@@ -57,7 +57,9 @@ const CONTENT_SECURITY_POLICY = "default-src 'self'; script-src 'self'; style-sr
 /** 静态资源精确白名单：pathname 相等匹配，天然免疫目录遍历与编码变形 */
 const STATIC_FILE_WHITELIST = {
   '/app.js': { file: 'app.js', contentType: 'text/javascript; charset=utf-8' },
-  '/app.css': { file: 'app.css', contentType: 'text/css; charset=utf-8' }
+  '/app.css': { file: 'app.css', contentType: 'text/css; charset=utf-8' },
+  '/manifest.webmanifest': { file: 'manifest.webmanifest', contentType: 'application/manifest+json; charset=utf-8' },
+  '/assets/git-lens-icon-light.png': { file: 'assets/git-lens-icon-light.png', contentType: 'image/png' }
 };
 
 /**

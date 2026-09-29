@@ -124,7 +124,7 @@ zip 产物均通过 `unzip -t` CRC 完整性校验。产物为 ad-hoc 签名，�
 | x64 运行验收 | 仅挂载/签名/体积校验，未实际运行 | Intel 或 x64 测试机 |
 | Windows | 未构建未验收（SmartScreen 方案未定） | 证书 + 分发方案（计划书 §7/§8） |
 | Linux | 未构建未验收 | 目标发行版安装与桌面启动验证 |
-| 应用图标 | 使用 Electron 默认图标（构建日志明示 `default Electron icon is used`） | 补充正式图标至 `assets/`（TODO，不自造低质量图标） |
+| 应用图标 | 使用统一的 Git Lens 浅色 App icon；macOS 打包由 `assets/icon.icns` 提供 | 已完成 Web favicon、Dock 图标与 macOS 打包图标统一 |
 | GUI 人工项 | 菜单/对话框/窗口状态恢复等纯 GUI 表现未在打包态人工复验 | 沿用 smoke.mjs 的人工清单在打包态执行 |
 
 ## 9. 已知问题与风险
@@ -132,6 +132,6 @@ zip 产物均通过 `unzip -t` CRC 完整性校验。产物为 ad-hoc 签名，�
 1. **`mac.identity: null` 会跳过签名而非 ad-hoc 签名**（G5 实测）：产物 bundle seal 断裂，`codesign --verify --deep --strict` 失败。已改用 `identity: "-"` 触发真实打包级 ad-hoc 签名，配置内有注释固化该结论。
 2. **脚本化复制 .app 必须用 `ditto`**：Node `fsp.cp` 复制的 .app 出现 `unsealed contents present in the root directory of an embedded framework`，且 Helper 启动异常（就绪文件超时）。Finder 拖拽安装不受影响；任何脚本化分发/安装工具需使用 `ditto` 或 Finder 语义复制。
 3. **ad-hoc 签名产物不可对外分发**：每台机器从可信渠道获取后仍需绕过 Gatekeeper；公证完成前不得作为正式对外渠道。
-4. **默认图标**：当前为 Electron 默认图标，正式发布前必须替换（见 §8）。
+4. **应用图标**：正式图标位于 `assets/icon.icns`，开发运行时 Dock 图标与 Web favicon 共用 `public/assets/git-lens-icon-light.png`。
 5. 构建日志存在无害告警：`author is missed in the package.json`（mac 打包元数据建议项，不影响产物；package.json 为他人所有文件，不在本工作流修改范围）。
 6. x64 产物与 macOS 旧版本（本机为 26.4）的实际运行兼容性未验证，发布说明中应向 Intel 用户明示。
