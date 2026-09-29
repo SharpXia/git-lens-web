@@ -270,3 +270,9 @@ E2E 工具锁定：`playwright`（devDependency，协调分支持有；Electron 
 - 实现位置：`public/app.js` 页面内 wheel 手势识别（主进程不注入）：仅当事件为横向意图（|deltaX| ≥ |deltaY|）且文档无横向滚动空间（`scrollWidth <= clientWidth + 1`）且事件目标不在可横向滚动的祖先内时累积；阈值触发 `history.back()/forward()`，单次触摸相位只触发一次（滚动停止 200ms 重置）；方向符号以 E2E 合成 wheel（CDP `Input.dispatchMouseEvent` type=mouseWheel 带 deltaX）实测校准为准。
 - 浏览器模式与桌面模式行为一致；不与纵向滚动、Diff 代码块的横向滚动冲突（守卫优先）。E2E 以合成 wheel 事件断言历史切换；真实触摸板手感留人工清单。
 - （第二次修订）滑动监听改为 **window 捕获阶段**（capture: true），使右侧抽屉等自行 stopPropagation 的滚动守卫不再挡住手势——光标停在抽屉上时侧滑前进/后退照常生效；抽屉纵向滚动行为不变（手势不 preventDefault）。
+
+## 19. 主工作区 Pull 按钮（G11 增量）
+
+- **后端**：`POST /api/worktree-pull`，body `{"worktree":"<工作区绝对路径>"}`。在该目录执行 `git pull --ff-only`（超时 120 秒），返回 `{"ok":boolean,"changed":boolean,"output":string,"exitCode":number}`——`changed` 以执行前后 HEAD 对比判定；git 层失败（非快进/冲突/无上游/网络）一律 `ok:false` 且 `output` 含原始 git 输出 + 中文修复提示（如「无法快进：请先手动合并或变基」）；路径非仓库/缺参返回 400 中文错误。受 §4 全部边界约束。
+- **UI**：仓库总览的 Worktree 列表中，**仅 `isMain` 工作区 item 渲染「Pull」按钮**（沿 data-action/闭包绑定模式）；点击后按钮置忙，结果非阻断反馈——`changed:true` → toast「已拉取最新」并刷新 inspect；`changed:false` → toast「已是最新」；失败 → toast 摘要（复用 showToast，不 alert）。
+- **验证**：端点测试（裸仓库作 origin 的 ff 成功/已最新/分叉拒绝 409 语义/缺参 400，全部 mkdtemp 自建 remote）；页面断言按钮仅主工作区可见。
