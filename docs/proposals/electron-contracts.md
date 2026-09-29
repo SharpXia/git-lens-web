@@ -164,7 +164,8 @@ QA 提供单一入口（G0 起为 `npm run test:isolated`；G4 前扩展 `npm ru
 ## 10. 缺陷记录与合并协议
 
 - 缺陷登记在 `docs/proposals/electron-defects.md`（协调分支维护）：`DEF-<序号> | 级别 P0–P3 | 协调 HEAD | OS/arch | run-id | 复现步骤 | 预期/实际 | 证据 | 责任 worktree | 状态`。
-- 合并顺序 Runtime → Shell → UI → QA → Release，全部 `merge --no-ff`；每次合并后在协调 HEAD 跑既有单元测试与隔离冒烟；冲突则 `merge --abort` 并回派原 Agent。
+- **合并颗粒度（第四次修订，2026-09-28 用户定则）**：任务分支内开发可细颗粒提交；**合入协调分支一律 squash 合并**（`git merge --squash` 后以单个中文语义提交落库，颗粒度=一次交付/一个特性），合入后**立即删除任务分支与 worktree**——保持协调分支祖先计数与内容一致，杜绝「领先 N 提交」式误导。协调分支到 main 仍经唯一 PR（合并方式由用户选择；若 main 侧也用 squash，合并后应将协调分支重置到 origin/main 重建）。
+- 每次合入后在协调 HEAD 跑既有单元测试与隔离冒烟；冲突则中止并回派原 Agent。
 - 每个执行 Agent 的交付包：中文提交信息、提交 SHA、改动文件清单、契约差异、测试命令与原始结果、fixture run-id、已知问题（计划书 §4.2）。
 
 ## 11. 基线与工具链
