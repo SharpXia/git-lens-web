@@ -28,12 +28,22 @@ files:
   - package.json
   - electron/main.js
   - electron/service-main.js
+  # main.js 的 3 个相对 import：缺一会直接 ERR_MODULE_NOT_FOUND 导致 App 闪退。
+  # 历史教训：a5e18e8（G7 交付）/ dc1e3bd（窗口融合）/ 29c4fd3（应用名迁移）
+  # 各自新增一个文件，但 files 白名单只补了部分，导致打包态启动崩溃。
+  - electron/service-config-dir.js
+  - electron/window-chrome.js
+  - electron/user-data-migration.js
   - electron/preload.cjs
   - electron/tabbar.html
   - electron/tabbar-preload.cjs
   - src/**
   - public/**
+  # dev-brand.mjs 是开发模式品牌补丁脚本（修 dev 模式下 Electron.app 的 Info.plist），
+  # 打包态自带正确 Info.plist，无需此补丁；同时也排除 checks/ 冒烟自验脚本与 fixtures。
   - "!**/.DS_Store"
+  - "!**/dev-brand.mjs"
+  - "!**/checks/**"
 # 产物命名去掉 productName 中的空格，便于脚本化分发与校验
 artifactName: ${name}-${version}-mac-${arch}.${ext}
 mac:
