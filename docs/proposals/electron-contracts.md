@@ -277,3 +277,10 @@ E2E 工具锁定：`playwright`（devDependency，协调分支持有；Electron 
 - **后端**：`POST /api/worktree-pull`，body `{"worktree":"<工作区绝对路径>"}`。在该目录执行 `git pull --ff-only`（超时 120 秒），返回 `{"ok":boolean,"changed":boolean,"output":string,"exitCode":number}`——`changed` 以执行前后 HEAD 对比判定；git 层失败（非快进/冲突/无上游/网络）一律 `ok:false` 且 `output` 含原始 git 输出 + 中文修复提示（如「无法快进：请先手动合并或变基」）；路径非仓库/缺参返回 400 中文错误。受 §4 全部边界约束。
 - **UI**：仓库总览的 Worktree 列表中，**仅 `isMain` 工作区 item 渲染「Pull」按钮**（沿 data-action/闭包绑定模式）；点击后按钮置忙，结果非阻断反馈——`changed:true` → toast「已拉取最新」并刷新 inspect；`changed:false` → toast「已是最新」；失败 → toast 摘要（复用 showToast，不 alert）。
 - **验证**：端点测试（裸仓库作 origin 的 ff 成功/已最新/分叉拒绝 409 语义/缺参 400，全部 mkdtemp 自建 remote）；页面断言按钮仅主工作区可见。
+
+## 20. 开发模式品牌名（G12：Dock/菜单显示 GitLens）
+
+- 现状：dev 直接跑 Electron 时，Dock/菜单栏应用名取自 node_modules 内 Electron.app 的 Info.plist（CFBundleName=Electron），`app.setName` 无效；打包版由 productName 决定，不受影响。
+- **dev 品牌补丁**：`electron/dev-brand.mjs`——幂等修补 `node_modules/electron/dist/Electron.app/Contents/Info.plist` 的 CFBundleName/CFBundleDisplayName 为 `GitLens`（plutil；非 darwin/文件缺失给中文指引）；**重装依赖后需重跑一次**（写入 electron-release.md 与脚本输出）。
+- **品牌名统一为 `GitLens`**：`app.setName('GitLens')`（About/诊断跟随）；electron-builder.yml productName 同步 `GitLens`（打包产物名随之变化，属预期）。已知取舍：默认 userData 路径随 setName 变为 `~/Library/Application Support/GitLens`，旧 `Git Lens Web` 目录中的窗口状态/标签存档不迁移（均为可重建的低价值状态；服务配置因 §5 互通在 `~/.config`，不受影响）。
+- 验收：smoke 断言 Info.plist 补丁后 CFBundleName === 'GitLens'（幂等重跑不变）；`app.getName() === 'GitLens'`。
