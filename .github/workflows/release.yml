@@ -10,6 +10,11 @@ on:
         description: 已存在的发布 tag（例如 v1.0.0）
         required: true
         type: string
+      ref:
+        description: 构建所使用的 Git ref；通常与 tag 相同
+        required: true
+        default: github-release-ci
+        type: string
       allow_adhoc:
         description: 明确允许创建 ad-hoc 预发布版本（不公证，仅用于小范围测试）
         required: true
@@ -37,7 +42,8 @@ jobs:
           - arch: arm64
             runner: macos-14
           - arch: x64
-            runner: macos-13
+            # macos-13 runner 已长期排队；macos-14 arm64 可交叉构建 x64 Electron 包。
+            runner: macos-14
     env:
       MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
       MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -51,7 +57,7 @@ jobs:
       - name: 检出发布 ref
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
           fetch-depth: 0
 
       - name: 校验 tag 与应用版本

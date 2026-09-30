@@ -40,7 +40,8 @@ gh secret set APPLE_API_ISSUER -R SharpXia/git-lens-web
 
 ## 构建与发布行为
 
-- `macos-14` 构建 arm64，`macos-13` 构建 x64；两个 job 都执行 `npm ci` 和 Electron Builder。
+- 两个 `macos-14` job 分别构建 arm64 与 x64；x64 使用 Electron Builder 的交叉架构构建，均执行 `npm ci`。
+- 手动运行时可填写 `ref`，用于用已更新的 workflow 构建现有 tag；正式 tag 触发时默认直接使用 tag ref。
 - 正式凭据不完整时，tag 构建会在凭据检查阶段失败，不会创建 Release。
 - 手动运行并勾选 `allow_adhoc` 时使用 `electron-builder.local.yml`，发布为 GitHub prerelease。该版本没有 Developer ID 签名或公证，只适合可信小范围验收。
 - 发布 job 会生成 `SHA256SUMS.txt`，并将 DMG、zip、blockmap 与校验和一并上传。
