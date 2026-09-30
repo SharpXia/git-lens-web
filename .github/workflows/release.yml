@@ -10,11 +10,6 @@ on:
         description: 已存在的发布 tag（例如 v1.0.0）
         required: true
         type: string
-      ref:
-        description: 构建所使用的 Git ref；通常与 tag 相同
-        required: true
-        default: github-release-ci
-        type: string
       allow_adhoc:
         description: 明确允许创建 ad-hoc 预发布版本（不公证，仅用于小范围测试）
         required: true
@@ -57,7 +52,7 @@ jobs:
       - name: 检出发布 ref
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
           fetch-depth: 0
 
       - name: 校验 tag 与应用版本
@@ -66,7 +61,11 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$RELEASE_TAG" == v* ]] || { echo '发布 tag 必须以 v 开头' >&2; exit 1; }
-          git rev-parse "refs/tags/$RELEASE_TAG^{commit}" > /dev/null
+          tag_commit="$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          [[ "$(git rev-parse HEAD)" == "$tag_commit" ]] || {
+            echo "当前检出提交与 tag ${RELEASE_TAG} 不一致，拒绝构建" >&2
+            exit 1
+          }
           package_version="$(node -p "require('./package.json').version")"
           [[ "${RELEASE_TAG#v}" == "$package_version" ]] || {
             echo "tag ${RELEASE_TAG} 与 package.json 版本 ${package_version} 不一致" >&2
@@ -226,6 +225,8 @@ jobs:
 
           构建模式：${release_mode}
 
+          源码提交：$(git rev-parse HEAD)
+
           请使用 SHA256SUMS.txt 校验下载文件。ad-hoc 预发布版本仅用于可信小范围测试，首次打开可能需要在 Finder 中右键选择“打开”。
           EOF
           echo "release_mode=$release_mode" >> "$GITHUB_OUTPUT"
@@ -239,11 +240,18 @@ jobs:
         run: |
           mapfile -d '' assets < <(find release -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' -print0 | sort -z)
           assets+=(release/SHA256SUMS.txt)
-          gh release create "$RELEASE_TAG" "${assets[@]}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --title "Git Lens $RELEASE_TAG" \
-            --notes-file "${{ steps.release.outputs.notes_path }}"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Git Lens $RELEASE_TAG" \
+              --notes-file "${{ steps.release.outputs.notes_path }}"
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "Git Lens $RELEASE_TAG" \
+              --notes-file "${{ steps.release.outputs.notes_path }}"
+          fi
 
       - name: 发布 ad-hoc 预发布版本
         if: steps.release.outputs.release_mode == 'adhoc'
