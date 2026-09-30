@@ -1,0 +1,269 @@
+name: macOS 发布
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 已存在的发布 tag（例如 v1.0.0）
+        required: true
+        type: string
+      allow_adhoc:
+        description: 明确允许创建 ad-hoc 预发布版本（不公证，仅用于小范围测试）
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '24.21.0'
+
+jobs:
+  build:
+    name: 构建 macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-14
+          - arch: x64
+            # macos-13 runner 已长期排队；macos-14 arm64 可交叉构建 x64 Electron 包。
+            runner: macos-14
+    env:
+      MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - name: 检出发布 ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: 校验 tag 与应用版本
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" == v* ]] || { echo '发布 tag 必须以 v 开头' >&2; exit 1; }
+          tag_commit="$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          [[ "$(git rev-parse HEAD)" == "$tag_commit" ]] || {
+            echo "当前检出提交与 tag ${RELEASE_TAG} 不一致，拒绝构建" >&2
+            exit 1
+          }
+          package_version="$(node -p "require('./package.json').version")"
+          [[ "${RELEASE_TAG#v}" == "$package_version" ]] || {
+            echo "tag ${RELEASE_TAG} 与 package.json 版本 ${package_version} 不一致" >&2
+            exit 1
+          }
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 准备签名与公证凭据
+        id: credentials
+        shell: bash
+        env:
+          ALLOW_ADHOC: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_adhoc || false }}
+        run: |
+          set -euo pipefail
+
+          release_mode=signed
+          if [[ -n "${MACOS_CERTIFICATE_BASE64:-}" ]]; then
+            certificate_path="$RUNNER_TEMP/git-lens-developer-id.p12"
+            printf '%s' "$MACOS_CERTIFICATE_BASE64" | base64 -D > "$certificate_path"
+            chmod 600 "$certificate_path"
+            echo "CSC_LINK=$certificate_path" >> "$GITHUB_ENV"
+            echo "CSC_KEY_PASSWORD=${MACOS_CERTIFICATE_PASSWORD:-}" >> "$GITHUB_ENV"
+          fi
+
+          if [[ -n "${APPLE_API_KEY_BASE64:-}" ]]; then
+            api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+            printf '%s' "$APPLE_API_KEY_BASE64" | base64 -D > "$api_key_path"
+            chmod 600 "$api_key_path"
+            echo "APPLE_API_KEY=$api_key_path" >> "$GITHUB_ENV"
+          fi
+
+          has_certificate=false
+          [[ -n "${MACOS_CERTIFICATE_BASE64:-}" ]] && has_certificate=true
+          has_api_credentials=false
+          if [[ -n "${APPLE_API_KEY_BASE64:-}" && -n "${APPLE_API_KEY_ID:-}" && -n "${APPLE_API_ISSUER:-}" ]]; then
+            has_api_credentials=true
+          fi
+          has_apple_id_credentials=false
+          if [[ -n "${APPLE_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]; then
+            has_apple_id_credentials=true
+          fi
+
+          if [[ "$has_certificate" != true || ( "$has_api_credentials" != true && "$has_apple_id_credentials" != true ) ]]; then
+            if [[ "$ALLOW_ADHOC" != true ]]; then
+              echo '缺少正式发布凭据：需要 MACOS_CERTIFICATE_BASE64，以及一组 Apple 公证凭据。' >&2
+              echo '请配置 GitHub Actions secrets；只有手动 workflow_dispatch 并勾选 allow_adhoc 才允许继续。' >&2
+              exit 1
+            fi
+            release_mode=adhoc
+            echo 'CSC_NAME=-' >> "$GITHUB_ENV"
+            echo 'CSC_IDENTITY_AUTO_DISCOVERY=false' >> "$GITHUB_ENV"
+            echo 'BUILD_CONFIG=electron-builder.local.yml' >> "$GITHUB_ENV"
+          else
+            echo 'BUILD_CONFIG=electron-builder.yml' >> "$GITHUB_ENV"
+          fi
+
+          printf '%s\n' "$release_mode" > "$RUNNER_TEMP/git-lens-release-mode-${{ matrix.arch }}.txt"
+          echo "release_mode=$release_mode" >> "$GITHUB_OUTPUT"
+
+      - name: 构建安装包
+        run: npx electron-builder --config "$BUILD_CONFIG" --mac --${{ matrix.arch }} --publish never
+
+      - name: 校验应用包签名
+        run: |
+          set -euo pipefail
+          app_path="$(find release -name '*.app' -print -quit)"
+          if [[ -z "$app_path" ]]; then
+            echo '构建输出中没有找到 .app' >&2
+            exit 1
+          fi
+          if [[ "${{ steps.credentials.outputs.release_mode }}" == signed ]]; then
+            codesign --verify --deep --strict "$app_path"
+            signature="$(codesign -dv --verbose=4 "$app_path" 2>&1)"
+            printf '%s\n' "$signature" | grep -E '^Authority=Developer ID Application:'
+            printf '%s\n' "$signature" | grep -E '^TeamIdentifier=[A-Z0-9]{10}$'
+            xcrun stapler validate "$app_path"
+          else
+            codesign --verify --deep --strict "$app_path"
+            codesign -dv --verbose=4 "$app_path" 2>&1 | grep -E 'Identifier=|Signature=|TeamIdentifier=' | head -20 || true
+          fi
+
+      - name: 移除架构构建产生的单架构更新清单
+        run: |
+          rm -f release/latest-mac.yml
+          rm -rf "release/mac-${{ matrix.arch }}"
+
+      - name: 保存构建产物
+        run: cp "$RUNNER_TEMP/git-lens-release-mode-${{ matrix.arch }}.txt" "release/release-mode-${{ matrix.arch }}.txt"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-lens-macos-${{ matrix.arch }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/release-mode-${{ matrix.arch }}.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: 创建 GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出发布 tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: 下载全部构建产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: git-lens-macos-*
+          path: release
+          merge-multiple: true
+
+      - name: 生成校验和与发布说明
+        id: release
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          mapfile -t modes < <(cat release/release-mode-*.txt | sort -u)
+          if [[ "${#modes[@]}" -ne 1 ]]; then
+            echo '两个架构的构建模式不一致，拒绝发布。' >&2
+            exit 1
+          fi
+          release_mode="${modes[0]}"
+          rm -f release/release-mode-*.txt
+          package_version="$(node -p "require('./package.json').version")"
+          for arch in arm64 x64; do
+            for ext in dmg zip; do
+              [[ -s "release/git-lens-web-${package_version}-mac-${arch}.${ext}" ]] || {
+                echo "缺少 ${arch} 的 ${ext} 安装包" >&2
+                exit 1
+              }
+            done
+          done
+          (cd release && shasum -a 256 ./*.dmg ./*.zip ./*.blockmap > SHA256SUMS.txt)
+          notes_path="$RUNNER_TEMP/git-lens-release-notes.md"
+          cat > "$notes_path" <<EOF
+          # Git Lens ${RELEASE_TAG}
+
+          macOS arm64 与 x64 安装包已由 GitHub Actions 构建。
+
+          构建模式：${release_mode}
+
+          源码提交：$(git rev-parse HEAD)
+
+          请使用 SHA256SUMS.txt 校验下载文件。ad-hoc 预发布版本仅用于可信小范围测试，首次打开可能需要在 Finder 中右键选择“打开”。
+          EOF
+          echo "release_mode=$release_mode" >> "$GITHUB_OUTPUT"
+          echo "notes_path=$notes_path" >> "$GITHUB_OUTPUT"
+
+      - name: 发布正式版本
+        if: steps.release.outputs.release_mode == 'signed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          mapfile -d '' assets < <(find release -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' -print0 | sort -z)
+          assets+=(release/SHA256SUMS.txt)
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Git Lens $RELEASE_TAG" \
+              --notes-file "${{ steps.release.outputs.notes_path }}"
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "Git Lens $RELEASE_TAG" \
+              --notes-file "${{ steps.release.outputs.notes_path }}"
+          fi
+
+      - name: 发布 ad-hoc 预发布版本
+        if: steps.release.outputs.release_mode == 'adhoc'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          mapfile -d '' assets < <(find release -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' -print0 | sort -z)
+          assets+=(release/SHA256SUMS.txt)
+          gh release create "$RELEASE_TAG" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --prerelease \
+            --title "Git Lens $RELEASE_TAG（ad-hoc 预发布）" \
+            --notes-file "${{ steps.release.outputs.notes_path }}"
