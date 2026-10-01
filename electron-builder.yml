@@ -1,7 +1,7 @@
 # Git Lens Web 桌面版打包配置（GitHub Release 正式构建）。
 #
 # 产物策略（计划书 §8）：
-#  - macOS 目标 dmg + zip，arm64/x64 双架构；zip 为后续 auto-update 与命令行分发的候选载体；
+#  - macOS 目标 dmg + zip，arm64/x64 双架构；zip 用于应用内更新；
 #  - 发行包内不包含测试 fixture、自验脚本与文档：files 只放行业务源码，
 #    electron/checks/（冒烟自验）、test/、scripts/、docs/、assets/ 等均未列入，自然不进包；
 #  - 生产依赖（express、cors 及其传递依赖）由 electron-builder 依据 package.json
@@ -25,16 +25,25 @@ directories:
 # 桌面打包入口经 extraMetadata 注入打包内 package.json，仓库根 package.json 不受影响
 extraMetadata:
   main: electron/main.js
+  gitLensUpdatesEnabled: true
+publish:
+  provider: github
+  owner: SharpXia
+  repo: git-lens-web
+extraResources:
+  - from: electron/app-update.yml
+    to: app-update.yml
 files:
   - package.json
   - electron/main.js
   - electron/service-main.js
-  # main.js 的 3 个相对 import：缺一会直接 ERR_MODULE_NOT_FOUND 导致 App 闪退。
+  # main.js 的相对 import：缺一会直接 ERR_MODULE_NOT_FOUND 导致 App 闪退。
   # 历史教训：a5e18e8（G7 交付）/ dc1e3bd（窗口融合）/ 29c4fd3（应用名迁移）
   # 各自新增一个文件，但 files 白名单只补了部分，导致打包态启动崩溃。
   - electron/service-config-dir.js
   - electron/window-chrome.js
   - electron/user-data-migration.js
+  - electron/update-manager.js
   - electron/preload.cjs
   - electron/tabbar.html
   - electron/tabbar-preload.cjs
