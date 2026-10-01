@@ -2116,19 +2116,21 @@
 
     /**
      * 为一批提交卡片绑定事件（提交抽屉与 MR 提交列表共用同一卡片结构）：
-     * 卡片点击展开详情、SHA 点击复制完整哈希（阻止冒泡防止同时展开详情）。
+     * 提交抽屉的卡片固定展示详情，MR 列表仍保留点击切换详情的旧行为；SHA 点击复制完整哈希。
      * 卡片经 data-c-idx 携带本批次内的索引，与 commits 一一对齐；已绑定的
      * 元素以 data-bound 标记跳过，「加载更多」追加渲染时不重复绑定旧卡片。
      * @param {HTMLElement} rootEl - 卡片所在容器
      * @param {Array<{hash: string}>} commits - 本次渲染批次的提交数据
+     * @param {boolean} [expandByDefault] - 是否默认展开本批次的新卡片
+     * @param {boolean} [keepExpanded] - 是否锁定展开状态，卡片点击不再收起详情
      */
-    function bindCommitCards(rootEl, commits) {
+    function bindCommitCards(rootEl, commits, expandByDefault = false, keepExpanded = false) {
       rootEl.querySelectorAll('[data-action="commit-toggle"]').forEach((card) => {
         if (card.dataset.bound) return;
         card.dataset.bound = '1';
         const commit = commits[Number(card.dataset.cIdx)];
         if (!commit) return;
-        card.addEventListener('click', () => toggleCommitDetail(card, commit.hash));
+        if (!keepExpanded) card.addEventListener('click', () => toggleCommitDetail(card, commit.hash));
         const hashEl = card.querySelector('[data-action="commit-copy-hash"]');
         if (hashEl) {
           hashEl.addEventListener('click', (event) => {
@@ -2136,6 +2138,7 @@
             copyText(commit.hash, hashEl);
           });
         }
+        if (expandByDefault) toggleCommitDetail(card, commit.hash);
       });
     }
 
@@ -2735,6 +2738,7 @@
       loadedCount: 0,
       limit: 30,
       isOpen: false,
+      isFullscreen: false,
       lastGroupLabel: null, // 上一个提交所属的日期分组标签, 「加载更多」追加时据此判断是否插入新组头
       filters: { author: '', grep: '', since: '', until: '' }
     };
@@ -2745,10 +2749,17 @@
     let drawerPageScrollLockCount = 0;
     let drawerPageScrollLockY = 0;
 
+    // 同一时间只保留一个提交 Diff 区块，切换提交时自动收起上一个区块。
+    let activeCommitDiffPanel = null;
+
     // 提交详情缓存：同一提交内容不可变，收起再展开不重复请求。
     // 键为 `${worktreePath}::${sha}`，避免不同仓库对同一短 SHA 解析出不同提交的歧义。
     const commitDetailCache = new Map();
     const COMMIT_DETAIL_CACHE_MAX = 200;
+    // 默认展开会一次加载整页摘要，限制并发以免长列表同时创建大量 git 子进程。
+    const commitDetailLoadQueue = [];
+    const COMMIT_DETAIL_LOAD_CONCURRENCY = 4;
+    let activeCommitDetailLoads = 0;
 
     /**
      * 写入提交详情缓存，超过上限时按插入顺序淘汰最早的条目，防止长会话内存无限增长。
@@ -2784,9 +2795,10 @@
     }
 
     async function openCommitsDrawer(worktreePath, fullHistory = false, pushHistory = true, ref = '', baseRef = '') {
+      closeActiveCommitDiff();
       commitsDrawerState = {
         worktreePath, branch: null, base: null, baseAvailable: true, fullHistory, isFullHistory: false, isMainHistory: false, head: null,
-        totalCommits: 0, loadedCount: 0, limit: 30, isOpen: true, lastGroupLabel: null,
+        totalCommits: 0, loadedCount: 0, limit: 30, isOpen: true, isFullscreen: false, lastGroupLabel: null,
         ref, // 分支查看模式：非空时以后端 options.ref 为提交顶点（分支列表入口）
         baseRef, // Diff 入口使用当前比对基准，避免抽屉退回默认主分支
         filters: { author: '', grep: '', since: '', until: '' } // 每次打开新 worktree 都重置过滤条件
@@ -2796,6 +2808,8 @@
 
       const overlay = document.getElementById('commitsDrawerOverlay');
       const drawer = document.getElementById('commitsDrawer');
+      drawer.classList.remove('fullscreen');
+      updateCommitsDrawerFullscreenUi();
       setCommitsDrawerPageScrollLocked(true);
       document.getElementById('commitsDrawerMeta').innerHTML = '';
       document.getElementById('commitsDrawerFooter').style.display = 'none';
@@ -2821,6 +2835,7 @@
 
     function closeCommitsDrawer(pushHistory = true) {
       if (!commitsDrawerState.isOpen) return;
+      closeActiveCommitDiff();
       commitsDrawerState.isOpen = false;
       commitsDrawerReqSeq++; // 使在途请求失效
       syncStateToUrl(pushHistory);
@@ -2835,6 +2850,30 @@
           overlay.style.display = 'none';
         }
       }, 260);
+    }
+
+    /**
+     * 同步提交抽屉全屏按钮与抽屉样式状态。
+     */
+    function updateCommitsDrawerFullscreenUi() {
+      const drawer = document.getElementById('commitsDrawer');
+      const btn = document.querySelector('[data-action="toggle-commits-fullscreen"]');
+      if (!drawer || !btn) return;
+      const isFullscreen = Boolean(commitsDrawerState.isFullscreen);
+      drawer.classList.toggle('fullscreen', isFullscreen);
+      btn.textContent = isFullscreen ? '退出全屏' : '全屏';
+      btn.setAttribute('aria-pressed', String(isFullscreen));
+      btn.setAttribute('aria-label', isFullscreen ? '退出提交记录全屏' : '全屏查看提交记录');
+      btn.title = isFullscreen ? '退出提交记录全屏' : '全屏查看提交记录';
+    }
+
+    /**
+     * 切换提交记录抽屉的全屏显示，不改变当前筛选、滚动位置和提交展开状态。
+     */
+    function toggleCommitsDrawerFullscreen() {
+      if (!commitsDrawerState.isOpen) return;
+      commitsDrawerState.isFullscreen = !commitsDrawerState.isFullscreen;
+      updateCommitsDrawerFullscreenUi();
     }
 
     // 读取过滤输入区的当前值; 文本框去首尾空白, 日期控件值本身即为 YYYY-MM-DD
@@ -3093,7 +3132,10 @@
       const body = document.getElementById('commitsDrawerBody');
 
       // 首屏（打开抽屉、切换全量/领先视图、应用/清空过滤、重试）一律重置分组游标，从头分组
-      if (isFirstLoad) commitsDrawerState.lastGroupLabel = null;
+      if (isFirstLoad) {
+        commitsDrawerState.lastGroupLabel = null;
+        closeActiveCommitDiff();
+      }
 
       if (isFirstLoad && commits.length === 0) {
         // 过滤生效时的空结果与"本来就没有提交"区分开, 并给出清空过滤入口
@@ -3139,14 +3181,13 @@
           chunks.push(`<div class="commit-date-group">${escapeHtml(groupLabel)}</div>`);
         }
         chunks.push(`
-        <div class="commit-item clickable" data-action="commit-toggle" data-c-idx="${batchIdx}">
+        <div class="commit-item" data-action="commit-toggle" data-c-idx="${batchIdx}">
           <div class="commit-item-header">
             <span class="commit-hash" data-action="commit-copy-hash" title="点击复制完整 SHA">${escapeHtml(c.shortHash)}</span>
             <span class="commit-time">${escapeHtml(c.relativeTime)}</span>
           </div>
           <div class="commit-subject" title="${escapeHtml(c.subject)}">${escapeHtml(c.subject)}</div>
           <div class="commit-author">${escapeHtml(c.author)}</div>
-          ${c.body ? `<div class="commit-body">${escapeHtml(c.body)}</div>` : ''}
         </div>
       `);
       });
@@ -3159,7 +3200,7 @@
         body.insertAdjacentHTML('beforeend', html);
       }
       // 写入后按批次绑定闭包（hash 不经内联字符串往返）；追加加载时旧卡片已被 data-bound 跳过
-      bindCommitCards(body, commits);
+      bindCommitCards(body, commits, true, true);
     }
 
     /**
@@ -3177,7 +3218,7 @@
       return commitsDrawerState.worktreePath || currentRepo || '';
     }
 
-    async function toggleCommitDetail(card, sha) {
+    function toggleCommitDetail(card, sha) {
       // 内联 onclick 参数只放行十六进制 SHA，杜绝任意字符串进入事件处理
       if (!/^[0-9a-fA-F]{7,40}$/.test(sha || '')) return;
       // 上下文 worktree 由抽屉状态统一解析，不通过内联字符串传递
@@ -3186,6 +3227,7 @@
 
       const existingPanel = card.querySelector('.commit-detail');
       if (existingPanel) {
+        if (activeCommitDiffPanel === existingPanel) closeActiveCommitDiff();
         existingPanel.remove();
         return;
       }
@@ -3201,6 +3243,34 @@
         return;
       }
 
+      commitDetailLoadQueue.push({ panel, worktreePath, sha });
+      drainCommitDetailLoadQueue();
+    }
+
+    /**
+     * 按并发上限加载摘要，过滤或切换历史后已移除的卡片不再发起请求。
+     */
+    function drainCommitDetailLoadQueue() {
+      while (activeCommitDetailLoads < COMMIT_DETAIL_LOAD_CONCURRENCY && commitDetailLoadQueue.length > 0) {
+        const { panel, worktreePath, sha } = commitDetailLoadQueue.shift();
+        if (!panel.isConnected) continue;
+        activeCommitDetailLoads++;
+        loadCommitDetailPanel(panel, worktreePath, sha).finally(() => {
+          activeCommitDetailLoads--;
+          drainCommitDetailLoadQueue();
+        });
+      }
+    }
+
+    /**
+     * 加载提交摘要并缓存结果，仅向仍在页面中的面板写入内容。
+     * @param {HTMLElement} panel - 摘要面板
+     * @param {string} worktreePath - 本次请求所属的工作区路径
+     * @param {string} sha - 提交完整 SHA
+     * @returns {Promise<void>} 请求与渲染完成后返回
+     */
+    async function loadCommitDetailPanel(panel, worktreePath, sha) {
+      const cacheKey = `${worktreePath}::${sha}`;
       try {
         const params = new URLSearchParams({ worktree: worktreePath, sha });
         const resp = await fetch(`/api/commit-detail?${params}`);
@@ -3219,7 +3289,7 @@
     }
 
     /**
-     * 将提交详情渲染进展开面板：完整正文、父提交列表、统计行与逐文件清单。
+     * 将提交详情渲染进展开面板：完整正文、父提交列表与文件变更摘要；逐文件内容交由 Diff 区块按需展开。
      * @param {HTMLElement} panel - 详情面板容器
      * @param {object|null} data - 接口返回的详情数据
      * @param {string|null} errorMessage - 请求失败时的错误信息
@@ -3238,15 +3308,6 @@
       const parentsHtml = parents.length === 0
         ? '<span>无（根提交）</span>'
         : parents.map(p => `<span class="commit-detail-parent" data-action="copy-parent" title="点击复制完整 SHA">${escapeHtml(p.slice(0, 7))}</span>`).join('');
-      const filesHtml = (data.files || []).map(f => {
-        const filePath = escapeHtml(f.filePath || '');
-        if (f.isBinary) {
-          return `<div class="commit-detail-file"><span class="commit-detail-file-path" title="${filePath}">${filePath}</span><span class="commit-detail-file-stats" style="color: var(--text-muted);">二进制</span></div>`;
-        }
-        const added = Number(f.added) || 0;
-        const deleted = Number(f.deleted) || 0;
-        return `<div class="commit-detail-file"><span class="commit-detail-file-path" title="${filePath}">${filePath}</span><span class="commit-detail-file-stats"><span class="add-count">+${added}</span> / <span class="del-count">-${deleted}</span></span></div>`;
-      }).join('');
       // 「查看 Diff」按钮：确有文件变更且响应里是合法十六进制 SHA 时才展示，动作只传 SHA
       const detailSha = /^[0-9a-fA-F]{7,40}$/.test(data.hash || '') ? data.hash : '';
       const diffToggleHtml = filesChanged > 0 && detailSha
@@ -3286,7 +3347,6 @@
         ${data.body ? `<pre class="commit-detail-body">${escapeHtml(data.body)}</pre>` : ''}
         <div class="commit-detail-parents"><span>父提交：</span>${parentsHtml}</div>
         <div class="commit-detail-stats">${filesChanged} 个文件变更 · <span class="add-count">+${insertions}</span> / <span class="del-count">-${deletions}</span></div>
-        ${filesHtml}
         ${actionsHtml}
       `;
       bindCommitDetailActions(panel, parents, detailSha);
@@ -3430,10 +3490,11 @@
       // 已展开则整块收起，按钮文案复位
       const existing = panel.querySelector('.commit-diff-section');
       if (existing) {
-        existing.remove();
-        if (toggleBtn) toggleBtn.textContent = '查看 Diff';
+        closeActiveCommitDiff();
         return;
       }
+      closeActiveCommitDiff();
+      activeCommitDiffPanel = panel;
       if (toggleBtn) toggleBtn.textContent = '收起 Diff';
 
       const section = document.createElement('div');
@@ -3513,14 +3574,51 @@
         }
         return `
           <div class="commit-diff-file-card">
-            <div class="commit-diff-file-header">
+            <div class="commit-diff-file-header" data-action="toggle-commit-diff-file" role="button" tabindex="0" aria-expanded="false">
+              <span class="commit-diff-file-arrow" aria-hidden="true">▸</span>
               <span class="commit-diff-file-path" title="${filePath}">${filePath}</span>
               <span class="commit-detail-file-stats"><span class="add-count">+${added}</span> / <span class="del-count">-${deleted}</span></span>
             </div>
-            ${bodyHtml}
+            <div class="commit-diff-file-body">${bodyHtml}</div>
           </div>`;
       }).join('');
       section.innerHTML = filesHtml;
+      section.querySelectorAll('[data-action="toggle-commit-diff-file"]').forEach((header) => {
+        const toggle = () => toggleCommitDiffFile(header);
+        header.addEventListener('click', (event) => {
+          event.stopPropagation();
+          toggle();
+        });
+        header.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          event.stopPropagation();
+          toggle();
+        });
+      });
+    }
+
+    /**
+     * 切换单个文件的代码 Diff；文件卡片首次出现时保持收起，只展示路径和增删统计。
+     */
+    function toggleCommitDiffFile(header) {
+      const card = header?.closest('.commit-diff-file-card');
+      if (!card) return;
+      const expanded = card.classList.toggle('expanded');
+      header.setAttribute('aria-expanded', String(expanded));
+    }
+
+    /**
+     * 收起当前活动的提交 Diff 区块，并恢复该提交的查看按钮文案。
+     */
+    function closeActiveCommitDiff() {
+      const panel = activeCommitDiffPanel;
+      if (panel) {
+        panel.querySelector('.commit-diff-section')?.remove();
+        const toggleBtn = panel.querySelector('.commit-diff-toggle-btn');
+        if (toggleBtn) toggleBtn.textContent = '查看 Diff';
+      }
+      activeCommitDiffPanel = null;
     }
 
     function renderCommitsFooter(data) {
@@ -4327,6 +4425,7 @@
       'submit-create-mr': () => submitCreateMr(),
       'close-mr-drawer': () => closeMrDrawer(),
       'close-commits-drawer': () => closeCommitsDrawer(),
+      'toggle-commits-fullscreen': () => toggleCommitsDrawerFullscreen(),
       'apply-commits-filters': () => applyCommitsFilters(),
       'clear-commits-filters': () => clearCommitsFilters(),
       'load-more-commits': () => loadMoreCommits(),
@@ -4815,4 +4914,3 @@
     // 处理执行。e.target 在捕获阶段仍是事件真实目标，目标级横向滚动守卫语义不变。
     window.addEventListener('wheel', handleSwipeNavWheel, { capture: true, passive: true });
     /* §18-SWIPE-NAV-END */
-

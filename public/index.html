@@ -370,7 +370,10 @@
   <div id="commitsDrawer" class="commits-drawer" style="display:none" role="dialog" aria-label="提交记录">
     <div class="commits-drawer-header">
       <h3>📋 提交记录</h3>
-      <button class="drawer-close" data-action="close-commits-drawer" aria-label="关闭">×</button>
+      <div class="commits-drawer-header-actions">
+        <button type="button" class="drawer-fullscreen" data-action="toggle-commits-fullscreen" aria-pressed="false" aria-label="全屏查看提交记录" title="全屏查看提交记录">全屏</button>
+        <button type="button" class="drawer-close" data-action="close-commits-drawer" aria-label="关闭">×</button>
+      </div>
     </div>
     <div class="commits-drawer-meta" id="commitsDrawerMeta"></div>
     <div class="commits-drawer-filters" id="commitsDrawerFilters">

@@ -1228,6 +1228,10 @@
     .commits-drawer.open {
       transform: translateX(0);
     }
+    .commits-drawer.fullscreen {
+      width: 100vw;
+      border-left: none;
+    }
     .commits-drawer-header {
       display: flex;
       justify-content: space-between;
@@ -1236,9 +1240,30 @@
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
     }
+    .commits-drawer-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
     .commits-drawer-header h3 {
       margin: 0;
       font-size: 15px;
+      color: var(--text-bright);
+    }
+    .drawer-fullscreen {
+      background: none;
+      border: 1px solid transparent;
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.4;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 6px;
+    }
+    .drawer-fullscreen:hover,
+    .drawer-fullscreen[aria-pressed="true"] {
+      background: var(--card-alt);
+      border-color: var(--border);
       color: var(--text-bright);
     }
     .drawer-close {
@@ -1486,9 +1511,34 @@
       justify-content: space-between;
       align-items: baseline;
       gap: 8px;
-      margin-bottom: 6px;
+      margin-bottom: 0;
+      padding: 2px 0;
       font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
       font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .commit-diff-file-header:focus-visible {
+      outline: 1px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .commit-diff-file-card.expanded .commit-diff-file-header {
+      margin-bottom: 6px;
+    }
+    .commit-diff-file-arrow {
+      flex: 0 0 auto;
+      width: 12px;
+      color: var(--text-muted);
+      transition: transform 150ms ease;
+    }
+    .commit-diff-file-card.expanded .commit-diff-file-arrow {
+      transform: rotate(90deg);
+    }
+    .commit-diff-file-body {
+      display: none;
+    }
+    .commit-diff-file-card.expanded .commit-diff-file-body {
+      display: block;
     }
     .commit-diff-file-path {
       flex: 1;
