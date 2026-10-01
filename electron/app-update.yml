@@ -1,0 +1,4 @@
+provider: github
+owner: SharpXia
+repo: git-lens-web
+releaseType: release

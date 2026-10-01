@@ -216,7 +216,13 @@ jobs:
               }
             done
           done
+          if [[ "$release_mode" == signed ]]; then
+            node scripts/release/generate-update-manifest.mjs release
+          fi
           (cd release && shasum -a 256 ./*.dmg ./*.zip ./*.blockmap > SHA256SUMS.txt)
+          if [[ -f release/latest-mac.yml ]]; then
+            (cd release && shasum -a 256 latest-mac.yml >> SHA256SUMS.txt)
+          fi
           notes_path="$RUNNER_TEMP/git-lens-release-notes.md"
           cat > "$notes_path" <<EOF
           # Git Lens ${RELEASE_TAG}

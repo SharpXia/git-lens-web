@@ -1,5 +1,8 @@
 # 本机无 Apple Developer 证书时的验收配置，仅生成 ad-hoc 产物，不用于正式发布。
 extends: electron-builder.yml
+extraMetadata:
+  gitLensUpdatesEnabled: false
+publish: null
 mac:
   identity: "-"
   hardenedRuntime: false

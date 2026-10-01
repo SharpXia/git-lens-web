@@ -27,6 +27,7 @@
 
 import {
   app,
+  autoUpdater as nativeUpdater,
   BrowserWindow,
   MessageChannelMain,
   Menu,
@@ -47,10 +48,12 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import electronUpdater from 'electron-updater';
 
 import { resolveServiceConfigDir } from './service-config-dir.js';
 import { windowChromeOptions } from './window-chrome.js';
 import { migrateLegacyStateFiles } from './user-data-migration.js';
+import { createUpdateController, prepareMacUpdate } from './update-manager.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -176,6 +179,29 @@ let gitInfo = { found: false, path: null, version: null, source: null };
 function log(message) {
   console.log(`[git-lens] ${message}`);
 }
+
+// 更新检查只在正式打包应用中联网；开发与 QA 运行由控制器主动跳过。
+const updateController = createUpdateController({
+  updater: electronUpdater.autoUpdater,
+  enabled: app.isPackaged && process.platform === 'darwin'
+    && JSON.parse(fs.readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')).gitLensUpdatesEnabled === true,
+  version: app.getVersion(),
+  showMessageBox: (options) => dialog.showMessageBox(options),
+  prepareInstall: () => prepareMacUpdate(nativeUpdater),
+  beforeInstall: async () => {
+    // 原生 updater 的退出安装可能直接关闭窗口，提前完成会话落盘与服务清理。
+    shuttingDown = true;
+    saveTabStateSync();
+    serviceState = 'stopped';
+    broadcastServiceState();
+    await shutdownService();
+  },
+  log,
+  onStatus: (status) => {
+    const item = Menu.getApplicationMenu()?.getMenuItemById('check-for-updates');
+    if (item) item.label = status;
+  },
+});
 
 /** 可中断的延时 */
 function delay(ms) {
@@ -1801,6 +1827,11 @@ function buildApplicationMenu() {
       role: 'help',
       submenu: [
         { label: '关于 Git Lens', click: showAboutDialog },
+        {
+          id: 'check-for-updates',
+          label: '检查更新',
+          click: () => { void updateController.checkForUpdates({ manual: true }); },
+        },
         { label: '复制诊断信息', click: copyDiagnostics },
       ],
     },
@@ -1924,6 +1955,7 @@ async function bootstrap() {
   registerIpc();
   buildApplicationMenu();
   startService();
+  updateController.scheduleInitialCheck();
 }
 
 // 单实例锁：抢锁失败说明已有实例在运行，直接退出（由已运行实例响应 second-instance）
@@ -1958,6 +1990,7 @@ app.on('window-all-closed', () => {
 
 // 退出前先走服务关闭协议（请求 close → 等待 → 超时 SIGKILL），再继续退出
 app.on('before-quit', (event) => {
+  updateController.dispose();
   if (shuttingDown) return;
   shuttingDown = true;
   // 契约 §15 第二次修订：退出前同步落盘一次标签状态（服务关闭是异步流程，

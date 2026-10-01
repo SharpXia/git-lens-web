@@ -1,8 +1,8 @@
 # Git Lens Web 桌面版发布文档（macOS，Release 工作流 G5）
 
-记录 v1.0.0 macOS 产物的构建方式、签名现状、安装/启动/退出/卸载验证证据，以及升级、回滚与未验收范围。对应计划书 §8（发布、回滚与维护）与契约 §12–§14。
+记录 macOS 产物的构建方式、签名现状、安装/启动/退出/卸载验证证据，以及升级、回滚与未验收范围。对应计划书 §8（发布、回滚与维护）与契约 §12–§14。
 
-- 发布对象：`Git Lens` v1.0.0（appId `com.sharpxia.git-lens-web`）
+- 发布对象：`Git Lens` v1.0.1（appId `com.sharpxia.git-lens-web`）
 - 构建基线：协调分支 `codex/electron-release` @ `ec016d5`
 - 构建环境：macOS 26.4（darwin 25.4.0）arm64 · Node v24.21.0 · Electron 44.4.5 · electron-builder 26.15.3（版本已由 `ec016d5` 冻结进 package-lock.json）
 - 验证 fixture run-id：`release-install-1790531711408-vj3zzy`（34/34 断言通过）
@@ -16,7 +16,7 @@ npx electron-builder --mac
 
 - 产物输出到 `release/`（已在 .gitignore 忽略，不入库）。
 - 无构建步骤、无原生模块：express/cors 为纯 JS 依赖，@electron/rebuild 空转，产物由 lockfile + Electron 官方二进制决定，可复现。
-- 附带产物：`*.blockmap`（未来 delta 更新用）与 `latest-mac.yml`（auto-update 清单，当前未启用更新通道，仅留档）。
+- 附带产物：`*.blockmap` 与 `latest-mac.yml`。正式签名版本通过应用内更新检查读取 GitHub Release 的更新清单。
 
 ## 2. 打包配置要点（electron-builder.yml）
 
@@ -40,7 +40,7 @@ npx electron-builder --mac
 - 配置为 `mac.identity: "-"`：electron-builder 经 @electron/osx-sign 对整包执行 `codesign --sign -`，产物 `codesign -dv` 显示 `Signature=adhoc`、`TeamIdentifier=not set`、`Identifier=com.sharpxia.git-lens-web`，且 `codesign --verify --deep --strict` 通过（bundle seal 完整）。
 - 实测偏差说明：任务书原建议 `mac.identity: null`，实测该取值是**完全跳过签名**——主二进制虽保留上游 linker-signed adhoc，但 electron-builder 改写 Info.plist 后 bundle 校验必失败（`code has no resources but signature indicates they must be present`），故改用 `"-"` 以满足「verify --deep --strict 通过」要求。
 - `afterSign` 公证钩子未引入（notarize 未验收）：分发外部的用户首次打开会被 Gatekeeper 拦截，需**右键 → 打开**，或执行 `xattr -cr "/Applications/Git Lens.app"` 后再启动。在取得证书并完成公证验收前，产物仅限本机构建本机使用/可信小范围分发。
-- 自动更新（auto-update）未启用（计划书 §8：仅签名渠道启用）：`latest-mac.yml` 为构建副产物，不构成更新通道；升级走手动下载覆盖（§7）。
+- 正式签名版本启用应用内更新；ad-hoc 版本关闭更新通道。更新清单由发布 job 在两个架构产物汇总后生成。
 
 ## 4. 产物清单（SHA-256 / 大小）
 
@@ -102,12 +102,12 @@ zip 产物均通过 `unzip -t` CRC 完整性校验。产物为 ad-hoc 签名，�
 
 ## 7. 升级与回滚方案
 
-**首版（v1.0.0）无升级路径**：不存在更早的正式版，无迁移可验证。auto-update 未启用（计划书 §8：仅签名渠道启用），升级方式为手动下载新版 DMG 覆盖安装。
+正式签名版支持应用内更新：启动后延迟检查一次，之后每 12 小时检查一次，也可以通过「帮助 → 检查更新」手动检查。发现新版本后由用户确认下载，下载完成并通过 macOS 原生更新器校验后，再确认重启安装。开发运行与 ad-hoc 本机验收包不访问线上更新。
 
 自下一版本起的升级验证协议（验收前必须逐项执行）：
 
 1. **备份**：记录旧版版本号与 userData（`~/Library/Application Support/Git Lens Web/`）快照（含 `git-lens-config/` 扫描配置与 `window-state.json`）；
-2. **升级**：退出旧版（确认无残留进程）→ 覆盖安装新版 .app → 启动；
+2. **升级兜底**：应用内更新不可用时，退出旧版（确认无残留进程）→ 覆盖安装新版 .app → 启动；
 3. **迁移验证**（契约 §5）：扫描目录列表、收藏等配置在新版中完整可用；userData 内无重复或丢弃的配置文件；
 4. **失败回滚**：退出新版 → 恢复备份的 userData → 重装旧版 .app（旧版 DMG 与 SHA-256 留档于发布系统）→ 验证旧版启动与配置完整；
 5. 全程以契约 §13 钩子采集新版的 ready/凭据证据，确认迁移期间端口、凭据语义未漂移。
@@ -120,7 +120,7 @@ zip 产物均通过 `unzip -t` CRC 完整性校验。产物为 ad-hoc 签名，�
 | --- | --- | --- |
 | macOS 公证（notarize） | 未做：ad-hoc 签名，Gatekeeper 拦截外部分发 | Apple Developer 账号 + Developer ID 证书 + notarytool 验收 |
 | hardened runtime | 关闭（ad-hoc 下无意义且有库验证风险） | 与公证一并开启 |
-| auto-update 更新通道 | 未启用；`latest-mac.yml` 仅留档 | 公证通过后按计划书 §8 仅对签名渠道启用，并验收清单校验失败不替换逻辑 |
+| auto-update 更新通道 | v1.0.1 正式签名版本启用；ad-hoc 构建关闭 | 验证 GitHub 清单、ZIP 签名校验、服务优雅退出与重启安装 |
 | x64 运行验收 | 仅挂载/签名/体积校验，未实际运行 | Intel 或 x64 测试机 |
 | Windows | 未构建未验收（SmartScreen 方案未定） | 证书 + 分发方案（计划书 §7/§8） |
 | Linux | 未构建未验收 | 目标发行版安装与桌面启动验证 |
