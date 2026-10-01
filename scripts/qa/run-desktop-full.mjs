@@ -419,16 +419,20 @@ async function main() {
       const cards = Array.from(document.querySelectorAll('#commitsDrawerBody .commit-item'));
       // 唯一性以卡片头部展示的短 SHA 为准（data-c-idx 是批内序号，跨批会重置）
       const shortHashes = cards.map((c) => c.querySelector('.commit-hash')?.textContent);
-      // 旧卡交互：点击第一张卡片展开详情，观察详情区域出现
+      // 默认展开回归：提交抽屉的卡片只有展开态，点击卡片本身不得收起摘要
+      const firstInitiallyExpanded = Boolean(cards[0]?.querySelector('.commit-detail'));
       cards[0]?.click();
+      const firstRemainsExpanded = Boolean(cards[0]?.querySelector('.commit-detail'));
       return {
         count: cards.length,
         uniqueHashes: new Set(shortHashes).size,
-        firstExpanded: Boolean(cards[0]?.querySelector('.commit-detail'))
+        firstInitiallyExpanded,
+        firstRemainsExpanded
       };
     });
-    record('c3-load-more', '加载更多追加到 35 条且短 SHA 无重复、旧卡点击仍可展开', afterMore.count >= 35 && afterMore.uniqueHashes === afterMore.count && afterMore.firstExpanded ? 'pass' : 'fail',
-      `count=${afterMore.count} unique=${afterMore.uniqueHashes} 旧卡展开=${afterMore.firstExpanded}`);
+    record('c3-load-more', '加载更多追加到 35 条且默认展开、点击卡片不收起', afterMore.count >= 35 && afterMore.uniqueHashes === afterMore.count
+      && afterMore.firstInitiallyExpanded && afterMore.firstRemainsExpanded ? 'pass' : 'fail',
+      `count=${afterMore.count} unique=${afterMore.uniqueHashes} 默认展开=${afterMore.firstInitiallyExpanded} 点击后仍展开=${afterMore.firstRemainsExpanded}`);
 
     // SHA 复制：页面按钮触发写剪贴板，主进程 clipboard 轮询读取（Electron 共享系统剪贴板）；
     // 剪贴板写入是异步系统调用，读取失败时重试数次。无头环境下 navigator.clipboard.writeText
