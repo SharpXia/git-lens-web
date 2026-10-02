@@ -155,6 +155,16 @@ jobs:
             codesign -dv --verbose=4 "$app_path" 2>&1 | grep -E 'Identifier=|Signature=|TeamIdentifier=' | head -20 || true
           fi
 
+      - name: 校验安装包完整性
+        run: |
+          set -euo pipefail
+          dmg_path="release/git-lens-web-$(node -p "require('./package.json').version")-mac-${{ matrix.arch }}.dmg"
+          zip_path="release/git-lens-web-$(node -p "require('./package.json').version")-mac-${{ matrix.arch }}.zip"
+          [[ -s "$dmg_path" ]] || { echo "缺少 DMG：$dmg_path" >&2; exit 1; }
+          [[ -s "$zip_path" ]] || { echo "缺少 ZIP：$zip_path" >&2; exit 1; }
+          hdiutil verify "$dmg_path"
+          unzip -t "$zip_path" >/dev/null
+
       - name: 移除架构构建产生的单架构更新清单
         run: |
           rm -f release/latest-mac.yml
@@ -224,6 +234,11 @@ jobs:
             (cd release && shasum -a 256 latest-mac.yml >> SHA256SUMS.txt)
           fi
           notes_path="$RUNNER_TEMP/git-lens-release-notes.md"
+          if [[ "$release_mode" == signed ]]; then
+            release_guidance='安装包已完成 Developer ID Application 签名并通过 Apple 公证，可直接用于正式安装。'
+          else
+            release_guidance='这是 ad-hoc 预发布版本，仅用于可信小范围测试；首次打开可能需要在 Finder 中右键选择“打开”。'
+          fi
           cat > "$notes_path" <<EOF
           # Git Lens ${RELEASE_TAG}
 
@@ -231,9 +246,11 @@ jobs:
 
           构建模式：${release_mode}
 
+          ${release_guidance}
+
           源码提交：$(git rev-parse HEAD)
 
-          请使用 SHA256SUMS.txt 校验下载文件。ad-hoc 预发布版本仅用于可信小范围测试，首次打开可能需要在 Finder 中右键选择“打开”。
+          请使用 SHA256SUMS.txt 校验下载文件。
           EOF
           echo "release_mode=$release_mode" >> "$GITHUB_OUTPUT"
           echo "notes_path=$notes_path" >> "$GITHUB_OUTPUT"
@@ -244,20 +261,38 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
-          mapfile -d '' assets < <(find release -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' -print0 | sort -z)
-          assets+=(release/SHA256SUMS.txt)
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
             gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
               --title "Git Lens $RELEASE_TAG" \
               --notes-file "${{ steps.release.outputs.notes_path }}"
           else
-            gh release create "$RELEASE_TAG" "${assets[@]}" \
+            gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --title "Git Lens $RELEASE_TAG" \
               --notes-file "${{ steps.release.outputs.notes_path }}"
           fi
+          upload_and_verify() {
+            local asset="$1"
+            local name expected actual attempt
+            name="$(basename "$asset")"
+            expected="$(shasum -a 256 "$asset" | awk '{print $1}')"
+            gh release upload "$RELEASE_TAG" "$asset" --clobber --repo "$GITHUB_REPOSITORY"
+            for attempt in {1..30}; do
+              actual="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+                --jq ".assets[] | select(.name == \"$name\") | .digest" | sed 's/^sha256://')"
+              if [[ "$actual" == "$expected" ]]; then
+                return 0
+              fi
+              sleep 2
+            done
+            echo "远端资产校验失败：$name（本地 $expected，远端 ${actual:-缺失}）" >&2
+            return 1
+          }
+          while IFS= read -r -d '' asset; do
+            upload_and_verify "$asset"
+          done < <(find release -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' -print0 | sort -z)
+          upload_and_verify release/SHA256SUMS.txt
 
       - name: 发布 ad-hoc 预发布版本
         if: steps.release.outputs.release_mode == 'adhoc'
@@ -265,11 +300,30 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
-          mapfile -d '' assets < <(find release -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' -print0 | sort -z)
-          assets+=(release/SHA256SUMS.txt)
-          gh release create "$RELEASE_TAG" "${assets[@]}" \
+          gh release create "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --prerelease \
             --title "Git Lens $RELEASE_TAG（ad-hoc 预发布）" \
             --notes-file "${{ steps.release.outputs.notes_path }}"
+          upload_and_verify() {
+            local asset="$1"
+            local name expected actual attempt
+            name="$(basename "$asset")"
+            expected="$(shasum -a 256 "$asset" | awk '{print $1}')"
+            gh release upload "$RELEASE_TAG" "$asset" --clobber --repo "$GITHUB_REPOSITORY"
+            for attempt in {1..30}; do
+              actual="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+                --jq ".assets[] | select(.name == \"$name\") | .digest" | sed 's/^sha256://')"
+              if [[ "$actual" == "$expected" ]]; then
+                return 0
+              fi
+              sleep 2
+            done
+            echo "远端资产校验失败：$name（本地 $expected，远端 ${actual:-缺失}）" >&2
+            return 1
+          }
+          while IFS= read -r -d '' asset; do
+            upload_and_verify "$asset"
+          done < <(find release -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' -print0 | sort -z)
+          upload_and_verify release/SHA256SUMS.txt

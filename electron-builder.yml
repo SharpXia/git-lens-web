@@ -67,12 +67,8 @@ mac:
   forceCodeSigning: true
   # 有完整 Apple 公证凭据时自动调用 notarytool；缺少凭据时仅跳过公证并输出告警。
   notarize: true
+  # 每个 CI job 通过命令行只选择一个架构；这里不能固定双架构列表，否则两个 job
+  # 会重复生成同名产物，发布阶段合并 artifact 时容易把文件互相覆盖。
   target:
     - target: dmg
-      arch:
-        - arm64
-        - x64
     - target: zip
-      arch:
-        - arm64
-        - x64
