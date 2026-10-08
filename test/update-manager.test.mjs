@@ -93,3 +93,55 @@ test('更新控制器：无更新的手动检查显示当前版本', async () =>
   assert.match(messages[0].message, /最新版本/);
   controller.dispose();
 });
+
+test('更新控制器：下载进度、校验与就绪阶段经 onProgress 结构化推送', async () => {
+  const updater = new FakeUpdater({ isUpdateAvailable: true, updateInfo: { version: '1.1.0' } });
+  const progressEvents = [];
+  const controller = createUpdateController({
+    updater,
+    enabled: true,
+    version: '1.0.1',
+    showMessageBox: async () => ({ response: 0 }),
+    prepareInstall: async () => {},
+    beforeInstall: async () => {},
+    log: () => {},
+    onProgress: (progress) => progressEvents.push(progress),
+  });
+  // 模拟真实时序：下载期间原生 updater 持续回报进度事件
+  updater.downloadUpdate = async () => {
+    updater.emit('download-progress', { percent: 42.5, transferred: 425, total: 1000 });
+    updater.emit('download-progress', { percent: 100, transferred: 1000, total: 1000 });
+  };
+  await controller.checkForUpdates({ manual: true });
+  assert.deepEqual(progressEvents[0], { phase: 'download', percent: 42, transferred: 425, total: 1000 });
+  assert.deepEqual(progressEvents[1], { phase: 'download', percent: 100, transferred: 1000, total: 1000 });
+  assert.deepEqual(progressEvents[2], { phase: 'verify' });
+  assert.deepEqual(progressEvents[3], { phase: 'ready' });
+  controller.dispose();
+});
+
+test('更新控制器：更新失败时进度最终清空为 null', async () => {
+  const updater = new FakeUpdater({ isUpdateAvailable: true, updateInfo: { version: '1.1.0' } });
+  const messages = [];
+  const progressEvents = [];
+  const controller = createUpdateController({
+    updater,
+    enabled: true,
+    version: '1.0.1',
+    showMessageBox: async (options) => { messages.push(options); return { response: 0 }; },
+    prepareInstall: async () => {},
+    beforeInstall: async () => {},
+    log: () => {},
+    onProgress: (progress) => progressEvents.push(progress),
+  });
+  updater.downloadUpdate = async () => {
+    updater.emit('download-progress', { percent: 30, transferred: 300, total: 1000 });
+    throw new Error('网络中断');
+  };
+  await controller.checkForUpdates({ manual: true });
+  assert.deepEqual(progressEvents[0], { phase: 'download', percent: 30, transferred: 300, total: 1000 });
+  assert.equal(progressEvents[progressEvents.length - 1], null);
+  assert.equal(messages.at(-1).title, '更新失败');
+  assert.match(messages.at(-1).detail, /网络中断/);
+  controller.dispose();
+});

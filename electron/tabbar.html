@@ -117,13 +117,42 @@
     cursor: pointer;
   }
   #new-tab:hover { background: #161b22; color: #f0f6fc; }
+  /* 应用内更新进度（gitLensTabbar.onUpdateProgress）：细进度条贴标签栏下缘，
+     阶段文案走右侧胶囊；均为只读展示，不设 no-drag，保持标题栏可拖拽 */
+  #update-progress-track {
+    height: 2px;
+  }
+  #update-progress-track[hidden] { display: none; }
+  #update-progress {
+    height: 100%;
+    width: 0;
+    background: #58a6ff;
+    transition: width 0.3s ease-out;
+  }
+  #update-badge {
+    display: none;
+    flex: none;
+    align-self: center;
+    margin-right: 8px;
+    padding: 3px 10px;
+    border: 1px solid #1f6feb;
+    border-radius: 10px;
+    background: #0d2a47;
+    color: #79c0ff;
+    font-size: 11px;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+  #update-badge.visible { display: flex; }
 </style>
 </head>
 <body>
 <div id="bar" role="tablist" aria-label="标签页">
   <div id="tabs"></div>
+  <div id="update-badge" role="status" aria-live="polite"></div>
   <button id="new-tab" type="button" title="新建标签页 (⌘T)" aria-label="新建标签页">+</button>
 </div>
+<div id="update-progress-track" hidden><div id="update-progress"></div></div>
 <div id="drop-indicator" hidden></div>
 <script>
   'use strict';
@@ -289,6 +318,34 @@
   window.gitLensTabbar.onFullscreenChanged(function (fullscreen) {
     document.body.classList.toggle('fullscreen', Boolean(fullscreen));
   });
+
+  var updateTrack = document.getElementById('update-progress-track');
+  var updateBar = document.getElementById('update-progress');
+  var updateBadge = document.getElementById('update-badge');
+
+  // 阶段 → 只读展示：下载画细进度条与百分比，校验/就绪保留胶囊文案，空闲全部隐藏
+  function renderUpdateProgress(progress) {
+    if (!progress) {
+      updateTrack.hidden = true;
+      updateBadge.classList.remove('visible');
+      updateBadge.textContent = '';
+      return;
+    }
+    updateBadge.classList.add('visible');
+    if (progress.phase === 'download') {
+      updateTrack.hidden = false;
+      updateBar.style.width = progress.percent + '%';
+      updateBadge.textContent = '下载更新 ' + progress.percent + '%';
+    } else if (progress.phase === 'verify') {
+      updateTrack.hidden = true;
+      updateBadge.textContent = '正在校验更新…';
+    } else {
+      updateTrack.hidden = true;
+      updateBadge.textContent = '重启安装更新';
+    }
+  }
+  window.gitLensTabbar.onUpdateProgress(renderUpdateProgress);
+
   newTabEl.addEventListener('click', function () {
     window.gitLensTabbar.newTab();
   });
