@@ -101,6 +101,18 @@ const gitLensTabbar = {
     assertTabId(id);
     ipcRenderer.send('git-lens-tabbar:activate-tab', id);
   },
+
+  /**
+   * 请求将标签插入另一标签前，null 表示移到末尾。
+   * @param {number} id - 被移动的标签 id
+   * @param {number|null} beforeId - 插入位置右侧标签 id
+   * @returns {void} 经 IPC 通知主进程，最终顺序由状态订阅回传
+   */
+  moveTab(id, beforeId) {
+    assertTabId(id);
+    if (beforeId !== null) assertTabId(beforeId);
+    ipcRenderer.send('git-lens-tabbar:move-tab', id, beforeId);
+  },
 };
 
 contextBridge.exposeInMainWorld('gitLensTabbar', Object.freeze(gitLensTabbar));

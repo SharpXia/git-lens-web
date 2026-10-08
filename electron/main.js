@@ -989,6 +989,25 @@ function closeTab(id) {
 }
 
 /**
+ * 将标签插入目标标签前；排序与快捷键、关闭邻居和存档共用 tabs，避免位置脱节。
+ * @param {number} id - 被移动的标签 id
+ * @param {number|null} beforeId - 插入位置右侧的标签 id，null 表示末尾
+ * @returns {void} 无返回值，失效目标或原位移动不改变状态
+ */
+function moveTab(id, beforeId) {
+  if (!Number.isInteger(id) || id <= 0) return;
+  if (beforeId !== null && (!Number.isInteger(beforeId) || beforeId <= 0)) return;
+  const from = tabs.findIndex((tab) => tab.id === id);
+  const before = beforeId === null ? tabs.length : tabs.findIndex((tab) => tab.id === beforeId);
+  if (from < 0 || before < 0 || from === before || from + 1 === before) return;
+  const [tab] = tabs.splice(from, 1);
+  tabs.splice(before > from ? before - 1 : before, 0, tab);
+  // 只改变位置，保留当前项目视图与其页面状态。
+  pushTabbarState();
+  scheduleTabStateSave();
+}
+
+/**
  * 循环切换标签（Ctrl+Tab 下一个 / Ctrl+Shift+Tab 上一个，契约 §15）。
  * @param {1|-1} offset - 切换方向
  */
@@ -1890,6 +1909,11 @@ function registerIpc() {
     if (!isTabbarSender(event.sender)) return;
     if (!Number.isInteger(tabId) || tabId <= 0) return;
     activateTab(tabId);
+  });
+
+  ipcMain.on('git-lens-tabbar:move-tab', (event, tabId, beforeId) => {
+    if (!isTabbarSender(event.sender)) return;
+    moveTab(tabId, beforeId);
   });
 }
 
