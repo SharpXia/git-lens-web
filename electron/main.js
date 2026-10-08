@@ -141,6 +141,8 @@ const sessionToken = crypto.randomBytes(32).toString('hex');
 let mainWindow = null;
 /** 顶部标签条视图（Shell 自有 chrome，加载 electron/tabbar.html）；随主窗口销毁重建 */
 let tabbarView = null;
+/** 最近一次更新进度载荷（null=空闲）；标签条重建或晚就绪时经 did-finish-load 回发对齐 */
+let lastUpdateProgress = null;
 /** 内容标签集合：每个标签一个 WebContentsView（契约 §15） */
 const tabs = [];
 /** 当前激活标签 id；null 表示尚无标签 */
@@ -200,6 +202,15 @@ const updateController = createUpdateController({
   onStatus: (status) => {
     const item = Menu.getApplicationMenu()?.getMenuItemById('check-for-updates');
     if (item) item.label = status;
+  },
+  onProgress: (progress) => {
+    lastUpdateProgress = progress;
+    // 进度条 API 是窗口级的 BrowserWindow.setProgressBar（macOS 渲染在 Dock 图标，
+    // Windows 为任务栏）；app 级无此 API，误调用会在下载事件里抛错中断更新
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setProgressBar(progress?.phase === 'download' ? progress.percent / 100 : -1);
+    }
+    pushTabbarUpdateProgress();
   },
 });
 
@@ -731,6 +742,16 @@ function pushTabbarFullscreen() {
 }
 
 /**
+ * 向标签条推送更新进度载荷（null=空闲；结构化数据由标签条自行渲染文案）。
+ * 标签条未就绪（加载中/已销毁）时静默跳过——其 did-finish-load 会回发
+ * lastUpdateProgress 对齐，不会永久失步。
+ */
+function pushTabbarUpdateProgress() {
+  if (!isViewAlive(tabbarView)) return;
+  tabbarView.webContents.send('git-lens-tabbar:update-progress', lastUpdateProgress);
+}
+
+/**
  * 同步内容区所有视图 bounds（DIP）：标签条固定占顶部 TABBAR_HEIGHT，
  * 内容标签铺满其余区域。窗口 resize/最大化/全屏切换时由窗口事件驱动。
  */
@@ -774,6 +795,8 @@ function createTabbarView() {
     // 契约 §17.1.1：标签条加载完成时同步当前全屏态（此前窗口若已进入全屏，
     // 事件推送会错过未就绪的标签条，这里兜底对齐）
     pushTabbarFullscreen();
+    // 更新进行中（下载/校验/就绪）时，重建或晚就绪的标签条也立即拿到当前进度
+    pushTabbarUpdateProgress();
   });
   return view;
 }

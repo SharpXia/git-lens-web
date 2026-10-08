@@ -24,13 +24,16 @@ function assertFunction(value, name) {
 
 /**
  * 校验标签 id 为正整数。
- * @param {unknown} value - 待校验的标签 id
+ * @param {unknown} value - 待校验的值
  */
 function assertTabId(value) {
   if (!Number.isInteger(value) || value <= 0) {
     throw new TypeError('gitLensTabbar 的标签 id 必须是正整数');
   }
 }
+
+/** 更新进度的合法阶段（download 阶段必带 0-100 的 percent） */
+const UPDATE_PHASES = ['download', 'verify', 'ready'];
 
 const gitLensTabbar = {
   /**
@@ -76,6 +79,33 @@ const gitLensTabbar = {
     ipcRenderer.on('git-lens-tabbar:fullscreen-changed', listener);
     return () => {
       ipcRenderer.removeListener('git-lens-tabbar:fullscreen-changed', listener);
+    };
+  },
+
+  /**
+   * 订阅应用内更新进度（下载/校验/就绪；null 表示空闲，页面应隐藏进度展示）。
+   * @param {(progress: {phase: 'download'|'verify'|'ready', percent?: number, transferred?: number, total?: number}|null) => void} callback - 进度回调
+   * @returns {() => void} 取消订阅函数
+   */
+  onUpdateProgress(callback) {
+    assertFunction(callback, 'onUpdateProgress');
+    const listener = (_event, progress) => {
+      // 只放行结构合法的载荷：空闲 null，或已知阶段且 download 必带 0-100 百分比
+      const valid = progress === null || (
+        UPDATE_PHASES.includes(progress?.phase)
+        && (progress.phase !== 'download'
+          || (Number.isFinite(progress.percent) && progress.percent >= 0 && progress.percent <= 100))
+      );
+      if (!valid) return;
+      try {
+        callback(progress);
+      } catch {
+        // 页面回调异常不应影响 IPC 链路
+      }
+    };
+    ipcRenderer.on('git-lens-tabbar:update-progress', listener);
+    return () => {
+      ipcRenderer.removeListener('git-lens-tabbar:update-progress', listener);
     };
   },
 

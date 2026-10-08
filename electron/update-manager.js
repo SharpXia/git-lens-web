@@ -14,9 +14,10 @@
  * @param {() => Promise<void>} options.beforeInstall - 安装前保存会话并关闭本地服务
  * @param {(message: string) => void} options.log - 主进程日志
  * @param {(status: string) => void} [options.onStatus] - 更新菜单状态
+ * @param {(progress: {phase: 'download', percent: number, transferred: number, total: number}|{phase: 'verify'}|{phase: 'ready'}|null) => void} [options.onProgress] - 更新进度与阶段（null=回到空闲），供 Dock 进度条与标签条结构化展示
  * @returns {{checkForUpdates: (options?: {manual?: boolean}) => Promise<void>, scheduleInitialCheck: () => void, dispose: () => void}} 更新操作
  */
-export function createUpdateController({ updater, enabled, version, showMessageBox, prepareInstall, beforeInstall, log, onStatus = () => {} }) {
+export function createUpdateController({ updater, enabled, version, showMessageBox, prepareInstall, beforeInstall, log, onStatus = () => {}, onProgress = () => {} }) {
   let operation = null;
   let manualCheck = false;
   let downloadedInfo = null;
@@ -34,7 +35,10 @@ export function createUpdateController({ updater, enabled, version, showMessageB
   updater.logger = null;
 
   updater.on('download-progress', (progress) => {
-    onStatus(`正在下载更新 ${Math.floor(progress.percent || 0)}%`);
+    const percent = Math.min(100, Math.floor(progress.percent || 0));
+    onStatus(`正在下载更新 ${percent}%`);
+    // 结构化进度交主进程转发（Dock 进度条 + 标签条自渲染文案），避免渲染层解析状态字符串
+    onProgress({ phase: 'download', percent, transferred: progress.transferred || 0, total: progress.total || 0 });
   });
   updater.on('error', (err) => {
     downloadError = err;
@@ -100,6 +104,7 @@ export function createUpdateController({ updater, enabled, version, showMessageB
       await updater.downloadUpdate();
       // 原生 macOS 更新器先完成签名校验，确认可安装后才关闭当前应用的服务。
       onStatus('正在校验更新…');
+      onProgress({ phase: 'verify' });
       await prepareInstall();
       if (downloadError) throw downloadError;
       if (disposed) return;
@@ -114,6 +119,8 @@ export function createUpdateController({ updater, enabled, version, showMessageB
       });
     } finally {
       onStatus(downloadedInfo ? '重启并安装更新…' : '检查更新');
+      // 成功走到待安装时保留就绪提示（用户可能选"稍后重启"），失败/无更新一律清空展示
+      onProgress(downloadedInfo ? { phase: 'ready' } : null);
     }
   }
 
