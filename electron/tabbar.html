@@ -48,6 +48,18 @@
        取舍详见交付报告。 */
   }
   #tabs::-webkit-scrollbar { display: none; }
+  /* 拖动标签时空白区也接收投放；结束后恢复标题栏的窗口拖动能力。 */
+  body.tab-dragging #tabs { -webkit-app-region: no-drag; }
+  .tab.dragging { opacity: 0.45; }
+  #drop-indicator {
+    position: fixed;
+    top: 3px;
+    width: 2px;
+    height: 32px;
+    background: #58a6ff;
+    pointer-events: none;
+    z-index: 1;
+  }
   .tab {
     display: flex;
     align-items: center;
@@ -112,6 +124,7 @@
   <div id="tabs"></div>
   <button id="new-tab" type="button" title="新建标签页 (⌘T)" aria-label="新建标签页">+</button>
 </div>
+<div id="drop-indicator" hidden></div>
 <script>
   'use strict';
   // 契约 §17：主进程经 loadFile query 注入平台标识，置到 body[data-platform]
@@ -129,9 +142,19 @@
 
   var tabsEl = document.getElementById('tabs');
   var newTabEl = document.getElementById('new-tab');
+  var dropIndicator = document.getElementById('drop-indicator');
+  var dragId = null;
+  var dragX = null;
+  var scrollFrame = null;
+  var pendingState = null;
+  var pressedClose = false;
 
-  // 每个标签元素记录其主进程侧 id，事件经委托回传，避免为每个标签挂监听
+  // 标题与激活态可能在拖动途中更新，延后渲染以免移除拖动源而中断手势。
   function render(state) {
+    if (dragId !== null) {
+      pendingState = state;
+      return;
+    }
     tabsEl.textContent = '';
     for (var tab of state.tabs) {
       var item = document.createElement('div');
@@ -139,6 +162,7 @@
       item.setAttribute('role', 'tab');
       item.setAttribute('aria-selected', tab.active ? 'true' : 'false');
       item.dataset.tabId = String(tab.id);
+      item.draggable = true;
 
       var title = document.createElement('span');
       title.className = 'tab-title';
@@ -166,6 +190,98 @@
       tabsEl.appendChild(item);
     }
   }
+
+  // 排除拖动源后按标签中点确定插入空隙，左右移动使用同一套位置语义。
+  function dropPosition(clientX) {
+    var candidates = Array.from(tabsEl.children).filter(function (item) {
+      return Number(item.dataset.tabId) !== dragId;
+    });
+    var before = candidates.find(function (item) {
+      var rect = item.getBoundingClientRect();
+      return clientX < rect.left + rect.width / 2;
+    });
+    var last = candidates[candidates.length - 1];
+    return {
+      beforeId: before ? Number(before.dataset.tabId) : null,
+      x: before ? before.getBoundingClientRect().left
+        : last ? last.getBoundingClientRect().right : tabsEl.getBoundingClientRect().left,
+    };
+  }
+
+  function showDropPosition() {
+    var bounds = tabsEl.getBoundingClientRect();
+    var position = dropPosition(dragX);
+    dropIndicator.style.left = Math.max(bounds.left, Math.min(position.x, bounds.right - 2)) + 'px';
+    dropIndicator.hidden = false;
+  }
+
+  // 标签溢出时靠近边缘持续滚动，允许一次拖到屏幕外的任意位置。
+  function scrollDuringDrag() {
+    if (dragId === null || dragX === null) return;
+    var bounds = tabsEl.getBoundingClientRect();
+    var edge = 32;
+    var speed = dragX < bounds.left + edge ? -8
+      : dragX > bounds.right - edge ? 8 : 0;
+    tabsEl.scrollLeft += speed;
+    showDropPosition();
+    scrollFrame = requestAnimationFrame(scrollDuringDrag);
+  }
+
+  function clearDropPosition() {
+    cancelAnimationFrame(scrollFrame);
+    scrollFrame = null;
+    dragX = null;
+    dropIndicator.hidden = true;
+  }
+
+  function finishDrag() {
+    clearDropPosition();
+    dragId = null;
+    document.body.classList.remove('tab-dragging');
+    var source = tabsEl.querySelector('.dragging');
+    if (source) source.classList.remove('dragging');
+    if (pendingState) {
+      var state = pendingState;
+      pendingState = null;
+      render(state);
+    }
+  }
+
+  tabsEl.addEventListener('pointerdown', function (event) {
+    pressedClose = Boolean(event.target.closest('.tab-close'));
+  });
+  tabsEl.addEventListener('dragstart', function (event) {
+    var item = event.target.closest('.tab');
+    if (!item || pressedClose || event.target.closest('.tab-close')) {
+      event.preventDefault();
+      return;
+    }
+    dragId = Number(item.dataset.tabId);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', String(dragId));
+    document.body.classList.add('tab-dragging');
+    item.classList.add('dragging');
+  });
+  tabsEl.addEventListener('dragover', function (event) {
+    if (dragId === null) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    dragX = event.clientX;
+    showDropPosition();
+    if (scrollFrame === null) scrollFrame = requestAnimationFrame(scrollDuringDrag);
+  });
+  tabsEl.addEventListener('dragleave', function (event) {
+    if (!tabsEl.contains(event.relatedTarget)) clearDropPosition();
+  });
+  tabsEl.addEventListener('drop', function (event) {
+    if (dragId === null) return;
+    event.preventDefault();
+    var id = dragId;
+    var beforeId = dropPosition(event.clientX).beforeId;
+    finishDrag();
+    window.gitLensTabbar.moveTab(id, beforeId);
+  });
+  document.addEventListener('dragend', finishDrag);
 
   window.gitLensTabbar.onTabsChanged(render);
   // 契约 §17.1.1：订阅窗口全屏态（主进程在进出全屏及本页加载完成时推送），

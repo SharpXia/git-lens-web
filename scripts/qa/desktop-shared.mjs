@@ -582,7 +582,7 @@ export function createDesktopPageHub({ cdpPort, appPrefix = '' }) {
 /**
  * 标签条 DOM 驱动：菜单加速键（⌘T/⌘W）CDP 触达不到，标签的新建/切换/关闭一律
  * 走标签条 chrome 页内的真实 DOM 点击（tabbar → IPC → 主进程完整链路）。
- * DOM 顺序即标签创建顺序（主进程按 tabs 数组顺序渲染）。
+ * DOM 顺序即标签当前顺序（主进程按可重排的 tabs 数组顺序渲染）。
  * @param {object} page 标签条页会话（connectCdpPage 返回）
  */
 export function createTabbarDriver(page) {
@@ -593,7 +593,7 @@ export function createTabbarDriver(page) {
     clickTab: (index) => page.evaluate((i) => { document.querySelectorAll('.tab')[i].click(); }, index),
     /** 点击第 index 个标签的「×」关闭（对应 ⌘W 语义） */
     clickClose: (index) => page.evaluate((i) => { document.querySelectorAll('.tab-close')[i].click(); }, index),
-    /** 各标签标题（顺序与创建顺序一致） */
+    /** 各标签标题（顺序与当前排列一致） */
     titles: () => page.evaluate(() => Array.from(document.querySelectorAll('.tab-title')).map((e) => e.textContent)),
     /** 激活标签下标（无激活项时为 -1；激活项带 .active 类） */
     activeIndex: () => page.evaluate(() => Array.from(document.querySelectorAll('.tab')).findIndex((e) => e.classList.contains('active'))),
