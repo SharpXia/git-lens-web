@@ -48,8 +48,13 @@
        取舍详见交付报告。 */
   }
   #tabs::-webkit-scrollbar { display: none; }
-  /* 拖动标签时空白区也接收投放；结束后恢复标题栏的窗口拖动能力。 */
-  body.tab-dragging #tabs { -webkit-app-region: no-drag; }
+  /* 拖动标签期间整条标签栏都退出窗口拖动区：#bar 是 app-region: drag 继承区，
+     只豁免 #tabs 时，红绿灯安全区、更新徽章、新建按钮仍留在窗口拖动区内，
+     Electron 的窗口拖动机制会吞掉落在其上的 dragover/dragleave 事件流——
+     插入线保持高亮而松手的 drop 永远不会送达，位置调整静默失败。整条栏
+     no-drag 后投放区与 Chrome 标签条一致（含右端空白），拖拽结束恢复窗口
+     拖动能力（拖拽中鼠标被拖拽手势占用，窗口拖动本就无从发生）。 */
+  body.tab-dragging #bar { -webkit-app-region: no-drag; }
   .tab.dragging { opacity: 0.45; }
   #drop-indicator {
     position: fixed;
@@ -170,6 +175,7 @@
   document.body.dataset.platform = platform;
 
   var tabsEl = document.getElementById('tabs');
+  var barEl = document.getElementById('bar');
   var newTabEl = document.getElementById('new-tab');
   var dropIndicator = document.getElementById('drop-indicator');
   var dragId = null;
@@ -279,7 +285,10 @@
   tabsEl.addEventListener('pointerdown', function (event) {
     pressedClose = Boolean(event.target.closest('.tab-close'));
   });
-  tabsEl.addEventListener('dragstart', function (event) {
+  // 拖拽事件挂在 #bar 而非 #tabs：投放区与 body.tab-dragging 的 no-drag 范围
+  // 对齐，松手在徽章/新建按钮/红绿灯区等栏内空白时同样按 clientX 落位
+  // （越界语义由 dropPosition 收敛到首/末），不再出现“指示器高亮却投放失效”。
+  barEl.addEventListener('dragstart', function (event) {
     var item = event.target.closest('.tab');
     if (!item || pressedClose || event.target.closest('.tab-close')) {
       event.preventDefault();
@@ -291,7 +300,7 @@
     document.body.classList.add('tab-dragging');
     item.classList.add('dragging');
   });
-  tabsEl.addEventListener('dragover', function (event) {
+  barEl.addEventListener('dragover', function (event) {
     if (dragId === null) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
@@ -299,10 +308,10 @@
     showDropPosition();
     if (scrollFrame === null) scrollFrame = requestAnimationFrame(scrollDuringDrag);
   });
-  tabsEl.addEventListener('dragleave', function (event) {
-    if (!tabsEl.contains(event.relatedTarget)) clearDropPosition();
+  barEl.addEventListener('dragleave', function (event) {
+    if (!barEl.contains(event.relatedTarget)) clearDropPosition();
   });
-  tabsEl.addEventListener('drop', function (event) {
+  barEl.addEventListener('drop', function (event) {
     if (dragId === null) return;
     event.preventDefault();
     var id = dragId;
