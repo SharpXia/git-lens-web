@@ -78,6 +78,7 @@
     let diffTargetPicker = null;
     const searchablePickers = []; // 所有可搜索选择器实例，用于统一「点击外部关闭」
     let diffRequestSeq = 0; // Diff 请求序列：仅最后一次请求的响应可上屏，丢弃过期响应
+    let diffToolbarResizeObserver = null;
 
     // 本地 Merge Request 状态
     let mrStatusFilter = 'all';  // MR 面板状态筛选：all | open | merged | rejected | canceled
@@ -2174,7 +2175,26 @@
     function toggleFileDiff(cardId) {
       const card = document.getElementById(cardId);
       if (card) {
-        card.classList.toggle('expanded');
+        setDiffFileExpanded(card, card.querySelector('.file-header'), !card.classList.contains('expanded'));
+      }
+    }
+
+    /**
+     * 统一文件展开状态；从吸顶标题收起长文件时保留标题的可见位置，避免跳到列表深处。
+     * @param {HTMLElement} card - 文件卡片
+     * @param {HTMLElement} header - 可点击的文件标题
+     * @param {boolean} expanded - 目标展开状态
+     */
+    function setDiffFileExpanded(card, header, expanded) {
+      const headerTop = header.getBoundingClientRect().top;
+      const wasSticky = !expanded && card.getBoundingClientRect().top < headerTop - 1;
+      card.classList.toggle('expanded', expanded);
+      header.setAttribute('aria-expanded', String(expanded));
+      if (wasSticky) {
+        const delta = header.getBoundingClientRect().top - headerTop;
+        const drawerBody = card.closest('.commits-drawer-body');
+        if (drawerBody) drawerBody.scrollTop += delta;
+        else window.scrollBy({ top: delta, behavior: 'instant' });
       }
     }
 
@@ -2182,11 +2202,8 @@
     function toggleAllDiffs(expand) {
       const cards = document.querySelectorAll('.file-diff-card');
       cards.forEach(card => {
-        if (expand) {
-          card.classList.add('expanded');
-        } else {
-          card.classList.remove('expanded');
-        }
+        card.classList.toggle('expanded', expand);
+        card.querySelector('.file-header')?.setAttribute('aria-expanded', String(expand));
       });
     }
 
@@ -2445,11 +2462,11 @@
 
         return `
           <div id="${cardId}" class="file-diff-card">
-            <div class="file-header" data-action="toggle-file-diff">
+            <div class="file-header" data-action="toggle-file-diff" role="button" tabindex="0" aria-expanded="false">
               <div class="file-title-left">
                 <span class="file-arrow">▶</span>
                 ${statusTag}
-                <span>${escapeHtml(f.filePath)}</span>
+                <span class="file-path" title="${escapeHtml(f.filePath)}">${escapeHtml(f.filePath)}</span>
               </div>
               <div style="display: flex; gap: 12px; align-items: center; font-size: 12px;">
                 ${statTag}
@@ -2514,6 +2531,15 @@
       container.dataset.renderedBase = currentDiffBase;
       container.dataset.renderedTarget = currentDiffTarget;
       bindDiffViewActions(container);
+      // 工具栏在窄屏或缩放后可能换行，文件标题的吸顶偏移始终跟随其真实高度。
+      diffToolbarResizeObserver?.disconnect();
+      const toolbar = container.querySelector('#diffFileListContent > .diff-tools-bar');
+      if (toolbar) {
+        const updateOffset = () => container.style.setProperty('--diff-toolbar-height', `${toolbar.getBoundingClientRect().height}px`);
+        updateOffset();
+        diffToolbarResizeObserver = new ResizeObserver(updateOffset);
+        diffToolbarResizeObserver.observe(toolbar);
+      }
       if (stashWorktreePath) fetchAndRenderStashList(stashWorktreePath);
     }
 
@@ -2527,6 +2553,13 @@
         'stash-act': (el) => stashActionWithConfirm(el.dataset.stashAction, '', el),
         'toggle-file-diff': (el) => toggleFileDiff(el.closest('.file-diff-card').id),
         'toggle-all-diffs': (el) => toggleAllDiffs(el.dataset.expand === '1')
+      });
+      container.querySelectorAll('[data-action="toggle-file-diff"]').forEach((header) => {
+        header.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          toggleFileDiff(header.closest('.file-diff-card').id);
+        });
       });
       // 图片加载失败时隐藏预览并显示占位说明（原内联 onerror 的等价迁移；
       // 绑定在同一同步任务内完成，早于任何 error 事件派发，无遗漏窗口）
@@ -3622,8 +3655,7 @@
     function toggleCommitDiffFile(header) {
       const card = header?.closest('.commit-diff-file-card');
       if (!card) return;
-      const expanded = card.classList.toggle('expanded');
-      header.setAttribute('aria-expanded', String(expanded));
+      setDiffFileExpanded(card, header, !card.classList.contains('expanded'));
     }
 
     /**
