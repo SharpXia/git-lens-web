@@ -2116,13 +2116,13 @@
 
     /**
      * 为一批提交卡片绑定事件（提交抽屉与 MR 提交列表共用同一卡片结构）：
-     * 提交抽屉的卡片固定展示详情，MR 列表仍保留点击切换详情的旧行为；SHA 点击复制完整哈希。
+     * 提交抽屉的卡片固定展示详情，点击切换 Diff；MR 列表仍保留点击切换详情的行为；SHA 点击复制完整哈希。
      * 卡片经 data-c-idx 携带本批次内的索引，与 commits 一一对齐；已绑定的
      * 元素以 data-bound 标记跳过，「加载更多」追加渲染时不重复绑定旧卡片。
      * @param {HTMLElement} rootEl - 卡片所在容器
      * @param {Array<{hash: string}>} commits - 本次渲染批次的提交数据
      * @param {boolean} [expandByDefault] - 是否默认展开本批次的新卡片
-     * @param {boolean} [keepExpanded] - 是否锁定展开状态，卡片点击不再收起详情
+     * @param {boolean} [keepExpanded] - 是否固定展开详情，并将卡片点击用于切换 Diff
      */
     function bindCommitCards(rootEl, commits, expandByDefault = false, keepExpanded = false) {
       rootEl.querySelectorAll('[data-action="commit-toggle"]').forEach((card) => {
@@ -2130,7 +2130,15 @@
         card.dataset.bound = '1';
         const commit = commits[Number(card.dataset.cIdx)];
         if (!commit) return;
-        if (!keepExpanded) card.addEventListener('click', () => toggleCommitDetail(card, commit.hash));
+        card.addEventListener('click', (event) => {
+          if (!keepExpanded) {
+            toggleCommitDetail(card, commit.hash);
+            return;
+          }
+          // 卡片内的操作控件和 Diff 阅读区域各自处理点击，选中文字时也不切换面板。
+          if (event.target.closest('button, select, input, a, .commit-diff-section') || window.getSelection()?.toString()) return;
+          toggleCommitDiff(card.querySelector('.commit-detail'), commit.hash);
+        });
         const hashEl = card.querySelector('[data-action="commit-copy-hash"]');
         if (hashEl) {
           hashEl.addEventListener('click', (event) => {
@@ -3181,7 +3189,7 @@
           chunks.push(`<div class="commit-date-group">${escapeHtml(groupLabel)}</div>`);
         }
         chunks.push(`
-        <div class="commit-item" data-action="commit-toggle" data-c-idx="${batchIdx}">
+        <div class="commit-item clickable" data-action="commit-toggle" data-c-idx="${batchIdx}">
           <div class="commit-item-header">
             <span class="commit-hash" data-action="commit-copy-hash" title="点击复制完整 SHA">${escapeHtml(c.shortHash)}</span>
             <span class="commit-time">${escapeHtml(c.relativeTime)}</span>
@@ -3296,6 +3304,7 @@
      */
     function renderCommitDetail(panel, data, errorMessage) {
       if (errorMessage) {
+        if (activeCommitDiffPanel === panel) closeActiveCommitDiff();
         panel.innerHTML = `<div class="commit-detail-error">加载详情失败：${escapeHtml(errorMessage)}</div>`;
         return;
       }
@@ -3350,6 +3359,11 @@
         ${actionsHtml}
       `;
       bindCommitDetailActions(panel, parents, detailSha);
+      // 摘要尚在队列中时也接受卡片点击；只为最后选中的提交继续打开 Diff。
+      if (activeCommitDiffPanel === panel) {
+        closeActiveCommitDiff();
+        if (diffToggleHtml) toggleCommitDiff(panel, detailSha);
+      }
     }
 
     /* 绑定提交详情面板内的动态动作：父提交复制、查看 Diff、目标选择器、Cherry-pick/Revert。
@@ -3487,14 +3501,18 @@
       if (!worktreePath) return;
 
       const toggleBtn = panel.querySelector('.commit-diff-toggle-btn');
-      // 已展开则整块收起，按钮文案复位
-      const existing = panel.querySelector('.commit-diff-section');
-      if (existing) {
+      // 包括等待摘要加载的提交：再次点击可取消打开，切换提交可丢弃上一次意图。
+      if (activeCommitDiffPanel === panel) {
         closeActiveCommitDiff();
         return;
       }
       closeActiveCommitDiff();
       activeCommitDiffPanel = panel;
+      if (panel.querySelector('.commit-detail-loading')) return;
+      if (!toggleBtn) {
+        closeActiveCommitDiff();
+        return;
+      }
       if (toggleBtn) toggleBtn.textContent = '收起 Diff';
 
       const section = document.createElement('div');

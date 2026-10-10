@@ -1387,7 +1387,7 @@
       white-space: pre-wrap;
       word-break: break-word;
     }
-    /* 提交卡片可点击展开详情 */
+    /* 提交卡片可点击查看详情或切换 Diff。 */
     .commit-item.clickable {
       cursor: pointer;
     }
