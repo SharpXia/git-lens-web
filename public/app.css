@@ -1353,11 +1353,14 @@
       flex-shrink: 0;
     }
     .commits-drawer-body {
+      /* 顶部内边距同时是 Diff 吸顶标题负偏移的基准：sticky 的 top:0 钉在内容区
+         边缘而非滚动区上缘，需用 -1*内边距 抵消，标题才能贴住抽屉可视区顶部 */
+      --drawer-body-pad-top: 12px;
       flex: 1;
       min-height: 0;
       overflow-y: auto;
       overscroll-behavior-y: contain;
-      padding: 12px 20px;
+      padding: var(--drawer-body-pad-top) 20px;
     }
     .commit-item {
       padding: 10px 12px;
@@ -1547,7 +1550,8 @@
     .commit-diff-file-card.expanded .commit-diff-file-header {
       margin-bottom: 6px;
       position: sticky;
-      top: 0;
+      /* 负偏移抵消滚动容器顶部内边距，吸顶标题贴住抽屉可视区上缘而非内容区边缘 */
+      top: calc(-1 * var(--drawer-body-pad-top, 0px));
       z-index: 10;
       box-shadow: 0 1px 0 var(--border);
     }
