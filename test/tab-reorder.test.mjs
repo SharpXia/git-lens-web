@@ -65,10 +65,14 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
   }
 
   // 合成标准拖放事件，经过真实标签条、preload、IPC 和主进程，不直接改排序。
+  // target 为数字时是 .tab 下标；null 是 #tabs 空白区；字符串是元素 id（#bar
+  // 内的栏内空白，如 new-tab），覆盖整条标签栏投放区的落位语义。
   async function drag(from, target, side = 'left', cancel = false) {
     return bar.evaluate(({ from, target, side, cancel }) => {
       const source = document.querySelectorAll('.tab')[from];
-      const dest = target === null ? document.getElementById('tabs') : document.querySelectorAll('.tab')[target];
+      const dest = target === null ? document.getElementById('tabs')
+        : typeof target === 'string' ? document.getElementById(target)
+          : document.querySelectorAll('.tab')[target];
       const rect = dest.getBoundingClientRect();
       const clientX = side === 'left' ? rect.left + 2 : rect.right - 2;
       const dataTransfer = new DataTransfer();
@@ -118,6 +122,16 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
       assert.deepEqual(await drag(2, 0, 'left', true), { indicatorVisible: true, cleaned: true });
       await expectOrder([b, c, a], b);
       await drag(1, 2);
+      await expectOrder([b, c, a], b);
+    });
+
+    await t.test('整条标签栏都是投放区：栏内空白松手按插入线落位（1.1.2 修复）', async () => {
+      // 首标签拖到「+ 新建」按钮上松手：#bar 整体退出窗口拖动区后，栏内空白
+      // 不再吞掉 dragover/drop，按末尾语义落位（修复前此处松手静默失效）。
+      assert.deepEqual(await drag(0, 'new-tab'), { indicatorVisible: true, cleaned: true });
+      await expectOrder([c, a, b], b);
+      // 末标签拖回 darwin 红绿灯安全区（#bar 左侧留白）：按首位语义落位复原。
+      assert.deepEqual(await drag(2, 'bar', 'left'), { indicatorVisible: true, cleaned: true });
       await expectOrder([b, c, a], b);
     });
 
