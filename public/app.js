@@ -4507,7 +4507,8 @@
       'apply-commits-filters': () => applyCommitsFilters(),
       'clear-commits-filters': () => clearCommitsFilters(),
       'load-more-commits': () => loadMoreCommits(),
-      'scroll-to-top': () => scrollToTop()
+      'scroll-to-top': () => scrollToTop(),
+      'commits-back-to-top': (el) => scrollCommitsDrawerToTop(el)
     };
     document.addEventListener('click', (e) => {
       const el = e.target instanceof Element ? e.target.closest('[data-action]') : null;
@@ -4865,6 +4866,23 @@
         btn.classList.remove('show');
       }
     }, { passive: true });
+
+    // 抽屉内回到顶部：滚动区超过同一阈值时显示右下角悬浮按钮，点击平滑滚回顶部。
+    // 提交记录抽屉与 MR 详情抽屉共用 .commits-drawer 结构。
+    // 抽屉标记位于脚本之后，初始化时 DOM 尚未解析，故 scroll 用 document 捕获委托
+    // （scroll 事件不冒泡但可捕获），与上方点击委托同一模式
+    function scrollCommitsDrawerToTop(el) {
+      el.closest('.commits-drawer')?.querySelector('.commits-drawer-body')
+        ?.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    document.addEventListener('scroll', (e) => {
+      const body = e.target instanceof Element ? e.target.closest('.commits-drawer-body') : null;
+      if (!body) return;
+      const btn = body.closest('.commits-drawer')?.querySelector('.commits-back-to-top-btn');
+      if (!btn) return;
+      btn.classList.toggle('show', body.scrollTop > 240);
+    }, { capture: true, passive: true });
 
     document.addEventListener('keydown', (e) => {
       // Escape 优先关闭可搜索选择器的下拉面板

@@ -1217,6 +1217,14 @@
     .back-to-top-btn:active {
       transform: translateY(0) scale(0.95);
     }
+    /* 抽屉内的回到顶部：fixed 改为锚定抽屉容器，悬浮在滚动区右下角、footer 之上，
+       避免遮挡「加载更多」按钮；显隐沿用 .show 类与主按钮同一阈值 */
+    .commits-drawer .back-to-top-btn {
+      position: absolute;
+      right: 20px;
+      bottom: 84px;
+      z-index: 30;
+    }
 
     /* ---- 提交记录抽屉 ---- */
     .drawer-overlay {
