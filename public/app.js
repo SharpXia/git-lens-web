@@ -2138,13 +2138,7 @@
           }
           // 卡片内的操作控件和 Diff 阅读区域各自处理点击，选中文字时也不切换面板。
           if (event.target.closest('button, select, input, a, .commit-diff-section') || window.getSelection()?.toString()) return;
-          // 「折叠全部」后卡片没有详情面板：首次点击先展开详情，之后点击才切换 Diff。
-          const detailPanel = card.querySelector('.commit-detail');
-          if (!detailPanel) {
-            toggleCommitDetail(card, commit.hash);
-            return;
-          }
-          toggleCommitDiff(detailPanel, commit.hash);
+          toggleCommitDiff(card.querySelector('.commit-detail'), commit.hash);
         });
         const hashEl = card.querySelector('[data-action="commit-copy-hash"]');
         if (hashEl) {
@@ -2787,7 +2781,6 @@
       isOpen: false,
       isFullscreen: false,
       lastGroupLabel: null, // 上一个提交所属的日期分组标签, 「加载更多」追加时据此判断是否插入新组头
-      collapsedAll: false, // 折叠全部模式：详情面板收起、「加载更多」的新卡片不再默认展开
       filters: { author: '', grep: '', since: '', until: '' }
     };
     let commitsDrawerReqSeq = 0;
@@ -2797,8 +2790,9 @@
     let drawerPageScrollLockCount = 0;
     let drawerPageScrollLockY = 0;
 
-    // 同一时间只保留一个提交 Diff 区块，切换提交时自动收起上一个区块。
-    let activeCommitDiffPanel = null;
+    // 提交 Diff 支持多开，展开状态由各面板内的 Diff 区块自身表达；
+    // 此集合仅记录「摘要加载中点击了查看 Diff」的面板，摘要渲染完成后自动打开，再次点击可取消
+    const pendingCommitDiffPanels = new Set();
 
     // 提交详情缓存：同一提交内容不可变，收起再展开不重复请求。
     // 键为 `${worktreePath}::${sha}`，避免不同仓库对同一短 SHA 解析出不同提交的歧义。
@@ -2843,11 +2837,10 @@
     }
 
     async function openCommitsDrawer(worktreePath, fullHistory = false, pushHistory = true, ref = '', baseRef = '') {
-      closeActiveCommitDiff();
+      closeAllCommitDiffs();
       commitsDrawerState = {
         worktreePath, branch: null, base: null, baseAvailable: true, fullHistory, isFullHistory: false, isMainHistory: false, head: null,
         totalCommits: 0, loadedCount: 0, limit: 30, isOpen: true, isFullscreen: false, lastGroupLabel: null,
-        collapsedAll: false, // 每次打开新抽屉都恢复默认全展开
         ref, // 分支查看模式：非空时以后端 options.ref 为提交顶点（分支列表入口）
         baseRef, // Diff 入口使用当前比对基准，避免抽屉退回默认主分支
         filters: { author: '', grep: '', since: '', until: '' } // 每次打开新 worktree 都重置过滤条件
@@ -2884,7 +2877,7 @@
 
     function closeCommitsDrawer(pushHistory = true) {
       if (!commitsDrawerState.isOpen) return;
-      closeActiveCommitDiff();
+      closeAllCommitDiffs();
       commitsDrawerState.isOpen = false;
       commitsDrawerReqSeq++; // 使在途请求失效
       syncStateToUrl(pushHistory);
@@ -3047,11 +3040,11 @@
         <span>${scopeText}</span>
         ${renderAheadBehindBadgeHtml()}
         ${fullHistoryButton}
-        <button type="button" class="btn-outline commit-collapse-all-btn" data-action="commits-collapse-all" title="收起全部提交的详情面板">折叠全部</button>
+        <button type="button" class="btn-outline commit-collapse-all-btn" data-action="commits-collapse-all" title="收起全部已展开的 Diff">折叠全部</button>
       `;
       bindActions(metaEl, {
         'commits-history': (el) => switchCommitsHistory(el.dataset.full === '1'),
-        'commits-collapse-all': () => collapseAllCommitItems()
+        'commits-collapse-all': () => collapseAllCommitDiffs()
       });
     }
 
@@ -3188,7 +3181,7 @@
       // 首屏（打开抽屉、切换全量/领先视图、应用/清空过滤、重试）一律重置分组游标，从头分组
       if (isFirstLoad) {
         commitsDrawerState.lastGroupLabel = null;
-        closeActiveCommitDiff();
+        closeAllCommitDiffs();
       }
 
       if (isFirstLoad && commits.length === 0) {
@@ -3253,26 +3246,22 @@
       } else {
         body.insertAdjacentHTML('beforeend', html);
       }
-      // 写入后按批次绑定闭包（hash 不经内联字符串往返）；追加加载时旧卡片已被 data-bound 跳过。
-      // 折叠全部模式下新批次不再默认展开详情，点击卡片先展开详情
-      bindCommitCards(body, commits, !commitsDrawerState.collapsedAll, true);
+      // 写入后按批次绑定闭包（hash 不经内联字符串往返）；追加加载时旧卡片已被 data-bound 跳过
+      bindCommitCards(body, commits, true, true);
     }
 
     /**
-     * 折叠全部：收起抽屉内所有提交的详情面板并进入折叠模式，
-     * 「加载更多」追加的卡片同样保持收起；再次点击折叠卡片先展开详情。
-     * 锚定视口顶部可见的第一个提交卡片，折叠后补偿滚动，避免整页跳动。
+     * 折叠全部：收起抽屉内所有已展开的提交 Diff（详情面板保留）。
+     * 多个区块同时移除同样会使下方内容整体位移，锚定视口顶部可见卡片并补偿滚动。
      */
-    function collapseAllCommitItems() {
+    function collapseAllCommitDiffs() {
       const body = document.getElementById('commitsDrawerBody');
       if (!body) return;
-      closeActiveCommitDiff();
       const bodyTop = body.getBoundingClientRect().top;
       const anchor = [...body.querySelectorAll('.commit-item')]
         .find((item) => item.getBoundingClientRect().bottom > bodyTop + 1);
       const anchorTop = anchor ? anchor.getBoundingClientRect().top : 0;
-      commitsDrawerState.collapsedAll = true;
-      body.querySelectorAll('.commit-item .commit-detail').forEach((panel) => panel.remove());
+      closeAllCommitDiffs();
       if (anchor) {
         const delta = anchor.getBoundingClientRect().top - anchorTop;
         if (delta !== 0) body.scrollTop += delta;
@@ -3303,7 +3292,7 @@
 
       const existingPanel = card.querySelector('.commit-detail');
       if (existingPanel) {
-        if (activeCommitDiffPanel === existingPanel) closeActiveCommitDiff();
+        pendingCommitDiffPanels.delete(existingPanel);
         existingPanel.remove();
         return;
       }
@@ -3372,7 +3361,7 @@
      */
     function renderCommitDetail(panel, data, errorMessage) {
       if (errorMessage) {
-        if (activeCommitDiffPanel === panel) closeActiveCommitDiff();
+        pendingCommitDiffPanels.delete(panel);
         panel.innerHTML = `<div class="commit-detail-error">加载详情失败：${escapeHtml(errorMessage)}</div>`;
         return;
       }
@@ -3427,9 +3416,9 @@
         ${actionsHtml}
       `;
       bindCommitDetailActions(panel, parents, detailSha);
-      // 摘要尚在队列中时也接受卡片点击；只为最后选中的提交继续打开 Diff。
-      if (activeCommitDiffPanel === panel) {
-        closeActiveCommitDiff();
+      // 摘要加载期间点击过卡片：摘要就绪后自动打开 Diff；多个提交可各自持有该意图
+      if (pendingCommitDiffPanels.has(panel)) {
+        pendingCommitDiffPanels.delete(panel);
         if (diffToggleHtml) toggleCommitDiff(panel, detailSha);
       }
     }
@@ -3556,24 +3545,11 @@
 
     /**
      * 切换提交详情面板内「查看 Diff」区块的展开/收起。首次展开懒加载 GET /api/commit-diff，
-     * 结果写入独立缓存避免重复请求；再次点击整块收起。
+     * 结果写入独立缓存避免重复请求。多个提交的 Diff 可同时展开互不影响；
+     * 区块挂在卡片自身详情之下，开合都不改变卡片位置，无需滚动补偿。
      * @param {HTMLElement} panel - 提交详情面板容器
      * @param {string} sha - 提交完整 SHA（内联 onclick 只传十六进制）
      */
-    /**
-     * 关闭旧 Diff 区块后按锚点位移补偿抽屉滚动：区块被移除会使其下方内容整体位移，
-     * 这是「同时只展开一个 Diff」语义下切换提交时页面抖动的来源。
-     * 以当前交互的提交卡片为锚点，DOM 变更后把卡片推回点击时的视口位置。
-     * @param {HTMLElement|null} card - 当前交互的提交卡片；不在抽屉滚动容器内时跳过补偿
-     * @param {number} cardTop - DOM 变更前卡片的视口 top
-     */
-    function restoreDrawerScrollAfterDiffClose(card, cardTop) {
-      const body = card?.closest('.commits-drawer-body');
-      if (!body) return;
-      const delta = card.getBoundingClientRect().top - cardTop;
-      if (delta !== 0) body.scrollTop += delta;
-    }
-
     async function toggleCommitDiff(panel, sha) {
       if (!panel) return;
       // 内联 onclick 参数只放行十六进制 SHA，杜绝任意字符串进入事件处理
@@ -3582,24 +3558,24 @@
       const worktreePath = getCommitDetailContextPath();
       if (!worktreePath) return;
 
+      // 已展开的 Diff 原地收起
+      const existing = panel.querySelector('.commit-diff-section');
+      if (existing) {
+        existing.remove();
+        const btn = panel.querySelector('.commit-diff-toggle-btn');
+        if (btn) btn.textContent = '查看 Diff';
+        return;
+      }
+      // 摘要尚在加载：记录意图待摘要渲染完成后自动打开；再次点击取消意图
+      if (panel.querySelector('.commit-detail-loading')) {
+        if (pendingCommitDiffPanels.has(panel)) pendingCommitDiffPanels.delete(panel);
+        else pendingCommitDiffPanels.add(panel);
+        return;
+      }
       const toggleBtn = panel.querySelector('.commit-diff-toggle-btn');
-      const card = panel.closest('.commit-item');
-      const cardTop = card ? card.getBoundingClientRect().top : 0;
-      // 包括等待摘要加载的提交：再次点击可取消打开，切换提交可丢弃上一次意图。
-      if (activeCommitDiffPanel === panel) {
-        closeActiveCommitDiff();
-        restoreDrawerScrollAfterDiffClose(card, cardTop);
-        return;
-      }
-      closeActiveCommitDiff();
-      restoreDrawerScrollAfterDiffClose(card, cardTop);
-      activeCommitDiffPanel = panel;
-      if (panel.querySelector('.commit-detail-loading')) return;
-      if (!toggleBtn) {
-        closeActiveCommitDiff();
-        return;
-      }
-      if (toggleBtn) toggleBtn.textContent = '收起 Diff';
+      // 无文件变更的提交没有 Diff 入口
+      if (!toggleBtn) return;
+      toggleBtn.textContent = '收起 Diff';
 
       const section = document.createElement('div');
       section.className = 'commit-diff-section';
@@ -3712,16 +3688,15 @@
     }
 
     /**
-     * 收起当前活动的提交 Diff 区块，并恢复该提交的查看按钮文案。
+     * 收起全部已展开的提交 Diff 并清空待打开意图，恢复各查看按钮文案。
+     * 「折叠全部」按钮与抽屉关闭/重渲染共用；Diff 区块与按钮一一对应，逐对复位。
      */
-    function closeActiveCommitDiff() {
-      const panel = activeCommitDiffPanel;
-      if (panel) {
-        panel.querySelector('.commit-diff-section')?.remove();
-        const toggleBtn = panel.querySelector('.commit-diff-toggle-btn');
-        if (toggleBtn) toggleBtn.textContent = '查看 Diff';
-      }
-      activeCommitDiffPanel = null;
+    function closeAllCommitDiffs() {
+      document.querySelectorAll('.commits-drawer-body .commit-diff-section').forEach((section) => section.remove());
+      document.querySelectorAll('.commits-drawer-body .commit-diff-toggle-btn').forEach((btn) => {
+        btn.textContent = '查看 Diff';
+      });
+      pendingCommitDiffPanels.clear();
     }
 
     function renderCommitsFooter(data) {
