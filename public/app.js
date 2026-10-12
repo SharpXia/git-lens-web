@@ -3525,6 +3525,20 @@
      * @param {HTMLElement} panel - 提交详情面板容器
      * @param {string} sha - 提交完整 SHA（内联 onclick 只传十六进制）
      */
+    /**
+     * 关闭旧 Diff 区块后按锚点位移补偿抽屉滚动：区块被移除会使其下方内容整体位移，
+     * 这是「同时只展开一个 Diff」语义下切换提交时页面抖动的来源。
+     * 以当前交互的提交卡片为锚点，DOM 变更后把卡片推回点击时的视口位置。
+     * @param {HTMLElement|null} card - 当前交互的提交卡片；不在抽屉滚动容器内时跳过补偿
+     * @param {number} cardTop - DOM 变更前卡片的视口 top
+     */
+    function restoreDrawerScrollAfterDiffClose(card, cardTop) {
+      const body = card?.closest('.commits-drawer-body');
+      if (!body) return;
+      const delta = card.getBoundingClientRect().top - cardTop;
+      if (delta !== 0) body.scrollTop += delta;
+    }
+
     async function toggleCommitDiff(panel, sha) {
       if (!panel) return;
       // 内联 onclick 参数只放行十六进制 SHA，杜绝任意字符串进入事件处理
@@ -3534,12 +3548,16 @@
       if (!worktreePath) return;
 
       const toggleBtn = panel.querySelector('.commit-diff-toggle-btn');
+      const card = panel.closest('.commit-item');
+      const cardTop = card ? card.getBoundingClientRect().top : 0;
       // 包括等待摘要加载的提交：再次点击可取消打开，切换提交可丢弃上一次意图。
       if (activeCommitDiffPanel === panel) {
         closeActiveCommitDiff();
+        restoreDrawerScrollAfterDiffClose(card, cardTop);
         return;
       }
       closeActiveCommitDiff();
+      restoreDrawerScrollAfterDiffClose(card, cardTop);
       activeCommitDiffPanel = panel;
       if (panel.querySelector('.commit-detail-loading')) return;
       if (!toggleBtn) {
