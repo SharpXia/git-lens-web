@@ -1352,6 +1352,13 @@
       font-size: 12px;
       flex-shrink: 0;
     }
+    /* 折叠全部：固定在 meta 行最右侧，与过滤行按钮同尺寸保持视觉一致 */
+    .commit-collapse-all-btn {
+      margin-left: auto;
+      flex-shrink: 0;
+      padding: 3px 10px;
+      font-size: 12px;
+    }
     .commits-drawer-body {
       /* 顶部内边距同时是 Diff 吸顶标题负偏移的基准：sticky 的 top:0 钉在内容区
          边缘而非滚动区上缘，需用 -1*内边距 抵消，标题才能贴住抽屉可视区顶部 */

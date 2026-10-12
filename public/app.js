@@ -2138,7 +2138,13 @@
           }
           // 卡片内的操作控件和 Diff 阅读区域各自处理点击，选中文字时也不切换面板。
           if (event.target.closest('button, select, input, a, .commit-diff-section') || window.getSelection()?.toString()) return;
-          toggleCommitDiff(card.querySelector('.commit-detail'), commit.hash);
+          // 「折叠全部」后卡片没有详情面板：首次点击先展开详情，之后点击才切换 Diff。
+          const detailPanel = card.querySelector('.commit-detail');
+          if (!detailPanel) {
+            toggleCommitDetail(card, commit.hash);
+            return;
+          }
+          toggleCommitDiff(detailPanel, commit.hash);
         });
         const hashEl = card.querySelector('[data-action="commit-copy-hash"]');
         if (hashEl) {
@@ -2781,6 +2787,7 @@
       isOpen: false,
       isFullscreen: false,
       lastGroupLabel: null, // 上一个提交所属的日期分组标签, 「加载更多」追加时据此判断是否插入新组头
+      collapsedAll: false, // 折叠全部模式：详情面板收起、「加载更多」的新卡片不再默认展开
       filters: { author: '', grep: '', since: '', until: '' }
     };
     let commitsDrawerReqSeq = 0;
@@ -2840,6 +2847,7 @@
       commitsDrawerState = {
         worktreePath, branch: null, base: null, baseAvailable: true, fullHistory, isFullHistory: false, isMainHistory: false, head: null,
         totalCommits: 0, loadedCount: 0, limit: 30, isOpen: true, isFullscreen: false, lastGroupLabel: null,
+        collapsedAll: false, // 每次打开新抽屉都恢复默认全展开
         ref, // 分支查看模式：非空时以后端 options.ref 为提交顶点（分支列表入口）
         baseRef, // Diff 入口使用当前比对基准，避免抽屉退回默认主分支
         filters: { author: '', grep: '', since: '', until: '' } // 每次打开新 worktree 都重置过滤条件
@@ -3039,9 +3047,11 @@
         <span>${scopeText}</span>
         ${renderAheadBehindBadgeHtml()}
         ${fullHistoryButton}
+        <button type="button" class="btn-outline commit-collapse-all-btn" data-action="commits-collapse-all" title="收起全部提交的详情面板">折叠全部</button>
       `;
       bindActions(metaEl, {
-        'commits-history': (el) => switchCommitsHistory(el.dataset.full === '1')
+        'commits-history': (el) => switchCommitsHistory(el.dataset.full === '1'),
+        'commits-collapse-all': () => collapseAllCommitItems()
       });
     }
 
@@ -3103,7 +3113,10 @@
       if (oldRaw) oldRaw.remove();
       const html = renderAheadBehindBadgeHtml();
       if (!html) return;
-      const btn = metaEl.querySelector('button');
+      // 徽章插在历史切换按钮之前；主干历史模式无该按钮时退而插在「折叠全部」之前，
+      // 保证徽章永远不出现在最右侧的折叠全部按钮右边
+      const btn = metaEl.querySelector('[data-action="commits-history"]')
+        || metaEl.querySelector('.commit-collapse-all-btn');
       if (btn) btn.insertAdjacentHTML('beforebegin', html);
       else metaEl.insertAdjacentHTML('beforeend', html);
     }
@@ -3240,8 +3253,30 @@
       } else {
         body.insertAdjacentHTML('beforeend', html);
       }
-      // 写入后按批次绑定闭包（hash 不经内联字符串往返）；追加加载时旧卡片已被 data-bound 跳过
-      bindCommitCards(body, commits, true, true);
+      // 写入后按批次绑定闭包（hash 不经内联字符串往返）；追加加载时旧卡片已被 data-bound 跳过。
+      // 折叠全部模式下新批次不再默认展开详情，点击卡片先展开详情
+      bindCommitCards(body, commits, !commitsDrawerState.collapsedAll, true);
+    }
+
+    /**
+     * 折叠全部：收起抽屉内所有提交的详情面板并进入折叠模式，
+     * 「加载更多」追加的卡片同样保持收起；再次点击折叠卡片先展开详情。
+     * 锚定视口顶部可见的第一个提交卡片，折叠后补偿滚动，避免整页跳动。
+     */
+    function collapseAllCommitItems() {
+      const body = document.getElementById('commitsDrawerBody');
+      if (!body) return;
+      closeActiveCommitDiff();
+      const bodyTop = body.getBoundingClientRect().top;
+      const anchor = [...body.querySelectorAll('.commit-item')]
+        .find((item) => item.getBoundingClientRect().bottom > bodyTop + 1);
+      const anchorTop = anchor ? anchor.getBoundingClientRect().top : 0;
+      commitsDrawerState.collapsedAll = true;
+      body.querySelectorAll('.commit-item .commit-detail').forEach((panel) => panel.remove());
+      if (anchor) {
+        const delta = anchor.getBoundingClientRect().top - anchorTop;
+        if (delta !== 0) body.scrollTop += delta;
+      }
     }
 
     /**
