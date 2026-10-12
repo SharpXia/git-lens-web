@@ -718,6 +718,8 @@
       margin-bottom: 12px;
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
       transition: all 0.2s ease;
+      flex-wrap: wrap;
+      gap: 8px;
     }
     .diff-tools-left {
       font-size: 14px;
@@ -726,6 +728,7 @@
       display: flex;
       align-items: center;
       gap: 12px;
+      flex-wrap: wrap;
     }
     .diff-tools-right {
       display: flex;
@@ -767,7 +770,8 @@
       border: 1px solid var(--border);
       margin-bottom: 12px;
       border-radius: 6px;
-      overflow: hidden;
+      /* clip 保留圆角裁切，但不创建阻断标题吸顶的滚动容器。 */
+      overflow: clip;
       transition: border-color 0.2s;
     }
     .file-diff-card:hover {
@@ -786,12 +790,20 @@
       user-select: none;
       border-bottom: 1px solid transparent;
       transition: background 0.15s;
+      gap: 12px;
     }
     .file-header:hover {
       background: #1c2128;
     }
     .file-diff-card.expanded .file-header {
       border-bottom-color: var(--border);
+      position: sticky;
+      top: var(--diff-toolbar-height, 0px);
+      z-index: 10;
+    }
+    .file-header:focus-visible {
+      outline: 1px solid var(--accent);
+      outline-offset: -2px;
     }
     .file-title-left {
       display: flex;
@@ -801,6 +813,16 @@
       font-weight: 600;
       color: var(--text-bright);
       font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      min-width: 0;
+    }
+    .file-title-left > :not(.file-path),
+    .file-header > :last-child {
+      flex-shrink: 0;
+    }
+    .file-path {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .file-status-badge {
       font-size: 11px;
@@ -1195,6 +1217,14 @@
     .back-to-top-btn:active {
       transform: translateY(0) scale(0.95);
     }
+    /* 抽屉内的回到顶部：fixed 改为锚定抽屉容器，悬浮在滚动区右下角、footer 之上，
+       避免遮挡「加载更多」按钮；显隐沿用 .show 类与主按钮同一阈值 */
+    .commits-drawer .back-to-top-btn {
+      position: absolute;
+      right: 20px;
+      bottom: 84px;
+      z-index: 30;
+    }
 
     /* ---- 提交记录抽屉 ---- */
     .drawer-overlay {
@@ -1330,12 +1360,22 @@
       font-size: 12px;
       flex-shrink: 0;
     }
+    /* 折叠全部：固定在 meta 行最右侧，与过滤行按钮同尺寸保持视觉一致 */
+    .commit-collapse-all-btn {
+      margin-left: auto;
+      flex-shrink: 0;
+      padding: 3px 10px;
+      font-size: 12px;
+    }
     .commits-drawer-body {
+      /* 顶部内边距同时是 Diff 吸顶标题负偏移的基准：sticky 的 top:0 钉在内容区
+         边缘而非滚动区上缘，需用 -1*内边距 抵消，标题才能贴住抽屉可视区顶部 */
+      --drawer-body-pad-top: 12px;
       flex: 1;
       min-height: 0;
       overflow-y: auto;
       overscroll-behavior-y: contain;
-      padding: 12px 20px;
+      padding: var(--drawer-body-pad-top) 20px;
     }
     .commit-item {
       padding: 10px 12px;
@@ -1387,7 +1427,7 @@
       white-space: pre-wrap;
       word-break: break-word;
     }
-    /* 提交卡片可点击展开详情 */
+    /* 提交卡片可点击查看详情或切换 Diff。 */
     .commit-item.clickable {
       cursor: pointer;
     }
@@ -1500,11 +1540,10 @@
     }
     .commit-diff-file-card {
       margin-bottom: 8px;
-      padding: 6px 8px;
       background: #090d13;
       border: 1px solid var(--border);
       border-radius: 6px;
-      overflow: hidden;
+      overflow: clip;
     }
     .commit-diff-file-header {
       display: flex;
@@ -1512,7 +1551,8 @@
       align-items: baseline;
       gap: 8px;
       margin-bottom: 0;
-      padding: 2px 0;
+      padding: 8px;
+      background: #090d13;
       font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
       font-size: 12px;
       cursor: pointer;
@@ -1524,6 +1564,11 @@
     }
     .commit-diff-file-card.expanded .commit-diff-file-header {
       margin-bottom: 6px;
+      position: sticky;
+      /* 负偏移抵消滚动容器顶部内边距，吸顶标题贴住抽屉可视区上缘而非内容区边缘 */
+      top: calc(-1 * var(--drawer-body-pad-top, 0px));
+      z-index: 10;
+      box-shadow: 0 1px 0 var(--border);
     }
     .commit-diff-file-arrow {
       flex: 0 0 auto;
@@ -1536,6 +1581,7 @@
     }
     .commit-diff-file-body {
       display: none;
+      padding: 0 8px 6px;
     }
     .commit-diff-file-card.expanded .commit-diff-file-body {
       display: block;
