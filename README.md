@@ -227,6 +227,8 @@ docs/images/            README 界面流程动图
 运行仓库测试：
 
 ```bash
+# 首次运行时安装图片预览回归测试使用的浏览器
+npx playwright install chromium
 node --test
 ```
 

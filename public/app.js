@@ -2224,19 +2224,12 @@
     function renderFileBodyContent(file, sourceRef, targetRef, repoPath, worktreePath) {
       const isImg = file.isImage || isImageFilePath(file.filePath);
       if (isImg) {
-        // 构建左右比对 URL
-        let baseImgUrl = '';
-        let targetImgUrl = '';
-
-        if (sourceRef && targetRef) {
-          // 两个 Worktree 之间对比
-          baseImgUrl = `/api/raw-file?repoPath=${encodeURIComponent(repoPath)}&revision=${encodeURIComponent(sourceRef)}&filePath=${encodeURIComponent(file.filePath)}`;
-          targetImgUrl = `/api/raw-file?repoPath=${encodeURIComponent(repoPath)}&revision=${encodeURIComponent(targetRef)}&filePath=${encodeURIComponent(file.filePath)}`;
-        } else if (worktreePath) {
-          // 本地未提交代码修改对比 (HEAD vs 工作区当前文件)
-          baseImgUrl = `/api/raw-file?repoPath=${encodeURIComponent(repoPath || worktreePath)}&revision=HEAD&filePath=${encodeURIComponent(file.filePath)}&worktreePath=${encodeURIComponent(worktreePath)}`;
-          targetImgUrl = `/api/raw-file?repoPath=${encodeURIComponent(repoPath || worktreePath)}&revision=WORKTREE&filePath=${encodeURIComponent(file.filePath)}&worktreePath=${encodeURIComponent(worktreePath)}`;
-        }
+        // 工作区模式即使有两侧提交 SHA，也必须读取磁盘，才能展示未提交及新增图片。
+        const rawFileUrl = `/api/raw-file?repoPath=${encodeURIComponent(repoPath || worktreePath)}&filePath=${encodeURIComponent(file.filePath)}`;
+        const baseImgUrl = `${rawFileUrl}&revision=${encodeURIComponent(sourceRef)}`;
+        const targetImgUrl = worktreePath
+          ? `${rawFileUrl}&revision=WORKTREE&worktreePath=${encodeURIComponent(worktreePath)}`
+          : `${rawFileUrl}&revision=${encodeURIComponent(targetRef)}`;
 
         return `
           <div class="image-diff-container">
@@ -2423,10 +2416,12 @@
         }
       });
 
-      // 文件内容对比的 revision：worktree 与 branch 类型都优先用 head SHA；
-      // branch 类型缺 head 时退回分支名（/api/raw-file 的 revision 参数可解析分支名）
-      const sourceRef = diff.source.head || diff.source.branch || 'HEAD';
+      // 图片沿用文本 Diff 的实际基准；仅未提交比较 Target HEAD，全量/已提交可能比较共同祖先。
       const targetRef = diff.target.head || diff.target.branch || 'HEAD';
+      const sourceRef = diff.baseRevision || (effectiveMode === 'uncommitted'
+        ? targetRef
+        : diff.source.head || diff.source.branch || 'HEAD');
+      const imageWorktreePath = effectiveMode === 'committed' ? null : stashWorktreePath;
 
       // 优先展示文本代码变更，将图片及媒体文件置底展示
       const sortedDiffFiles = [...files].sort((a, b) => {
@@ -2442,7 +2437,7 @@
           sourceRef,
           targetRef,
           currentRepo,
-          effectiveMode === 'uncommitted' ? stashWorktreePath : null
+          imageWorktreePath
         );
         const isImg = f.isImage || isImageFilePath(f.filePath);
 
