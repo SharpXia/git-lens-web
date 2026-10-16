@@ -1052,7 +1052,7 @@ async function resolveRefSelector(repoPath, selector, worktrees, worktreeRealPat
  * @param {{kind: 'worktree'|'branch', value: string}} source - 来源 ref 选择器
  * @param {{kind: 'worktree'|'branch', value: string}} target - 目标 ref 选择器
  * @param {string|null} [requestedMode] - 请求模式 'uncommitted'|'all'|'committed'
- * @returns {Promise<object>} 与 getWorktreeDiff 同构的 Diff 结果（source/target 新增 kind 字段）
+ * @returns {Promise<object>} 与 getWorktreeDiff 同构的 Diff 结果，baseRevision 为当前文件 Diff 实际基准的提交 SHA
  */
 export async function getRefDiff(repoPath, source, target, requestedMode = null) {
   validateRefSelector(source, 'source');
@@ -1077,6 +1077,7 @@ export async function getRefDiff(repoPath, source, target, requestedMode = null)
       isSameWorktree: true,
       source: buildWorktreeMeta(sourceInfo.worktree),
       target: buildWorktreeMeta(targetInfo.worktree),
+      baseRevision: targetInfo.worktree.head,
       ahead: 0,
       behind: 0,
       effectiveMode: 'uncommitted',
@@ -1100,6 +1101,7 @@ export async function getRefDiff(repoPath, source, target, requestedMode = null)
     return {
       source: buildBranchMeta(sourceInfo),
       target: buildBranchMeta(targetInfo),
+      baseRevision: targetInfo.head,
       ahead: 0,
       behind: 0,
       historyAhead: 0,
@@ -1124,6 +1126,8 @@ export async function getRefDiff(repoPath, source, target, requestedMode = null)
 
   const sourceRef = sourceInfo.refName;
   const targetRef = targetInfo.refName;
+  const sourceHead = sourceInfo.head || sourceInfo.worktree.head;
+  const targetHead = targetInfo.head || targetInfo.worktree.head;
   const targetIsWorktree = targetInfo.kind === 'worktree';
 
   // 提交计数、内容吸收与历史整合统一由同一个比较器计算，避免 Diff 与其它面板
@@ -1140,14 +1144,15 @@ export async function getRefDiff(repoPath, source, target, requestedMode = null)
   // 文件 Diff 只展示 Target 一侧的提交。Target 没有领先提交、或改动已被 Source
   // 吸收（cherry-pick/revert 抵消/squash）时，不产生属于 Target 的文件 Diff。
   const hasTargetCommittedChanges = comparison.hasUniqueCommittedChanges;
-  let targetDiffBase = targetRef;
+  // 固定到本次比较的提交，供图片预览复用同一基准，避免分支移动后读到其它版本。
+  let targetDiffBase = targetHead;
   if (hasTargetCommittedChanges) {
     try {
       // 分叉场景以共同祖先为基准，避免把 Main 独有提交混入 Target Diff。
       targetDiffBase = await runGit(repoPath, ['merge-base', sourceRef, targetRef]);
     } catch {
       // 无共同祖先时没有三点语义可用，退回 Source 作为比较基准。
-      targetDiffBase = sourceRef;
+      targetDiffBase = sourceHead;
     }
   }
 
@@ -1273,6 +1278,7 @@ export async function getRefDiff(repoPath, source, target, requestedMode = null)
   return {
     source: sourceInfo.kind === 'worktree' ? buildWorktreeMeta(sourceInfo.worktree) : buildBranchMeta(sourceInfo),
     target: targetInfo.kind === 'worktree' ? buildWorktreeMeta(targetInfo.worktree) : buildBranchMeta(targetInfo),
+    baseRevision: effectiveMode === 'uncommitted' ? targetHead : targetDiffBase,
     ahead,
     behind,
     historyAhead,

@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { getRefDiff, getWorktreeDiff } from '../src/git-inspector.js';
+import { getFileContentBuffer, getRefDiff, getWorktreeDiff } from '../src/git-inspector.js';
 
 const execGit = promisify(execFile);
 
@@ -25,7 +25,8 @@ const GIT_ENV = {
 
 /** 在指定目录执行 git 命令（execFile 参数数组，禁止 shell 拼接） */
 async function git(cwd, ...args) {
-  await execGit('git', args, { cwd, env: GIT_ENV });
+  const { stdout } = await execGit('git', args, { cwd, env: GIT_ENV });
+  return stdout.trim();
 }
 
 /** 归一化到真实路径，断言路径相等时统一用它，规避 macOS /tmp 符号链接差异 */
@@ -119,6 +120,8 @@ test('worktree↔worktree：committed/uncommitted/untracked 三种模式与自�
 
   const uncommitted = await getWorktreeDiff(repo, repo, featWt, 'uncommitted');
   assert.equal(uncommitted.effectiveMode, 'uncommitted');
+  assert.equal(uncommitted.baseRevision, uncommitted.target.head);
+  assert.notEqual(uncommitted.baseRevision, uncommitted.source.head);
   assert.deepEqual(uncommitted.files.map(f => f.filePath).sort(), ['base.txt', 'new.png', 'untracked.txt']);
   assert.equal(uncommitted.counts.committed, 1);
   const untrackedText = uncommitted.files.find(f => f.filePath === 'untracked.txt');
@@ -177,6 +180,7 @@ test('worktree↔worktree：同 Worktree 自审锁定 uncommitted', async (t) =>
   const same = await getWorktreeDiff(repo, repo, repo);
   assert.equal(same.isSameWorktree, true);
   assert.equal(same.effectiveMode, 'uncommitted');
+  assert.equal(same.baseRevision, same.target.head);
   assert.deepEqual(same.modesAvailable, { uncommitted: true, all: false, committed: false });
   assert.deepEqual(same.counts, { uncommitted: 1, all: 1, committed: 0 });
   assert.deepEqual(same.files.map(f => f.filePath), ['base.txt']);
@@ -262,6 +266,7 @@ test('branch↔branch：只比较已提交内容且不读任何 Worktree 脏数�
   // 同名 branch↔branch：全零空结果
   const same = await getRefDiff(repo, branchSel, { kind: 'branch', value: branch });
   assert.equal(same.effectiveMode, 'committed');
+  assert.equal(same.baseRevision, same.target.head);
   assert.equal(same.ahead, 0);
   assert.equal(same.behind, 0);
   assert.equal(same.historyAhead, 0);
@@ -330,6 +335,71 @@ test('branch↔worktree 与 worktree↔branch：方向性与模式可用性', as
   assert.equal(reverse.ahead, 0);
   assert.deepEqual(reverse.files, []);
   assert.equal(reverse.effectiveMode, 'committed');
+});
+
+test('图片基准：分叉时 committed/all 均使用共同祖先，uncommitted 使用目标 HEAD', async (t) => {
+  const root = await makeTempRoot(t);
+  const repo = await initRepo(root, 'repo');
+  const imagePath = 'image.svg';
+  const baseImage = '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="red"/></svg>\n';
+  await write(path.join(repo, imagePath), baseImage);
+  await commitAll(repo, '新增基准图片');
+  const baseRevision = await git(repo, 'rev-parse', 'HEAD');
+
+  const featWt = path.join(root, 'wt-images');
+  await git(repo, 'worktree', 'add', '-b', 'feature/images', featWt);
+  await write(path.join(featWt, imagePath), '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="blue"/></svg>\n');
+  await write(path.join(featWt, 'target-only.txt'), '目标分支独有内容\n');
+  await commitAll(featWt, '提交目标图片修改');
+  await write(path.join(repo, imagePath), '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="green"/></svg>\n');
+  await commitAll(repo, '提交主干图片修改');
+
+  const source = { kind: 'branch', value: 'main' };
+  const committed = await getRefDiff(repo, source, { kind: 'branch', value: 'feature/images' }, 'committed');
+  assert.equal(committed.baseRevision, baseRevision);
+  assert.notEqual(committed.baseRevision, committed.source.head);
+  assert.notEqual(committed.baseRevision, committed.target.head);
+  assert.deepEqual(committed.files.map(file => file.filePath).sort(), [imagePath, 'target-only.txt']);
+  assert.equal((await getFileContentBuffer(repo, committed.baseRevision, imagePath)).toString(), baseImage);
+
+  await write(path.join(featWt, imagePath), '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="yellow"/></svg>\n');
+  const target = { kind: 'worktree', value: featWt };
+  const all = await getRefDiff(repo, source, target, 'all');
+  assert.equal(all.baseRevision, baseRevision);
+  assert.deepEqual(all.files.map(file => file.filePath).sort(), [imagePath, 'target-only.txt']);
+  const uncommitted = await getRefDiff(repo, source, target, 'uncommitted');
+  assert.equal(uncommitted.baseRevision, uncommitted.target.head);
+  assert.notEqual(uncommitted.baseRevision, baseRevision);
+  assert.match((await getFileContentBuffer(repo, uncommitted.baseRevision, imagePath)).toString(), /fill="blue"/);
+});
+
+test('图片基准：目标仅落后时 all 以目标 HEAD 比较本地修改', async (t) => {
+  const root = await makeTempRoot(t);
+  const repo = await initRepo(root, 'repo');
+  const imagePath = 'image.svg';
+  const baseImage = '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="red"/></svg>\n';
+  await write(path.join(repo, imagePath), baseImage);
+  await commitAll(repo, '新增基准图片');
+
+  const featWt = path.join(root, 'wt-behind-images');
+  await git(repo, 'worktree', 'add', '-b', 'feature/behind-images', featWt);
+  await write(path.join(repo, imagePath), '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="green"/></svg>\n');
+  await commitAll(repo, '更新主干图片');
+  await write(path.join(featWt, imagePath), '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="blue"/></svg>\n');
+
+  const source = { kind: 'worktree', value: repo };
+  const target = { kind: 'worktree', value: featWt };
+  const all = await getRefDiff(repo, source, target, 'all');
+  assert.equal(all.ahead, 0);
+  assert.equal(all.behind, 1);
+  assert.equal(all.baseRevision, all.target.head);
+  assert.notEqual(all.baseRevision, all.source.head);
+  assert.deepEqual(all.files.map(file => file.filePath), [imagePath]);
+  assert.equal((await getFileContentBuffer(repo, all.baseRevision, imagePath)).toString(), baseImage);
+
+  const committed = await getRefDiff(repo, source, target, 'committed');
+  assert.equal(committed.baseRevision, committed.target.head);
+  assert.deepEqual(committed.files, []);
 });
 
 test('失联 worktree：返回明确的 409 中文错误', async (t) => {
