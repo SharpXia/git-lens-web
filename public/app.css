@@ -734,6 +734,58 @@
       display: flex;
       gap: 8px;
     }
+    .diff-tools-right > button,
+    .diff-find-panel > button {
+      font-size: 12px;
+      padding: 4px 10px;
+      flex-shrink: 0;
+    }
+    .diff-find-panel {
+      display: flex;
+      align-items: center;
+      flex-basis: 100%;
+      min-width: 0;
+      gap: 6px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+    }
+    .diff-find-panel[hidden] {
+      display: none;
+    }
+    .diff-find-panel input {
+      flex: 1;
+      min-width: 0;
+      width: 100%;
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #090d13;
+      color: var(--text-bright);
+      font-size: 13px;
+    }
+    .diff-find-panel input:focus-visible {
+      outline: 1px solid var(--accent);
+    }
+    .diff-find-panel input[aria-invalid="true"] {
+      border-color: var(--danger);
+    }
+    .diff-find-status {
+      min-width: 64px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .diff-find-match {
+      background: #634b16;
+      color: #fff0ba;
+      border-radius: 2px;
+    }
+    .diff-find-match.active {
+      background: #f0b429;
+      color: #161b22;
+      outline: 1px solid #ffd878;
+    }
 
     /* Stash 弹出列表的条目 */
     .stash-item {

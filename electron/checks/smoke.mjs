@@ -34,7 +34,7 @@
  *    （固定 /tmp/glwt-smoke-tabbar.png，供协调者视觉审阅）。
  * 13. 全屏吸附与标签快捷键菜单（契约 §17.1.1/§17.1 第四次修订/§17.1.2，场景三内）：
  *    经主进程 inspector 驱动 BrowserWindow.setFullScreen 往返，轮询标签条
- *    body.fullscreen 类与 #bar 计算左内边距变化（78px↔0px）；运行期断言
+ *    body.fullscreen 类与标签窗口拖动区状态变化；运行期断言
  *    switch-tab-0..9 十项 id/加速键齐全、prev/next-tab-cmd-arrow 已移除、
  *    全菜单加速键无重复（⌘0 归属第 10 个标签，「实际大小」改绑 ⇧⌘0）。
  * 14. 应用名统一 Git Lens（契约 §20，场景七）：运行期经主进程 inspector 断言
@@ -806,22 +806,21 @@ async function runMultiTabCheck(baseCtx) {
   assert('chrome 融合：标签条 CDP 截图已落盘（含 3 个标签与平台安全区，供视觉审阅）', tabbarShotOk, `截图路径=${tabbarScreenshotPath}`);
 
   // 8c. 全屏吸附（契约 §17.1.1）：主进程 inspector 驱动 BrowserWindow.setFullScreen
-  //     往返，在标签条 DOM 上轮询 body.fullscreen 类与 #bar 计算左内边距。
+  //     往返，在标签条 DOM 上轮询全屏类和窗口拖动区状态。
   //     setFullScreen 为异步（macOS 有系统全屏过渡），一律轮询等待而非立即断言；
-  //     左内边距断言仅 darwin 有意义（非 darwin 无左安全区分支，只断言类切换）
+  //     原生按钮区与全屏贴左的视图边界由桌面标签回归用例单独验证。
   const isDarwin = process.platform === 'darwin';
-  const expectedRestPadding = isDarwin ? '78px' : '0px';
   const readFullscreenState = () => tabbar.evaluate(`(function () {
     var bar = document.getElementById('bar');
     return {
       fullscreenClass: document.body.classList.contains('fullscreen'),
-      paddingLeft: bar ? getComputedStyle(bar).paddingLeft : null,
+      appRegion: bar ? getComputedStyle(bar).webkitAppRegion : null,
     };
   })()`);
   const initialFs = await readFullscreenState();
   assert(
-    'chrome 融合（全屏吸附）：非全屏初始态无 fullscreen 类且 darwin 左安全区 78px',
-    Boolean(initialFs) && initialFs.fullscreenClass === false && (!isDarwin || initialFs.paddingLeft === '78px'),
+    'chrome 融合（全屏吸附）：非全屏初始态无 fullscreen 类且空白区可拖动窗口',
+    Boolean(initialFs) && initialFs.fullscreenClass === false && initialFs.appRegion === 'drag',
     `平台=${process.platform} 状态=${JSON.stringify(initialFs)}`,
   );
 
@@ -838,8 +837,8 @@ async function runMultiTabCheck(baseCtx) {
     assert('chrome 融合（菜单）：switch-tab-0..9 十项 id 齐全且加速键为 CmdOrCtrl+0..9（运行期 Menu 断言）', false, '主进程 inspector 未就绪（--inspect=0）');
     assert('chrome 融合（菜单）：prev/next-tab-cmd-arrow 已移除（⌘←/→ 移交页面，契约 §17.1.2）', false, '主进程 inspector 未就绪');
     assert('chrome 融合（菜单）：全菜单加速键无重复（无两项争抢同一加速键）', false, '主进程 inspector 未就绪');
-    assert('chrome 融合（全屏吸附）：进入全屏后 body.fullscreen 生效且 darwin 左安全区取消（78px→0px）', false, '主进程 inspector 未就绪，无法驱动 setFullScreen');
-    assert('chrome 融合（全屏吸附）：退出全屏后 fullscreen 类移除且 darwin 左安全区恢复', false, '主进程 inspector 未就绪');
+    assert('chrome 融合（全屏吸附）：进入全屏后 body.fullscreen 生效且 macOS 禁用窗口拖动', false, '主进程 inspector 未就绪，无法驱动 setFullScreen');
+    assert('chrome 融合（全屏吸附）：退出全屏后 fullscreen 类移除且恢复窗口拖动', false, '主进程 inspector 未就绪');
     assert('应用名（运行期）：app.getName() 为 Git Lens（契约 §20 setName 生效）', false, '主进程 inspector 未就绪');
   } else {
     // 运行期应用名断言（契约 §20）：读取真实运行中的 app 对象，比源码走查更强
@@ -873,27 +872,27 @@ async function runMultiTabCheck(baseCtx) {
       menuSnapshot ? (menuSnapshot.duplicates.length ? `重复：${menuSnapshot.duplicates.join(', ')}` : '无重复') : '菜单快照为空',
     );
 
-    // 全屏进入：驱动 → 轮询（类 + darwin 左内边距取消）
+    // 全屏进入：驱动 → 轮询（类 + macOS 窗口拖动区禁用）
     const enterTriggered = await inspector.evaluate(mainSetFullScreenExpr(true));
     const entered = await waitFor(async () => {
       const state = await readFullscreenState();
-      return state && state.fullscreenClass === true && (!isDarwin || state.paddingLeft === '0px') ? state : null;
+      return state && state.fullscreenClass === true && (!isDarwin || state.appRegion === 'no-drag') ? state : null;
     }, 10000);
     assert(
-      'chrome 融合（全屏吸附）：进入全屏后 body.fullscreen 生效且 darwin 左安全区取消（78px→0px）',
+      'chrome 融合（全屏吸附）：进入全屏后 body.fullscreen 生效且 macOS 禁用窗口拖动',
       enterTriggered === true && Boolean(entered),
       `驱动=${enterTriggered} 终态=${JSON.stringify(entered)}`,
     );
 
-    // 全屏退出：恢复断言（类移除 + 左安全区回到 78px），恢复完成后再继续关标签，
+    // 全屏退出：恢复断言（类移除 + 恢复窗口拖动），恢复完成后再继续关标签，
     // 避免退出协议与全屏过渡竞态
     const exitTriggered = await inspector.evaluate(mainSetFullScreenExpr(false));
     const exited = await waitFor(async () => {
       const state = await readFullscreenState();
-      return state && state.fullscreenClass === false && (!isDarwin || state.paddingLeft === expectedRestPadding) ? state : null;
+      return state && state.fullscreenClass === false && state.appRegion === 'drag' ? state : null;
     }, 10000);
     assert(
-      'chrome 融合（全屏吸附）：退出全屏后 fullscreen 类移除且 darwin 左安全区恢复',
+      'chrome 融合（全屏吸附）：退出全屏后 fullscreen 类移除且恢复窗口拖动',
       exitTriggered === true && Boolean(exited),
       `驱动=${exitTriggered} 终态=${JSON.stringify(exited)}`,
     );
@@ -1656,10 +1655,10 @@ async function runWindowChromeCheck() {
   // 4. 走查：标签条拖拽区、交互元素 no-drag、darwin/非 darwin 安全区与全屏吸附 CSS（契约 §17/§17.1.1）
   const dragOk = tabbarSource.includes('-webkit-app-region: drag')
     && tabbarSource.includes('.tab, .tab-close, #new-tab { -webkit-app-region: no-drag; }')
-    && tabbarSource.includes('body[data-platform="darwin"] #bar { padding-left: 78px; }')
-    && tabbarSource.includes('body.fullscreen[data-platform="darwin"] #bar { padding-left: 0; }')
+    && source.includes('x: controlsWidth, y: topInset')
+    && source.includes('MAC_FULLSCREEN_TOP_INSET_DIP')
     && tabbarSource.includes('body:not([data-platform="darwin"]) #bar { padding-right: 140px; }');
-  assert('chrome 融合（走查）：标签条 #bar 拖拽区、交互元素 no-drag、两侧平台安全区与全屏吸附 CSS 就位', dragOk);
+  assert('chrome 融合（走查）：标签交互、原生按钮区与全屏顶边保留区就位', dragOk);
 
   // 5. 走查：平台注入链路（loadFile query → 页面 body[data-platform]，运行期断言见场景三）
   const platformQueryOk = source.includes("loadFile(path.join(__dirname, 'tabbar.html'), { query: { platform: process.platform } })");
@@ -1963,7 +1962,7 @@ async function main() {
   console.log('   macOS 关窗后经 Dock 重开同样恢复；删除/损坏 tab-state.json 后启动回落单标签首页。');
   console.log('10. 窗口 chrome 融合（契约 §17）：标签条空白区可拖动窗口、双击标签条缩放；红绿灯位于标签条内垂直居中且不遮挡首标签；');
   console.log('11. 标签快捷键（契约 §17.1 第四次修订/§17.1.2）：⌘1–⌘9、⌘0（第 10 个标签）按下标切换、超出当前标签数时无操作；⌘←/⌘→ 不再切换标签，由页面接管主视图切换（文本输入框内光标跳转不再被遮蔽）；Ctrl±Tab 循环切换保留；返回/前进仍为 ⌘[/⌘]；');
-  console.log('12. 全屏吸附（契约 §17.1.1）：真实进出全屏（视图 → 全屏或 ⌃⌘F）时标签条吸附靠左（红绿灯安全区取消）、退出后恢复 78px 安全区；全屏过渡动画期间无布局跳动。');
+  console.log('12. 全屏吸附（契约 §17.1.1）：真实进出全屏（视图 → 全屏或 ⌃⌘F）时标签条吸附靠左（红绿灯安全区取消）、退出后恢复 78px 安全区；全屏顶边可唤回系统菜单栏与原生红绿灯，无独立全屏按钮。');
     process.exit(failed.length === 0 ? 0 : 1);
   }
 }

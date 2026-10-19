@@ -50,7 +50,7 @@ import electronUpdater from 'electron-updater';
 
 import { resolveServiceConfigDir } from './service-config-dir.js';
 import { discoverGit, buildGitEnvironment } from './git-environment.js';
-import { windowChromeOptions } from './window-chrome.js';
+import { windowChromeOptions, MAC_WINDOW_CONTROLS_WIDTH_DIP, MAC_FULLSCREEN_TOP_INSET_DIP } from './window-chrome.js';
 import { migrateLegacyStateFiles } from './user-data-migration.js';
 import { createUpdateController, prepareMacUpdate } from './update-manager.js';
 
@@ -689,19 +689,25 @@ function pushTabbarUpdateProgress() {
 }
 
 /**
- * 同步内容区所有视图 bounds（DIP）：内容标签始终从 TABBAR_HEIGHT 下方开始，
- * 标签条仅在拖动时扩展为透明浮层，内容布局保持稳定。
+ * 同步视图边界；macOS 窗口态让出按钮区，全屏让出系统顶边并恢复标签贴左。
+ * 透明网页同样拦截原生命中，因此保留区必须位于视图边界之外。
  */
 function syncTabBounds() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const { width, height } = mainWindow.getContentBounds();
-  const contentHeight = Math.max(0, height - TABBAR_HEIGHT);
+  const controlsWidth = process.platform === 'darwin' && !mainWindow.isFullScreen() ? MAC_WINDOW_CONTROLS_WIDTH_DIP : 0;
+  const topInset = process.platform === 'darwin' && mainWindow.isFullScreen() ? MAC_FULLSCREEN_TOP_INSET_DIP : 0;
+  const contentTop = topInset + TABBAR_HEIGHT;
+  const contentHeight = Math.max(0, height - contentTop);
   if (isViewAlive(tabbarView)) {
-    tabbarView.setBounds({ x: 0, y: 0, width, height: tabbarDragActive ? height : TABBAR_HEIGHT });
+    tabbarView.setBounds({
+      x: controlsWidth, y: topInset, width: Math.max(0, width - controlsWidth),
+      height: tabbarDragActive ? Math.max(0, height - topInset) : TABBAR_HEIGHT,
+    });
   }
   for (const tab of tabs) {
     if (isViewAlive(tab.view)) {
-      tab.view.setBounds({ x: 0, y: TABBAR_HEIGHT, width, height: contentHeight });
+      tab.view.setBounds({ x: 0, y: contentTop, width, height: contentHeight });
     }
   }
 }
@@ -1387,10 +1393,10 @@ function createMainWindow() {
   for (const event of ['resize', 'maximize', 'unmaximize']) {
     mainWindow.on(event, syncTabBounds);
   }
-  // 契约 §17.1.1：全屏切换除同步布局外，还须把全屏态推给标签条——darwin 全屏
-  // 时系统隐藏红绿灯，标签条取消左侧安全区吸附靠左，退出全屏恢复
+  // 全屏切换时结束拖动并同步原生保留区，窗口态让位红绿灯、全屏态恢复标签贴左。
   for (const event of ['enter-full-screen', 'leave-full-screen']) {
     mainWindow.on(event, () => {
+      setTabbarDragging(false);
       syncTabBounds();
       pushTabbarFullscreen();
     });
@@ -1815,7 +1821,7 @@ function buildApplicationMenu() {
         { label: '实际大小', accelerator: 'Shift+CmdOrCtrl+0', click: withTabTarget((wc) => wc.setZoomLevel(0)) },
         { type: 'separator' },
         // 全屏是窗口级操作，内建 role 语义正确
-        { role: 'togglefullscreen', label: '全屏' },
+        { id: 'toggle-fullscreen', role: 'togglefullscreen', label: '全屏' },
       ],
     },
     {

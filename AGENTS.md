@@ -45,15 +45,27 @@
 
 ## 4. 开发/测试环境约束
 
-主仓库运行着面向日常使用的实例，任何 worktree 开发、联调、测试实例**必须与之隔离**，不得污染其端口与配置：
+### 4.1 以本地 App 为默认开发与验证入口
+
+- 后续开发与交付以 **Electron 本地 App** 为主，功能联调、界面检查、快捷键和回归验证均在真实 App 内完成。
+- **不再使用独立浏览器进行日常功能验证**，不得用浏览器验证结果代替 App 验证。新增或修改的界面回归用例默认使用 Electron 桌面测试通道。
+- **非必要不启动独立 Web 服务**，日常开发不运行 `npm start`、`node src/server.js` 或额外的前端开发服务器。只有用户明确要求 Web 场景，或必须排查桌面路径无法覆盖的独立接口问题时，才按需启动，并在结束后关闭。
+- App 自身管理的内置本地服务属于桌面运行依赖，由 App 统一启动和退出；不得为桌面联调再额外启动一份 Web 服务。
+- 自动验证优先使用 `npm run test:desktop:isolated`、`npm run test:desktop:full` 或对应功能的 Electron 测试；不依赖界面的单元测试可直接执行。
+
+### 4.2 隔离日常实例与开发实例
+
+主仓库运行着面向日常使用的实例，任何开发、联调、测试 App（包括 worktree 实例）**必须与之隔离**，不得污染其端口、扫描配置与桌面用户数据：
 
 | 项 | 主仓库实例（生产语义） | worktree 开发/测试实例 |
 |----|------------------------|------------------------|
 | 端口 | 固定 `9527`（默认值，不占用） | 必须使用其他端口；本 worktree 沿用 `9528` |
 | 配置目录 | 默认 `~/.config/git-lens-web` | **必须**用 `GIT_LENS_CONFIG_DIR` 指向 /tmp 私有目录，本 worktree 沿用 `/tmp/git-lens-web-dev-9528` |
+| 桌面用户数据 | 日常 App 的默认 userData | **必须**用 `GIT_LENS_USER_DATA` 指向独立临时目录，如 `/tmp/git-lens-app-dev-9528` |
 
-- 启动示例：`PORT=9528 GIT_LENS_CONFIG_DIR=/tmp/git-lens-web-dev-9528 node src/server.js`
-- 原因：配置写路径默认与主仓库实例共用（见 `src/server.js` 的 `CONFIG_DIR`），不设 `GIT_LENS_CONFIG_DIR` 时测试期写扫描目录会覆盖真实配置
+- App 启动示例：`GIT_LENS_DESKTOP_PREFERRED_PORT=9528 GIT_LENS_CONFIG_DIR=/tmp/git-lens-web-dev-9528 GIT_LENS_USER_DATA=/tmp/git-lens-app-dev-9528 node_modules/.bin/electron electron/main.js`
+- 自动化桌面测试可沿用现有 QA 启动器的独立 qa-root、私有配置与 userData，以及随机端口；不得连接日常实例执行写操作。
+- 原因：不隔离配置和 userData 会覆盖真实扫描目录、标签状态与窗口设置；只换端口无法隔离数据。
 - 重启测试实例前先确认旧进程已退出（如 `lsof -i :9528 -sTCP:LISTEN`），避免多实例并存
 
 ## 5. 冲突裁决
