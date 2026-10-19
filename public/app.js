@@ -79,6 +79,7 @@
     const searchablePickers = []; // 所有可搜索选择器实例，用于统一「点击外部关闭」
     let diffRequestSeq = 0; // Diff 请求序列：仅最后一次请求的响应可上屏，丢弃过期响应
     let diffToolbarResizeObserver = null;
+    const diffFindState = { open: false, query: '', matches: [], index: -1 };
 
     // 本地 Merge Request 状态
     let mrStatusFilter = 'all';  // MR 面板状态筛选：all | open | merged | rejected | canceled
@@ -1929,6 +1930,12 @@
       const preserveShell = modeOnly && container.querySelector('#diffModeControl')
         && container.dataset.renderedRepo === currentRepo
         && container.dataset.renderedBase === base && container.dataset.renderedTarget === target;
+      if (container.dataset.renderedRepo !== currentRepo
+        || container.dataset.renderedBase !== base || container.dataset.renderedTarget !== target) {
+        diffFindState.open = false;
+        diffFindState.query = '';
+      }
+      clearDiffFindMatches();
       if (!preserveShell) container.innerHTML = '<div class="loading">正在比对代码差异...</div>';
 
       const seq = ++diffRequestSeq;
@@ -2171,6 +2178,116 @@
       }).join('');
     }
 
+    /** 清理查找标记并合并文本，避免反复输入时堆叠高亮节点。 */
+    function clearDiffFindMatches() {
+      const lines = new Set(diffFindState.matches.map(mark => mark.parentElement));
+      lines.forEach(line => { if (line) line.textContent = line.textContent; });
+      diffFindState.matches = [];
+      diffFindState.index = -1;
+    }
+
+    /** 同步查找计数与按钮状态；无匹配时同时向辅助技术暴露输入错误。 */
+    function syncDiffFindControls() {
+      const { query, matches, index } = diffFindState;
+      const status = document.getElementById('diffFindStatus');
+      if (!status) return;
+      status.textContent = !query ? '输入关键词' : matches.length ? `${index + 1} / ${matches.length}` : '无匹配';
+      document.getElementById('diffFindInput').setAttribute('aria-invalid', String(!!query && !matches.length));
+      document.querySelectorAll('[data-action="diff-find-prev"], [data-action="diff-find-next"]')
+        .forEach(button => { button.disabled = !matches.length; });
+    }
+
+    /**
+     * 在当前差异的源码行内进行字面量查找，折叠文件同样参与匹配。
+     * @param {boolean} [scroll] - 是否滚动到首个匹配位置
+     */
+    function updateDiffFind(scroll = true) {
+      clearDiffFindMatches();
+      const { open, query } = diffFindState;
+      if (open && query) {
+        // 转义正则元字符，仅借助 Unicode 正则保留忽略大小写后的准确原文偏移。
+        const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
+        document.querySelectorAll('#diffResultsContainer .file-body .diff-line:not(.line-file):not(.line-hunk)')
+          .forEach(line => {
+            const text = line.textContent;
+            // Diff 标头、块说明和行首的 +/-/空格标记不属于源码，避免出现伪匹配。
+            if (!/^[ +\-]/.test(text)) return;
+            const fragment = document.createDocumentFragment();
+            let offset = 0;
+            for (const match of text.slice(1).matchAll(pattern)) {
+              const start = match.index + 1;
+              fragment.append(document.createTextNode(text.slice(offset, start)));
+              const mark = document.createElement('mark');
+              mark.className = 'diff-find-match';
+              mark.textContent = match[0];
+              fragment.append(mark);
+              diffFindState.matches.push(mark);
+              offset = start + match[0].length;
+            }
+            if (offset) {
+              fragment.append(document.createTextNode(text.slice(offset)));
+              line.replaceChildren(fragment);
+            }
+          });
+      }
+      if (diffFindState.matches.length) selectDiffFindMatch(0, scroll);
+      else syncDiffFindControls();
+    }
+
+    /**
+     * 循环选中匹配并展开所在文件，横向长行也滚动到命中文字。
+     * @param {number} index - 匹配下标，越界时循环
+     * @param {boolean} [scroll] - 是否滚动定位
+     */
+    function selectDiffFindMatch(index, scroll = true) {
+      const { matches } = diffFindState;
+      if (!matches.length) return;
+      matches[diffFindState.index]?.classList.remove('active');
+      diffFindState.index = (index + matches.length) % matches.length;
+      const mark = matches[diffFindState.index];
+      mark.classList.add('active');
+      const card = mark.closest('.file-diff-card');
+      const header = card.querySelector('.file-header');
+      setDiffFileExpanded(card, header, true);
+      syncDiffFindControls();
+      if (scroll) {
+        mark.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+        const toolbar = document.querySelector('#diffFileListContent > .diff-tools-bar');
+        const visibleTop = toolbar.getBoundingClientRect().bottom + header.getBoundingClientRect().height + 8;
+        const markTop = mark.getBoundingClientRect().top;
+        // 小窗口下居中位置可能落在两层吸顶区域内，补偿后保证命中行可见。
+        if (markTop < visibleTop) window.scrollBy({ top: markTop - visibleTop, behavior: 'instant' });
+      }
+    }
+
+    /** 打开查找并选中关键词；选中的单行源码可直接作为首次查找内容。 */
+    function openDiffFind() {
+      const panel = document.getElementById('diffFindPanel');
+      if (!panel) return;
+      const selected = window.getSelection()?.toString();
+      if (selected && !/[\r\n]/.test(selected)) diffFindState.query = selected;
+      diffFindState.open = true;
+      panel.hidden = false;
+      document.getElementById('diffFindToggle').setAttribute('aria-expanded', 'true');
+      const toolbar = panel.closest('.diff-tools-bar');
+      document.getElementById('diffResultsContainer').style.setProperty('--diff-toolbar-height', `${toolbar.getBoundingClientRect().height}px`);
+      const input = document.getElementById('diffFindInput');
+      input.value = diffFindState.query;
+      input.focus({ preventScroll: true });
+      input.select();
+      updateDiffFind();
+    }
+
+    /** 关闭查找并清理高亮，保留关键词以便再次打开。 */
+    function closeDiffFind() {
+      diffFindState.open = false;
+      clearDiffFindMatches();
+      document.getElementById('diffFindPanel').hidden = true;
+      const toggle = document.getElementById('diffFindToggle');
+      toggle.setAttribute('aria-expanded', 'false');
+      toggle.focus({ preventScroll: true });
+    }
+
     /* 手风琴开关单个文件 Diff */
     function toggleFileDiff(cardId) {
       const card = document.getElementById(cardId);
@@ -2207,7 +2324,7 @@
       });
     }
 
-    /* 判断是否是媒体/二进制文件扩展名 (用于置底展示，避免刷屏) */
+    /* 判断常见媒体扩展名，资源类文件在变更列表中置底展示。 */
     function isMediaFile(pathStr) {
       if (!pathStr) return false;
       const lower = pathStr.toLowerCase();
@@ -2218,6 +2335,42 @@
       if (!pathStr) return false;
       const lower = pathStr.toLowerCase();
       return /\.(png|jpg|jpeg|gif|webp|svg|bmp|ico|avif)$/.test(lower);
+    }
+
+    /**
+     * 统一状态徽标和排序依据；增删行数不能判定文件是否新增或删除，需读取 Diff 文件头。
+     * @param {object} file - 差异文件
+     * @returns {'added'|'modified'|'deleted'|'untracked'} 展示状态
+     */
+    function getDiffFileStatus(file) {
+      if (file.status === '?') return 'untracked';
+      if (file.status === 'A' || /^new file mode /m.test(file.diffChunk || '')) return 'added';
+      if (file.status === 'D' || /^deleted file mode /m.test(file.diffChunk || '')) return 'deleted';
+      return 'modified';
+    }
+
+    /**
+     * 按源码、文档、资源分组，再按后缀、状态、路径稳定排序。
+     * @param {object[]} files - 原始差异文件列表，不会被修改
+     * @returns {object[]} 排序后的文件列表
+     */
+    function sortDiffFiles(files) {
+      const statusOrder = { added: 0, modified: 1, deleted: 2, untracked: 3 };
+      const keyed = files.map(file => {
+        const name = file.filePath.split('/').pop().toLowerCase();
+        const extension = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : '';
+        const isDocument = /^(md|markdown|mdx|rst|txt|adoc|asciidoc|tex|pdf|doc|docx|odt|rtf|xls|xlsx|csv|tsv|ppt|pptx)$/.test(extension)
+          || /^(readme|license|licence|changelog|authors|copying|notice)(\.|$)/.test(name);
+        const isResource = file.isImage || file.isBinary || isMediaFile(file.filePath)
+          || /^(aac|flac|m4a|mpg|mpeg|avi|mkv|mp4|webm|ogg|wav|zip|gz|bz2|xz|7z|rar|tar|wasm|bin|exe|dll|so|dylib|psd|ai|sketch|fig|obj|fbx|gltf|glb|blend)$/.test(extension);
+        // PDF、Office 等文档通常是二进制，文档后缀应优先于二进制兜底分类。
+        return { file, extension, category: isDocument ? 1 : isResource ? 2 : 0, status: statusOrder[getDiffFileStatus(file)] };
+      });
+      keyed.sort((a, b) => a.category - b.category
+        || a.extension.localeCompare(b.extension, 'en')
+        || a.status - b.status
+        || a.file.filePath.localeCompare(b.file.filePath, 'zh-CN', { numeric: true }));
+      return keyed.map(item => item.file);
     }
 
     /* 渲染单个文件的差异卡片内容：若是图片则渲染左右对比，否则渲染代码 diff */
@@ -2291,6 +2444,7 @@
     /* 渲染两个 Worktree 或分支之间的 Diff 视图 */
     function renderDiffView(diff, preserveShell = false) {
       const container = document.getElementById('diffResultsContainer');
+      const restoreFindFocus = document.activeElement?.id === 'diffFindInput';
       const files = diff.files || [];
       // 服务端数值字段统一收敛为数字后再进 HTML 插值，保证异常响应也不会注入标记
       const ahead = Number(diff.ahead) || 0;
@@ -2423,12 +2577,7 @@
         : diff.source.head || diff.source.branch || 'HEAD');
       const imageWorktreePath = effectiveMode === 'committed' ? null : stashWorktreePath;
 
-      // 优先展示文本代码变更，将图片及媒体文件置底展示
-      const sortedDiffFiles = [...files].sort((a, b) => {
-        const aIsMedia = (a.isImage || isMediaFile(a.filePath) || a.isBinary) ? 1 : 0;
-        const bIsMedia = (b.isImage || isMediaFile(b.filePath) || b.isBinary) ? 1 : 0;
-        return aIsMedia - bIsMedia;
-      });
+      const sortedDiffFiles = sortDiffFiles(files);
 
       const fileCardsHtml = sortedDiffFiles.map((f, idx) => {
         const cardId = `diff-card-${idx}`;
@@ -2441,10 +2590,9 @@
         );
         const isImg = f.isImage || isImageFilePath(f.filePath);
 
-        let statusTag = '<span class="file-status-badge status-modified">MODIFIED</span>';
-        if (f.status === '?') statusTag = '<span class="file-status-badge status-added">UNTRACKED</span>';
-        else if (f.deleted === 0 && f.added > 0) statusTag = '<span class="file-status-badge status-added">ADDED</span>';
-        else if (f.added === 0 && f.deleted > 0) statusTag = '<span class="file-status-badge status-deleted">DELETED</span>';
+        const status = getDiffFileStatus(f);
+        const statusClass = status === 'untracked' ? 'added' : status;
+        const statusTag = `<span class="file-status-badge status-${statusClass}">${status.toUpperCase()}</span>`;
 
         let statTag = '';
         if (isImg) {
@@ -2493,8 +2641,16 @@
             <span style="font-size: 12px; color: var(--text-muted); font-weight: normal;">单击单个文件展开/收起详情</span>
           </div>
           <div class="diff-tools-right">
+            <button id="diffFindToggle" type="button" class="btn-outline" data-action="diff-find-open" aria-controls="diffFindPanel" aria-expanded="${diffFindState.open}" title="查找当前差异中的源码（⌘/Ctrl+F）">查找源码</button>
             <button class="btn-outline" data-action="toggle-all-diffs" data-expand="1" style="font-size: 12px; padding: 4px 10px;">展开全部</button>
             <button class="btn-outline" data-action="toggle-all-diffs" data-expand="0" style="font-size: 12px; padding: 4px 10px;">收起全部</button>
+          </div>
+          <div id="diffFindPanel" class="diff-find-panel" role="search" aria-label="查找差异源码" ${diffFindState.open ? '' : 'hidden'}>
+            <input id="diffFindInput" type="text" placeholder="查找源码，包含折叠文件" aria-label="查找差异源码" aria-describedby="diffFindStatus" autocomplete="off" spellcheck="false" title="不区分大小写；Enter 下一个，Shift+Enter 上一个，Esc 关闭">
+            <span id="diffFindStatus" class="diff-find-status" role="status" aria-live="polite"></span>
+            <button type="button" class="btn-outline" data-action="diff-find-prev" aria-label="上一个匹配" title="上一个匹配（Shift+Enter）">↑</button>
+            <button type="button" class="btn-outline" data-action="diff-find-next" aria-label="下一个匹配" title="下一个匹配（Enter）">↓</button>
+            <button type="button" class="btn-outline" data-action="diff-find-close" aria-label="关闭查找" title="关闭查找（Esc）">✕</button>
           </div>
         </div>
 
@@ -2526,6 +2682,12 @@
       container.dataset.renderedBase = currentDiffBase;
       container.dataset.renderedTarget = currentDiffTarget;
       bindDiffViewActions(container);
+      const findInput = document.getElementById('diffFindInput');
+      if (findInput) {
+        findInput.value = diffFindState.query;
+        if (restoreFindFocus && diffFindState.open) findInput.focus({ preventScroll: true });
+      }
+      updateDiffFind(false);
       // 工具栏在窄屏或缩放后可能换行，文件标题的吸顶偏移始终跟随其真实高度。
       diffToolbarResizeObserver?.disconnect();
       const toolbar = container.querySelector('#diffFileListContent > .diff-tools-bar');
@@ -2547,7 +2709,15 @@
         'open-diff-commits': () => openDiffCommitsDrawer(),
         'stash-act': (el) => stashActionWithConfirm(el.dataset.stashAction, '', el),
         'toggle-file-diff': (el) => toggleFileDiff(el.closest('.file-diff-card').id),
-        'toggle-all-diffs': (el) => toggleAllDiffs(el.dataset.expand === '1')
+        'toggle-all-diffs': (el) => toggleAllDiffs(el.dataset.expand === '1'),
+        'diff-find-open': () => openDiffFind(),
+        'diff-find-prev': () => selectDiffFindMatch(diffFindState.index - 1),
+        'diff-find-next': () => selectDiffFindMatch(diffFindState.index + 1),
+        'diff-find-close': () => closeDiffFind()
+      });
+      container.querySelector('#diffFindInput')?.addEventListener('input', (event) => {
+        diffFindState.query = event.target.value;
+        updateDiffFind();
       });
       container.querySelectorAll('[data-action="toggle-file-diff"]').forEach((header) => {
         header.addEventListener('keydown', (event) => {
@@ -4880,6 +5050,27 @@
     }, { capture: true, passive: true });
 
     document.addEventListener('keydown', (e) => {
+      // 抽屉和模态框优先处理自己的快捷键，避免查找触发背后页面的滚动。
+      const diffFindAvailable = activeTab === 'diff' && !commitsDrawerState.isOpen && !mrDrawerState.isOpen
+        && ![...document.querySelectorAll('[aria-modal="true"]')].some(modal => modal.style.display !== 'none')
+        && document.getElementById('diffFindPanel');
+      if (!e.defaultPrevented && !e.isComposing && diffFindAvailable) {
+        if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'f') {
+          e.preventDefault();
+          openDiffFind();
+          return;
+        }
+        if (diffFindState.open && e.key === 'Escape') {
+          e.preventDefault();
+          closeDiffFind();
+          return;
+        }
+        if (diffFindState.open && e.target.id === 'diffFindInput' && e.key === 'Enter') {
+          e.preventDefault();
+          selectDiffFindMatch(diffFindState.index + (e.shiftKey ? -1 : 1));
+          return;
+        }
+      }
       // Escape 优先关闭可搜索选择器的下拉面板
       if (e.key === 'Escape') {
         searchablePickers.forEach(p => p.closeDropdown());
