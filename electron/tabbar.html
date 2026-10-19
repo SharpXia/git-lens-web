@@ -11,7 +11,7 @@
     margin: 0;
     height: 100%;
     overflow: hidden;
-    background: #010409;
+    background: transparent;
     font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
     user-select: none;
     -webkit-user-select: none;
@@ -20,6 +20,7 @@
     display: flex;
     align-items: stretch;
     height: 38px;
+    background: #010409;
     border-bottom: 1px solid #30363d;
     /* 契约 §17：标签条兼任标题栏——空白区可拖动窗口，系统双击缩放行为沿用 */
     -webkit-app-region: drag;
@@ -31,6 +32,8 @@
   /* 契约 §17.1.1：darwin 全屏时系统隐藏红绿灯，取消左侧安全区让标签吸附靠左；
      退出全屏恢复 78px。仅覆盖 darwin 分支，非 darwin 的右侧 overlay 留白与全屏无关 */
   body.fullscreen[data-platform="darwin"] #bar { padding-left: 0; }
+  /* 全屏标签栏贴着屏幕顶边，空白处也不能启动系统窗口拖动与桌面选择。 */
+  body.fullscreen[data-platform="darwin"] #bar { -webkit-app-region: no-drag; }
   /* 非 darwin（含 unknown 回落）：右侧为系统 overlay 窗口控制按钮留位（≥140px，
      契约 §17；win/linux 真机未验收） */
   body:not([data-platform="darwin"]) #bar { padding-right: 140px; }
@@ -48,14 +51,29 @@
        取舍详见交付报告。 */
   }
   #tabs::-webkit-scrollbar { display: none; }
-  /* 拖动标签期间整条标签栏都退出窗口拖动区：#bar 是 app-region: drag 继承区，
-     只豁免 #tabs 时，红绿灯安全区、更新徽章、新建按钮仍留在窗口拖动区内，
-     Electron 的窗口拖动机制会吞掉落在其上的 dragover/dragleave 事件流——
-     插入线保持高亮而松手的 drop 永远不会送达，位置调整静默失败。整条栏
-     no-drag 后投放区与 Chrome 标签条一致（含右端空白），拖拽结束恢复窗口
-     拖动能力（拖拽中鼠标被拖拽手势占用，窗口拖动本就无从发生）。 */
+  /* 排序期间整条栏都接收指针事件，红绿灯留白、更新徽章与新建按钮上均可落位。 */
   body.tab-dragging #bar { -webkit-app-region: no-drag; }
+  .tab, .tab * { -webkit-user-drag: none; }
+  .tab { touch-action: none; }
   .tab.dragging { opacity: 0.45; }
+  body.tab-dragging, body.tab-dragging * { cursor: grabbing; }
+  #drag-preview {
+    position: fixed;
+    left: 0;
+    top: 0;
+    min-width: 0;
+    max-width: none;
+    border: 1px solid #58a6ff;
+    border-radius: 5px;
+    background: #161b22;
+    color: #f0f6fc;
+    opacity: 0.94;
+    box-shadow: 0 3px 12px #0008;
+    pointer-events: none;
+    -webkit-app-region: no-drag;
+    z-index: 2;
+    will-change: transform;
+  }
   #drop-indicator {
     position: fixed;
     top: 3px;
@@ -63,9 +81,9 @@
     height: 32px;
     background: #58a6ff;
     pointer-events: none;
-    z-index: 1;
+    z-index: 3;
   }
-  .tab {
+  .tab, .tab-drag-preview {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -182,11 +200,13 @@
   var dragX = null;
   var scrollFrame = null;
   var pendingState = null;
-  var pressedClose = false;
+  var pointerDrag = null;
+  var dragPreview = null;
+  var suppressClick = false;
 
   // 标题与激活态可能在拖动途中更新，延后渲染以免移除拖动源而中断手势。
   function render(state) {
-    if (dragId !== null) {
+    if (pointerDrag !== null) {
       pendingState = state;
       return;
     }
@@ -197,7 +217,8 @@
       item.setAttribute('role', 'tab');
       item.setAttribute('aria-selected', tab.active ? 'true' : 'false');
       item.dataset.tabId = String(tab.id);
-      item.draggable = true;
+      // 排序只在应用内完成，不向系统发起可跨桌面的原生拖放会话。
+      item.draggable = false;
 
       var title = document.createElement('span');
       title.className = 'tab-title';
@@ -269,12 +290,48 @@
     dropIndicator.hidden = true;
   }
 
+  function moveDragPreview(event) {
+    if (!dragPreview || !pointerDrag) return;
+    var x = Math.max(0, Math.min(event.clientX - pointerDrag.offsetX, innerWidth - dragPreview.offsetWidth));
+    var y = Math.max(0, Math.min(event.clientY - pointerDrag.offsetY, innerHeight - dragPreview.offsetHeight));
+    dragPreview.style.transform = 'translate3d(' + x + 'px,' + y + 'px,0)';
+  }
+
+  function createDragPreview(event) {
+    var bounds = pointerDrag.item.getBoundingClientRect();
+    dragPreview = pointerDrag.item.cloneNode(true);
+    dragPreview.id = 'drag-preview';
+    dragPreview.className = 'tab-drag-preview';
+    dragPreview.removeAttribute('role');
+    dragPreview.removeAttribute('aria-selected');
+    dragPreview.removeAttribute('data-tab-id');
+    dragPreview.setAttribute('aria-hidden', 'true');
+    dragPreview.inert = true;
+    dragPreview.style.width = bounds.width + 'px';
+    dragPreview.style.height = bounds.height + 'px';
+    document.body.appendChild(dragPreview);
+    // 标签条视图临时扩展为透明浮层，预览移到内容区时仍可见，不创建系统拖放会话。
+    window.gitLensTabbar.setDragging(true);
+    moveDragPreview(event);
+  }
+
   function finishDrag() {
+    var pointer = pointerDrag;
+    if (dragId !== null) suppressClick = true;
+    pointerDrag = null;
+    if (dragPreview) {
+      dragPreview.remove();
+      dragPreview = null;
+      window.gitLensTabbar.setDragging(false);
+    }
     clearDropPosition();
     dragId = null;
     document.body.classList.remove('tab-dragging');
     var source = tabsEl.querySelector('.dragging');
     if (source) source.classList.remove('dragging');
+    if (pointer && pointer.item.hasPointerCapture(pointer.id)) {
+      pointer.item.releasePointerCapture(pointer.id);
+    }
     if (pendingState) {
       var state = pendingState;
       pendingState = null;
@@ -282,49 +339,86 @@
     }
   }
 
-  tabsEl.addEventListener('pointerdown', function (event) {
-    pressedClose = Boolean(event.target.closest('.tab-close'));
-  });
-  // 拖拽事件挂在 #bar 而非 #tabs：投放区与 body.tab-dragging 的 no-drag 范围
-  // 对齐，松手在徽章/新建按钮/红绿灯区等栏内空白时同样按 clientX 落位
-  // （越界语义由 dropPosition 收敛到首/末），不再出现“指示器高亮却投放失效”。
-  barEl.addEventListener('dragstart', function (event) {
+  function isInsideBar(event) {
+    var bounds = barEl.getBoundingClientRect();
+    return event.clientX >= bounds.left && event.clientX <= bounds.right
+      && event.clientY >= bounds.top && event.clientY < bounds.bottom;
+  }
+
+  barEl.addEventListener('pointerdown', function (event) {
+    if (event.button !== 0 || !event.isPrimary || pointerDrag !== null) return;
+    suppressClick = false;
     var item = event.target.closest('.tab');
-    if (!item || pressedClose || event.target.closest('.tab-close')) {
-      event.preventDefault();
+    if (!item || event.target.closest('.tab-close')) return;
+    var bounds = item.getBoundingClientRect();
+    pointerDrag = {
+      id: event.pointerId, item: item, x: event.clientX, y: event.clientY,
+      offsetX: event.clientX - bounds.left, offsetY: event.clientY - bounds.top,
+    };
+    // 捕获到标签自身，跨过按钮或移出标签栏仍能收到松手；普通点击仍落在原标签。
+    item.setPointerCapture(event.pointerId);
+  });
+  barEl.addEventListener('pointermove', function (event) {
+    if (!pointerDrag || event.pointerId !== pointerDrag.id) return;
+    if (!(event.buttons & 1)) {
+      finishDrag();
       return;
     }
-    dragId = Number(item.dataset.tabId);
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', String(dragId));
-    document.body.classList.add('tab-dragging');
-    item.classList.add('dragging');
-  });
-  barEl.addEventListener('dragover', function (event) {
-    if (dragId === null) return;
+    // 小幅手抖仍按点击处理，避免切换标签时意外排序。
+    if (dragId === null) {
+      if (Math.hypot(event.clientX - pointerDrag.x, event.clientY - pointerDrag.y) < 5) return;
+      dragId = Number(pointerDrag.item.dataset.tabId);
+      document.body.classList.add('tab-dragging');
+      pointerDrag.item.classList.add('dragging');
+      createDragPreview(event);
+    }
     event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
+    moveDragPreview(event);
+    if (!isInsideBar(event)) {
+      clearDropPosition();
+      return;
+    }
     dragX = event.clientX;
     showDropPosition();
     if (scrollFrame === null) scrollFrame = requestAnimationFrame(scrollDuringDrag);
   });
-  barEl.addEventListener('dragleave', function (event) {
-    if (!barEl.contains(event.relatedTarget)) clearDropPosition();
-  });
-  barEl.addEventListener('drop', function (event) {
-    if (dragId === null) return;
-    event.preventDefault();
+  barEl.addEventListener('pointerup', function (event) {
+    if (!pointerDrag || event.pointerId !== pointerDrag.id) return;
     var id = dragId;
-    var beforeId = dropPosition(event.clientX).beforeId;
+    var shouldMove = id !== null && isInsideBar(event);
+    var beforeId = shouldMove ? dropPosition(event.clientX).beforeId : null;
+    if (id !== null) event.preventDefault();
     finishDrag();
-    window.gitLensTabbar.moveTab(id, beforeId);
+    if (shouldMove) window.gitLensTabbar.moveTab(id, beforeId);
   });
-  document.addEventListener('dragend', finishDrag);
+  for (var eventName of ['pointercancel', 'lostpointercapture']) {
+    barEl.addEventListener(eventName, function (event) {
+      if (pointerDrag && event.pointerId === pointerDrag.id) finishDrag();
+    });
+  }
+  barEl.addEventListener('click', function (event) {
+    // 拖动完成后的兼容 click 不能激活拖动源、关闭标签或点击「+」。
+    if (!suppressClick) return;
+    suppressClick = false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+  barEl.addEventListener('dragstart', function (event) {
+    event.preventDefault();
+  });
+  window.addEventListener('blur', finishDrag);
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && pointerDrag) {
+      event.preventDefault();
+      finishDrag();
+    }
+  });
 
   window.gitLensTabbar.onTabsChanged(render);
   // 契约 §17.1.1：订阅窗口全屏态（主进程在进出全屏及本页加载完成时推送），
   // body.fullscreen 驱动 CSS 取消 darwin 左侧红绿灯安全区（标签吸附靠左）
   window.gitLensTabbar.onFullscreenChanged(function (fullscreen) {
+    finishDrag();
     document.body.classList.toggle('fullscreen', Boolean(fullscreen));
   });
 

@@ -143,6 +143,16 @@ const gitLensTabbar = {
     if (beforeId !== null) assertTabId(beforeId);
     ipcRenderer.send('git-lens-tabbar:move-tab', id, beforeId);
   },
+
+  /**
+   * 通知主进程调整标签条浮层，仅在拖动期间覆盖内容区以显示跟随预览。
+   * @param {boolean} dragging - 是否正在拖动标签
+   * @returns {void} 经 IPC 更新浮层尺寸
+   */
+  setDragging(dragging) {
+    if (typeof dragging !== 'boolean') throw new TypeError('标签拖动状态必须是布尔值');
+    ipcRenderer.send('git-lens-tabbar:drag-state', dragging);
+  },
 };
 
 contextBridge.exposeInMainWorld('gitLensTabbar', Object.freeze(gitLensTabbar));

@@ -131,6 +131,8 @@ const sessionToken = crypto.randomBytes(32).toString('hex');
 let mainWindow = null;
 /** 顶部标签条视图（Shell 自有 chrome，加载 electron/tabbar.html）；随主窗口销毁重建 */
 let tabbarView = null;
+/** 拖动期间将标签条临时扩展为透明浮层，承载窗口内跟随鼠标的预览。 */
+let tabbarDragActive = false;
 /** 最近一次更新进度载荷（null=空闲）；标签条重建或晚就绪时经 did-finish-load 回发对齐 */
 let lastUpdateProgress = null;
 /** 内容标签集合：每个标签一个 WebContentsView（契约 §15） */
@@ -687,21 +689,32 @@ function pushTabbarUpdateProgress() {
 }
 
 /**
- * 同步内容区所有视图 bounds（DIP）：标签条固定占顶部 TABBAR_HEIGHT，
- * 内容标签铺满其余区域。窗口 resize/最大化/全屏切换时由窗口事件驱动。
+ * 同步内容区所有视图 bounds（DIP）：内容标签始终从 TABBAR_HEIGHT 下方开始，
+ * 标签条仅在拖动时扩展为透明浮层，内容布局保持稳定。
  */
 function syncTabBounds() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const { width, height } = mainWindow.getContentBounds();
   const contentHeight = Math.max(0, height - TABBAR_HEIGHT);
   if (isViewAlive(tabbarView)) {
-    tabbarView.setBounds({ x: 0, y: 0, width, height: TABBAR_HEIGHT });
+    tabbarView.setBounds({ x: 0, y: 0, width, height: tabbarDragActive ? height : TABBAR_HEIGHT });
   }
   for (const tab of tabs) {
     if (isViewAlive(tab.view)) {
       tab.view.setBounds({ x: 0, y: TABBAR_HEIGHT, width, height: contentHeight });
     }
   }
+}
+
+/**
+ * 切换标签拖动浮层，结束后缩回标题栏，避免遮挡内容区交互。
+ * @param {boolean} dragging - 是否正在拖动标签
+ * @returns {void} 更新浮层位置和尺寸
+ */
+function setTabbarDragging(dragging) {
+  if (tabbarDragActive === dragging) return;
+  tabbarDragActive = dragging;
+  syncTabBounds();
 }
 
 /**
@@ -719,13 +732,14 @@ function createTabbarView() {
       spellcheck: false,
     },
   });
-  view.setBackgroundColor('#010409');
+  view.setBackgroundColor('#00000000');
   attachTabbarGuards(view);
   // 契约 §17：经 loadFile query 注入平台标识，标签条页面据此做红绿灯安全区 /
   // overlay 控件区的 CSS 分支（body[data-platform]）
   view.webContents.loadFile(path.join(__dirname, 'tabbar.html'), { query: { platform: process.platform } });
   // 加载完成（含崩溃重建后的重载）即回填当前标签集合与全屏态，避免状态失步
   view.webContents.on('did-finish-load', () => {
+    setTabbarDragging(false);
     pushTabbarState();
     // 契约 §17.1.1：标签条加载完成时同步当前全屏态（此前窗口若已进入全屏，
     // 事件推送会错过未就绪的标签条，这里兜底对齐）
@@ -759,6 +773,7 @@ function attachTabbarGuards(view) {
 
 /** 重建标签条：新视图就位后再销毁旧视图，期间标签集合不受影响 */
 function rebuildTabbar() {
+  tabbarDragActive = false;
   if (!mainWindow || mainWindow.isDestroyed()) {
     tabbarView = null;
     return;
@@ -880,6 +895,8 @@ function createTab(url) {
   attachTabGuards(tab);
   tabs.push(tab);
   mainWindow.contentView.addChildView(view);
+  // 提前保持标签条在最上层；拖动途中重排原生视图会打断第一次指针捕获。
+  if (isViewAlive(tabbarView)) mainWindow.contentView.addChildView(tabbarView);
   // 新标签按浏览器惯例立即激活（activateTab 负责隐藏旧激活视图）
   activateTab(tab.id);
   view.webContents.loadURL(url || appUrl());
@@ -1360,10 +1377,12 @@ function createMainWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
     tabbarView = null;
+    tabbarDragActive = false;
     // 内容视图随窗口一起销毁；清空集合，避免二次启动/激活路径引用已销毁视图
     tabs.length = 0;
     activeTabId = null;
   });
+  mainWindow.on('blur', () => setTabbarDragging(false));
   // 标签条与全部内容标签的布局随窗口几何变化全量同步（resize/maximize/全屏）
   for (const event of ['resize', 'maximize', 'unmaximize']) {
     mainWindow.on(event, syncTabBounds);
@@ -1872,6 +1891,11 @@ function registerIpc() {
   ipcMain.on('git-lens-tabbar:move-tab', (event, tabId, beforeId) => {
     if (!isTabbarSender(event.sender)) return;
     moveTab(tabId, beforeId);
+  });
+
+  ipcMain.on('git-lens-tabbar:drag-state', (event, dragging) => {
+    if (!isTabbarSender(event.sender) || typeof dragging !== 'boolean') return;
+    setTabbarDragging(dragging);
   });
 }
 
