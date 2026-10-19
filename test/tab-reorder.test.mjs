@@ -62,21 +62,35 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
   }
 
   async function expectOrder(ids, active) {
-    await pollUntilAsync(async () => JSON.stringify(await snapshot()) === JSON.stringify({ ids, active }), 5000,
-      { describe: `标签顺序 ${ids}，激活 ${active}` });
+    let actual;
+    try {
+      await pollUntilAsync(async () => {
+        actual = await snapshot();
+        return JSON.stringify(actual) === JSON.stringify({ ids, active });
+      }, 5000, { describe: `标签顺序 ${ids}，激活 ${active}` });
+    } catch (error) {
+      throw new Error(`${error.message}；实际状态：${JSON.stringify(actual)}`);
+    }
   }
 
-  // 经 Chromium 输入通道产生可信指针事件，实际验证捕获、兼容 click 与跨元素松手。
+  // 使用独立的笔指针通道，避免视图扩展时真实鼠标的悬停事件中断自动测试。
   async function mouse(type, x, y, down = false) {
     if (type === 'mouseDown') {
-      await app.evaluate(({ webContents }) => webContents.getAllWebContents()
-        .find(item => item.getURL().includes('/tabbar.html')).focus());
+      await app.evaluate(({ BrowserWindow, webContents }) => {
+        BrowserWindow.getAllWindows()[0].focus();
+        webContents.getAllWebContents().find(item => item.getURL().includes('/tabbar.html')).focus();
+      });
       await pollUntilAsync(() => bar.evaluate(() => document.hasFocus()), 5000);
     }
     await app.evaluate(({ webContents }, input) => {
       const contents = webContents.getAllWebContents().find((item) => item.getURL().includes('/tabbar.html'));
-      contents.sendInputEvent(input);
-    }, { type, x: Math.round(x), y: Math.round(y), button: 'left', clickCount: 1, modifiers: down ? ['leftbuttondown'] : [] });
+      if (!contents.debugger.isAttached()) contents.debugger.attach('1.3');
+      return contents.debugger.sendCommand('Input.dispatchMouseEvent', input);
+    }, {
+      type: { mouseMove: 'mouseMoved', mouseDown: 'mousePressed', mouseUp: 'mouseReleased' }[type],
+      x: Math.round(x), y: Math.round(y), button: type === 'mouseMove' && !down ? 'none' : 'left',
+      buttons: down ? 1 : 0, clickCount: type === 'mouseMove' ? 0 : 1, pointerType: 'pen',
+    });
     await bar.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve())));
   }
 
@@ -113,11 +127,25 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
   }
 
   async function menu(id) {
-    await app.evaluate(({ Menu }, menuId) => {
+    await app.evaluate(({ Menu, BrowserWindow, webContents }, menuId) => {
       const item = Menu.getApplicationMenu().getMenuItemById(menuId);
       if (!item) throw new Error(`菜单不存在：${menuId}`);
-      item.click();
+      if (item.role === 'togglefullscreen' && process.platform === 'darwin') {
+        const win = BrowserWindow.getAllWindows()[0];
+        win.focus();
+        Menu.sendActionToFirstResponder('toggleFullScreen:');
+        return;
+      }
+      item.click({}, BrowserWindow.getAllWindows()[0], webContents.getFocusedWebContents());
     }, id);
+  }
+
+  let failures = 0;
+  async function check(name, run) {
+    await t.test(name, async ctx => {
+      try { await run(ctx); } catch (error) { failures++; throw error; }
+    });
+    if (failures) throw new Error('前置场景失败，保留现场并终止依赖顺序的后续检查');
   }
 
   try {
@@ -134,7 +162,7 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
       return page;
     }));
 
-    await t.test('页面身份、首屏内容与标签栏可用', async () => {
+    await check('页面身份、首屏内容与标签栏可用', async () => {
       assert.equal(await bar.title(), 'Git Lens 标签条');
       assert.equal(await bar.evaluate(() => document.querySelectorAll('[role="tab"]').length), 3);
       const identity = await pages[0].evaluate(() => ({
@@ -147,7 +175,7 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
       assert.equal(identity.overlay, false);
     });
 
-    await t.test('末尾拖到首位、首位拖到末尾和中间插入，激活项目保持', async () => {
+    await check('末尾拖到首位、首位拖到末尾和中间插入，激活项目保持', async () => {
       assert.deepEqual(await drag(2, 0), { indicatorVisible: true, cleaned: true });
       await expectOrder([c, a, b], b);
       await drag(0, null, 'right');
@@ -158,7 +186,7 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
       await expectOrder([b, c, a], b);
     });
 
-    await t.test('普通点击和轻微移动仍切换标签，栏外松手取消排序', async () => {
+    await check('普通点击和轻微移动仍切换标签，栏外松手取消排序', async () => {
       const point = await bar.evaluate(() => {
         const rect = document.querySelectorAll('.tab')[1].getBoundingClientRect();
         return { x: rect.left + 20, y: rect.top + rect.height / 2 };
@@ -175,14 +203,14 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
       assert.equal(await bar.evaluate(() => pointerDrag === null && !document.body.classList.contains('tab-dragging')), true);
     });
 
-    await t.test('取消与原位投放不改变顺序', async () => {
+    await check('取消与原位投放不改变顺序', async () => {
       assert.deepEqual(await drag(2, 0, 'left', true), { indicatorVisible: true, cleaned: true });
       await expectOrder([b, c, a], b);
       await drag(1, 2);
       await expectOrder([b, c, a], b);
     });
 
-    await t.test('半透明标签预览跟随鼠标，移出标签栏仍可见，取消后不遮挡内容', async () => {
+    await check('半透明标签预览跟随鼠标，移出标签栏仍可见，取消后不遮挡内容', async () => {
       const contentBounds = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children
         .filter(view => view.webContents.getURL().startsWith('http:')).map(view => view.getBounds()));
       const point = await startDrag(2);
@@ -221,7 +249,7 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
       }), 38);
     });
 
-    await t.test('指针取消、丢失捕获和窗口失焦均结束排序，后续仍可继续拖动', async () => {
+    await check('指针取消、丢失捕获和窗口失焦均结束排序，后续仍可继续拖动', async () => {
       for (const reason of ['pointercancel', 'lostpointercapture', 'blur']) {
         const point = await startDrag(2);
         await bar.evaluate((reason) => {
@@ -235,16 +263,16 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
       }
     });
 
-    await t.test('整条标签栏都是投放区：栏内空白松手按插入线落位（1.1.2 修复）', async () => {
+    await check('整条标签栏都是投放区：栏内空白松手按插入线落位（1.1.2 修复）', async () => {
       // 「+」上松手只排序，不触发兼容 click 新建标签。
       assert.deepEqual(await drag(0, 'new-tab'), { indicatorVisible: true, cleaned: true });
       await expectOrder([c, a, b], b);
-      // 末标签拖回 darwin 红绿灯安全区（#bar 左侧留白）：按首位语义落位复原。
+      // 标签栏左边界按首位语义落位，原生红绿灯区域不属于网页投放区。
       assert.deepEqual(await drag(2, 'bar', 'left'), { indicatorVisible: true, cleaned: true });
       await expectOrder([b, c, a], b);
     });
 
-    await t.test('全屏排序只处理指针，不启动原生拖放；退出全屏恢复标题栏拖动区', async () => {
+    await check('全屏排序只处理指针，不启动原生拖放；退出全屏恢复标题栏拖动区', async () => {
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setFullScreen(true));
       try {
         await pollUntilAsync(() => bar.evaluate(() => document.body.classList.contains('fullscreen')), 15000);
@@ -278,7 +306,39 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
       assert.equal(await bar.evaluate(() => getComputedStyle(document.getElementById('bar')).webkitAppRegion), 'drag');
     });
 
-    await t.test('⌘1–⌘3 按重排后的位置切换，页面未重载', async () => {
+    await check('窗口态保留原生按钮区，全屏标签贴左并可通过系统菜单退出', async () => {
+      if (process.platform !== 'darwin') return;
+      async function chromeBounds() {
+        return app.evaluate(({ BrowserWindow }) => {
+          const win = BrowserWindow.getAllWindows()[0];
+          const view = win.contentView.children.find(item => item.webContents.getURL().includes('/tabbar.html'));
+          return { fullscreen: win.isFullScreen(), bar: view.getBounds(), buttons: win.getWindowButtonPosition() };
+        });
+      }
+      const normal = await chromeBounds();
+      assert.equal(normal.fullscreen, false);
+      assert.ok(normal.bar.x >= normal.buttons.x + 56, '网页视图不能覆盖原生按钮的命中区域');
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setFullScreen(true));
+      try {
+        await pollUntilAsync(() => bar.evaluate(() => document.body.classList.contains('fullscreen')), 15000);
+        const full = await chromeBounds();
+        assert.equal(full.bar.x, 0, '全屏标签必须吸附靠左');
+        assert.equal(await bar.evaluate(() => getComputedStyle(document.getElementById('bar')).paddingLeft), '0px');
+        assert.ok(full.bar.y > 0, '全屏顶边由原生窗口持有，允许唤回系统标题栏和菜单栏');
+        assert.equal(await bar.evaluate(() => document.querySelector('[id="exit-fullscreen"]')), null);
+        await menu('toggle-fullscreen');
+        await pollUntilAsync(async () => !(await chromeBounds()).fullscreen, 15000);
+        await pollUntilAsync(() => bar.evaluate(() => !document.body.classList.contains('fullscreen')), 15000);
+        const restored = await chromeBounds();
+        assert.equal(restored.bar.x, normal.bar.x);
+        assert.equal(restored.bar.y, 0);
+        assert.equal(restored.bar.height, 38);
+      } finally {
+        await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setFullScreen(false));
+      }
+    });
+
+    await check('⌘1–⌘3 按重排后的位置切换，页面未重载', async () => {
       for (const [index, id] of [b, c, a].entries()) {
         await menu(`switch-tab-${index + 1}`);
         await expectOrder([b, c, a], id);
@@ -290,7 +350,7 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
       }
     });
 
-    await t.test('拒绝非法或失效的移动目标', async () => {
+    await check('拒绝非法或失效的移动目标', async () => {
       assert.equal(await bar.evaluate(() => {
         try { window.gitLensTabbar.moveTab(1, '2'); return false; } catch { return true; }
       }), true);
@@ -311,7 +371,7 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
       }), true);
     });
 
-    await t.test('排序和激活位置防抖保存，重启恢复相同项目顺序', async () => {
+    await check('排序和激活位置防抖保存，重启恢复相同项目顺序', async () => {
       const expectedSearches = [searches[1], searches[2], searches[0]];
       await pollUntilAsync(async () => {
         const archive = JSON.parse(await fs.readFile(archivePath, 'utf8'));
@@ -335,7 +395,7 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
       }
     });
 
-    await t.test('拖动期间收到标题更新仍可继续，取消后显示最新标题', async () => {
+    await check('拖动期间收到标题更新仍可继续，取消后显示最新标题', async () => {
       const point = await startDrag(0);
       await bar.evaluate(() => { window.dragSourceForTest = document.querySelector('.tab'); });
       const [target] = await hub.listAppTargets();
@@ -348,7 +408,7 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
       assert.equal(await bar.evaluate(() => document.getElementById('tabs').textContent.includes('拖动期间更新标题')), true);
     });
 
-    await t.test('溢出标签自动滚动；第十个标签移到首位后 ⌘0 跟随新位置', async () => {
+    await check('溢出标签自动滚动；第十个标签移到首位后 ⌘0 跟随新位置', async () => {
       for (let count = 4; count <= 10; count++) {
         await bar.evaluate(() => window.gitLensTabbar.newTab());
         await pollUntilAsync(async () => (await snapshot()).ids.length === count, 5000);

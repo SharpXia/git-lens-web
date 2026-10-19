@@ -8,6 +8,10 @@
 
 /** 顶部标签条固定高度（DIP，与 main.js 的 TABBAR_HEIGHT 同源语义：契约 §15/§17） */
 export const TABBAR_HEIGHT_DIP = 38;
+/** 原生窗口按钮区必须在网页视图之外保留，网页内边距不会让鼠标穿透。 */
+export const MAC_WINDOW_CONTROLS_WIDTH_DIP = 78;
+/** 全屏时为系统菜单栏和原生标题栏保留顶边触发区域。 */
+export const MAC_FULLSCREEN_TOP_INSET_DIP = 4;
 
 /**
  * 按平台返回主窗口 chrome 融合选项（契约 §17），展开进 BrowserWindow 构造参数。
