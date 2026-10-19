@@ -41,6 +41,7 @@ files:
   # 历史教训：a5e18e8（G7 交付）/ dc1e3bd（窗口融合）/ 29c4fd3（应用名迁移）
   # 各自新增一个文件，但 files 白名单只补了部分，导致打包态启动崩溃。
   - electron/service-config-dir.js
+  - electron/git-environment.js
   - electron/window-chrome.js
   - electron/user-data-migration.js
   - electron/update-manager.js

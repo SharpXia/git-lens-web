@@ -41,21 +41,18 @@ import {
   utilityProcess,
   webContents,
 } from 'electron';
-import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
 import electronUpdater from 'electron-updater';
 
 import { resolveServiceConfigDir } from './service-config-dir.js';
+import { discoverGit, buildGitEnvironment } from './git-environment.js';
 import { windowChromeOptions } from './window-chrome.js';
 import { migrateLegacyStateFiles } from './user-data-migration.js';
 import { createUpdateController, prepareMacUpdate } from './update-manager.js';
-
-const execFileAsync = promisify(execFile);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -92,13 +89,6 @@ const RECOVERY_FALLBACK_DELAY_MS = 1200;
 /** 跨源重放导航的提交判定等待与重试上限 */
 const TAB_REPLAY_COMMIT_TIMEOUT_MS = 8000;
 const TAB_REPLAY_MAX_RETRIES = 2;
-
-/** 各平台 git 常见安装目录；GUI 启动的 PATH 通常不含 Homebrew，需要增补探测 */
-const GIT_SEARCH_DIRS = {
-  darwin: ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'],
-  linux: ['/usr/local/bin', '/usr/local/sbin', '/usr/bin', '/bin', '/usr/sbin', '/sbin', '/snap/bin'],
-  win32: ['C:\\Program Files\\Git\\cmd', 'C:\\Program Files (x86)\\Git\\cmd', 'C:\\Git\\cmd'],
-};
 
 // 应用名先于任何窗口/菜单创建设置，macOS 菜单栏与 userData 默认名都依赖它。
 // 契约 §20（用户定则）：应用名统一为 Git Lens，不再沿用旧名；
@@ -320,70 +310,15 @@ async function writeE2eReadyFile(extra = {}) {
   }
 }
 
-// ---- Git 依赖发现（契约 §7；不阻塞启动） ----
-
-/**
- * 执行 `git --version` 探测候选路径。
- * @param {string} gitPath - git 可执行文件路径或 PATH 解析名
- * @returns {Promise<{found: boolean, path: string, version: string|null}>}
- */
-async function probeGitExecutable(gitPath) {
-  try {
-    const { stdout } = await execFileAsync(gitPath, ['--version'], { timeout: 5000 });
-    return { found: true, path: gitPath, version: String(stdout).trim() || null };
-  } catch (err) {
-    log(`探测 git（${gitPath}）失败：${err.message}`);
-    return { found: false, path: gitPath, version: null };
-  }
-}
-
-/**
- * 判断候选路径是否存在且可执行。
- * @param {string} candidate - 候选 git 路径
- */
-async function isExecutableFile(candidate) {
-  try {
-    await fsp.access(candidate, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * 发现系统 Git：显式环境变量 > 常见安装目录 > 增补 PATH。
- * 找不到时不阻塞启动，由渲染层配合诊断接口呈现中文修复建议。
- * @returns {Promise<object>} 含 found/path/version/source 的发现结果
- */
-async function discoverGit() {
-  const explicitPath = process.env.GIT_LENS_GIT_PATH;
-  if (explicitPath) {
-    const result = await probeGitExecutable(explicitPath);
-    return { ...result, source: 'GIT_LENS_GIT_PATH 环境变量' };
-  }
-  for (const dir of GIT_SEARCH_DIRS[process.platform] || []) {
-    const candidate = path.join(dir, process.platform === 'win32' ? 'git.exe' : 'git');
-    if (!(await isExecutableFile(candidate))) continue;
-    const result = await probeGitExecutable(candidate);
-    if (result.found) return { ...result, source: '常见安装目录探测' };
-  }
-  // 兜底交给 PATH 解析；增补后的 PATH 同时注入服务子进程，保证两侧行为一致
-  const result = await probeGitExecutable('git');
-  return { ...result, source: 'PATH' };
-}
-
 /**
  * 构造服务子进程环境：透传现有环境（含 GIT_LENS_TEST_MODE / GIT_LENS_TEST_RUN_ID /
- * GIT_LENS_GIT_PATH），补充桌面配置目录与会话凭据，并增补 PATH 以便服务侧 git 可用。
+ * GIT_LENS_GIT_PATH），补充桌面配置目录与会话凭据，固定使用已发现的 Git。
  */
 function buildServiceEnv() {
-  const pathSeparator = process.platform === 'win32' ? ';' : ':';
-  const extraDirs = GIT_SEARCH_DIRS[process.platform] || [];
   return {
-    ...process.env,
+    ...buildGitEnvironment(gitInfo),
     GIT_LENS_DESKTOP_CONFIG_DIR: getServiceConfigDir(),
     GIT_LENS_SESSION_TOKEN: sessionToken,
-    PATH: [...extraDirs, process.env.PATH || ''].filter(Boolean).join(pathSeparator),
   };
 }
 
@@ -1982,7 +1917,7 @@ async function bootstrap() {
     }
   }
 
-  gitInfo = await discoverGit();
+  gitInfo = await discoverGit({ log });
   if (!gitInfo.found) {
     log('未找到可用的 git 可执行文件，仓库分析功能不可用；可在窗口内查看修复建议');
   } else {
