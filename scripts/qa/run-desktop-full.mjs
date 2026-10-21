@@ -847,6 +847,115 @@ async function main() {
     record('w8-prune-lost', 'prune 清理失联 worktree（porcelain 列表无失联项）', w8Ok ? 'pass' : 'fail',
       `HTTP=${pruneRes.status} 列表仍含失联=${wtListAfterPrune.includes('wt-lost')}`);
 
+    // ================= 5.5 W9 远端分支管理 =================
+    // 顺序依赖：R2 建远端分支 → R3 检出重命名后切回 main → R4 冲突合并全程 → R5 UI 面板基线。
+    // R4 会给 main 追加一笔合并提交，必须放在所有依赖 main 历史的场景之后
+    const remoteBare = fixture.main.remote.bare;
+
+    // W9a 远端分支清单：裸远端的 main 与 feature/remote-only 均可见且带同步状态
+    const remoteList = await api(`/api/remote-branches?path=${encodeURIComponent(mainRepo)}`);
+    const remoteOnlyEntry = (remoteList.body?.branches || []).find((b) => b.name === 'origin/feature/remote-only');
+    const w9aOk = remoteList.status === 200 && remoteList.body?.ok === true
+      && remoteList.body?.mainBranch === 'main'
+      && Boolean(remoteOnlyEntry) && /^[0-9a-f]{40}$/.test(remoteOnlyEntry?.sha || '')
+      && (remoteList.body?.branches || []).some((b) => b.name === 'origin/main');
+    record('w9a-remote-branch-list', '远端分支清单返回 origin/main 与 origin/feature/remote-only（含 SHA 与主干）', w9aOk ? 'pass' : 'fail',
+      `HTTP=${remoteList.status} 分支数=${remoteList.body?.branches?.length ?? 'x'} remoteOnly=${Boolean(remoteOnlyEntry)}`);
+
+    // W9b 纯远端建分支：裸远端出现新分支、本地不落地分支、重复创建 409
+    const remoteCreate = await api('/api/create-remote-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, sourceRef: 'origin/feature/remote-only', newBranchName: 'feature/remote-copy' }
+    });
+    const bareCopySha = await gitSnap(qaRoot, remoteBare, 'rev-parse', 'refs/heads/feature/remote-copy').catch(() => '');
+    const noLocalCopy = (await gitSnap(qaRoot, mainRepo, 'branch', '--list', 'feature/remote-copy')) === '';
+    const remoteDup = await api('/api/create-remote-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, sourceRef: 'origin/feature/remote-only', newBranchName: 'feature/remote-copy' }
+    });
+    const w9bOk = remoteCreate.status === 200 && bareCopySha === remoteOnlyEntry?.sha && noLocalCopy && remoteDup.status === 409;
+    record('w9b-create-remote-branch', '基于远端分支创建远端分支：远端落地、本地零分支、重复创建 409', w9bOk ? 'pass' : 'fail',
+      `HTTP=${remoteCreate.status} 裸远端SHA一致=${bareCopySha === remoteOnlyEntry?.sha} 本地零分支=${noLocalCopy} 重复=${remoteDup.status}`);
+
+    // W9c 检出远端分支到主工作区并重命名（upstream 指向来源），随后切回 main
+    const checkoutRenamed = await api('/api/checkout-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, worktree: mainRepo, refType: 'remote', ref: 'origin/feature/remote-only', localName: 'feature/remote-renamed' }
+    });
+    const renamedHead = await gitSnap(qaRoot, mainRepo, 'rev-parse', 'feature/remote-renamed').catch(() => '');
+    const upstream = await gitSnap(qaRoot, mainRepo, 'rev-parse', '--abbrev-ref', 'feature/remote-renamed@{upstream}').catch(() => '');
+    const backToMain = await api('/api/checkout-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, worktree: mainRepo, refType: 'local', ref: 'main' }
+    });
+    const w9cOk = checkoutRenamed.status === 200 && checkoutRenamed.body?.branch === 'feature/remote-renamed'
+      && renamedHead === remoteOnlyEntry?.sha && upstream === 'origin/feature/remote-only'
+      && backToMain.status === 200;
+    record('w9c-checkout-rename', '检出远端分支重命名为本地跟踪分支并切回 main', w9cOk ? 'pass' : 'fail',
+      `HTTP=${checkoutRenamed.status} 分支=${checkoutRenamed.body?.branch ?? 'x'} upstream=${upstream} 切回=${backToMain.status}`);
+
+    // W9d 合并冲突全程：merge-ref 冲突 → merge-state → conflict-file 三方 → 自定义内容解决 → merge-commit 双亲
+    const mergeStart = await api('/api/merge-ref', { method: 'POST', body: { repoPath: mainRepo, worktree: mainRepo, ref: 'origin/feature/remote-only' } });
+    const conflictState = await api(`/api/merge-state?worktree=${encodeURIComponent(mainRepo)}`);
+    const conflictEntry = (conflictState.body?.conflictFiles || []).find((f) => f.path === 'notes.txt');
+    const conflictFileBody = await api(`/api/merge-conflict-file?worktree=${encodeURIComponent(mainRepo)}&filePath=${encodeURIComponent('notes.txt')}`);
+    const resolveCustom = await api('/api/merge-resolve', {
+      method: 'POST',
+      body: { worktree: mainRepo, filePath: 'notes.txt', resolution: 'content', content: 'remote 冲突素材：人工合并版本。\n' }
+    });
+    const mergeCommit = await api('/api/merge-commit', { method: 'POST', body: { worktree: mainRepo } });
+    const mergeParents = mergeCommit.status === 200 ? (await gitSnap(qaRoot, mainRepo, 'log', '-1', '--format=%P')).split(/\s+/) : [];
+    const notesAfterMerge = await gitSnap(qaRoot, mainRepo, 'show', 'HEAD:notes.txt').catch(() => '');
+    const w9dOk = mergeStart.status === 200 && mergeStart.body?.status === 'conflict'
+      && mergeStart.body?.oursLabel === 'main' && mergeStart.body?.theirsLabel === 'origin/feature/remote-only'
+      && Boolean(conflictEntry) && conflictEntry?.code === 'UU'
+      && (conflictFileBody.body?.ours || '').includes('本地版本') && (conflictFileBody.body?.theirs || '').includes('远端版本')
+      && resolveCustom.status === 200 && resolveCustom.body?.remaining === 0
+      && mergeCommit.status === 200 && mergeParents.length === 2
+      && notesAfterMerge === 'remote 冲突素材：人工合并版本。';
+    record('w9d-merge-conflict-resolve', '合并远端分支冲突全程：现场保持 → 三方内容 → 自定义解决 → 双亲合并提交', w9dOk ? 'pass' : 'fail',
+      `merge=${mergeStart.status}/${mergeStart.body?.status ?? 'x'} conflict=${Boolean(conflictEntry)} resolve=${resolveCustom.status}/${resolveCustom.body?.remaining ?? 'x'} commit=${mergeCommit.status} 父数=${mergeParents.length}`);
+
+    // W9e 放弃合并：合并未进主干第二条远端分支重造冲突后 abort，HEAD 与工作区均恢复
+    const mergeSecond = await api('/api/merge-ref', { method: 'POST', body: { repoPath: mainRepo, worktree: mainRepo, ref: 'origin/feature/remote-second' } });
+    const headBeforeAbort = await gitSnap(qaRoot, mainRepo, 'rev-parse', 'HEAD');
+    const abortRes = await api('/api/merge-abort', { method: 'POST', body: { worktree: mainRepo } });
+    const headAfterAbort = await gitSnap(qaRoot, mainRepo, 'rev-parse', 'HEAD');
+    const statusAfterAbort = await gitSnap(qaRoot, mainRepo, 'status', '--porcelain');
+    const w9eOk = mergeSecond.status === 200 && mergeSecond.body?.status === 'conflict'
+      && abortRes.status === 200 && headAfterAbort === headBeforeAbort && statusAfterAbort === '';
+    record('w9e-merge-abort', '放弃合并：第二条远端分支重造冲突后 abort，HEAD 与工作区恢复', w9eOk ? 'pass' : 'fail',
+      `merge=${mergeSecond.status}/${mergeSecond.body?.status ?? 'x'} abort=${abortRes.status} HEAD恢复=${headAfterAbort === headBeforeAbort} 现场干净=${statusAfterAbort === ''}`);
+
+    // W9f 远端分支 Tab UI：先切回主仓库（MR 截图场景会把页面停在 repo-mr，其无远端），
+    // 再切 Tab 断言列表渲染、目标工作区就绪、无进行中合并面板隐藏
+    await waitInspect(mainRepo);
+    await page.evaluate(() => { window.switchTab('remote'); });
+    await pollPage(page, () => {
+      const list = document.getElementById('remoteBranchList');
+      return Boolean(list) && list.querySelectorAll('.list-item').length > 0;
+    }, null, 20000);
+    const remoteUi = await page.evaluate(() => ({
+      tabActive: document.getElementById('tabRemote')?.className.includes('active'),
+      viewVisible: document.getElementById('viewRemote')?.style.display !== 'none',
+      rows: document.querySelectorAll('#remoteBranchList .list-item').length,
+      countText: document.getElementById('remoteBranchCount')?.textContent,
+      targetOptions: document.querySelectorAll('#remoteWorktreeSelect option').length,
+      hasCopyBranch: [...document.querySelectorAll('#remoteBranchList .item-name')].some((el) => el.textContent.includes('origin/feature/remote-copy')),
+      mergePanelHidden: document.getElementById('remoteMergePanel')?.style.display === 'none'
+    }));
+    const w9fOk = remoteUi.tabActive && remoteUi.viewVisible && remoteUi.rows >= 3
+      && remoteUi.targetOptions >= 1 && remoteUi.hasCopyBranch && remoteUi.mergePanelHidden;
+    record('w9f-remote-tab-ui', '远端分支 Tab 渲染：列表含新建远端分支、目标工作区就绪、合并面板隐藏', w9fOk ? 'pass' : 'fail',
+      JSON.stringify(remoteUi));
+    await captureBaseline(page, qaRoot, 'w', 'remote-tab', () => {
+      const view = document.getElementById('viewRemote');
+      return Boolean(view) && view.style.display !== 'none'
+        && document.querySelectorAll('#remoteBranchList .list-item').length > 0;
+    });
+    // 回到总览，避免影响后续崩溃恢复场景的会话状态语义
+    await page.evaluate(() => { window.switchTab('overview'); });
+
     // ================= 6. 崩溃恢复（含恢复页截图 + 选中仓库恢复） =================
     // 先把选中仓库设为主仓库；selectRepo 对相同仓库是 no-op，先切走再切回
     // 保证 syncStateToUrl 真正把 repo 写入 sessionStorage（重启恢复的数据源）

@@ -317,10 +317,10 @@ export async function getWorktrees(repoPath) {
 }
 
 /**
- * 获取当前主工作区对应的比较分支。
+ * 获取当前主工作区对应的比较分支。导出供远端分支管理域服务复用（远端分支相对主干的领先/落后统计）。
  * 同一仓库可能长期在版本分支开发，origin/HEAD 未必是当前要观察的主干。
  */
-async function detectMainBranch(repoPath, worktrees = null) {
+export async function detectMainBranch(repoPath, worktrees = null) {
   const mainWorktree = (worktrees || await getWorktrees(repoPath)).find(wt => wt.isMain && wt.branch);
   if (mainWorktree) return mainWorktree.branch;
 

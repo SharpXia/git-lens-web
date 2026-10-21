@@ -33,7 +33,8 @@
     const TAB_TITLE_LABELS = {
       overview: '仓库总览',
       diff: '差异对比',
-      mr: 'Merge Request'
+      mr: 'Merge Request',
+      remote: '远端分支'
     };
     /**
      * 取出仓库的展示名称；扫描列表尚未完成时回退到路径末级目录。
@@ -94,6 +95,19 @@
     let currentMrDetail = null;  // 抽屉当前展示的 MR 记录
     let createMrSourcePicker = null;
     let createMrTargetPicker = null;
+
+    // 远端分支管理状态：目标工作区、远端分支清单、请求防竞态与冲突编辑抽屉
+    const remoteState = {
+      targetWorktree: '',        // 目标工作区绝对路径（默认主工作区）
+      branches: [],              // 最近一次拉取的远端分支清单
+      branchesReqSeq: 0,
+      mergeState: null,          // 最近一次 /api/merge-state 响应
+      mergeStateReqSeq: 0,
+      checkoutModalBranch: null, // 检出弹层当前来源远端分支对象
+      createRemoteModalBranch: null, // 建远端分支弹层当前基准分支对象
+      editingConflictPath: ''    // 冲突编辑抽屉当前文件（空串表示未打开）
+    };
+    let switchBranchPicker = null; // 切换分支弹层的可搜索选择器
 
     function selectDiffMode(mode) {
       if (mode === currentDiffMode) return;
@@ -1061,10 +1075,12 @@
       document.getElementById('tabOverview').className = tab === 'overview' ? 'tab-btn active' : 'tab-btn';
       document.getElementById('tabMr').className = tab === 'mr' ? 'tab-btn active' : 'tab-btn';
       document.getElementById('tabDiff').className = tab === 'diff' ? 'tab-btn active' : 'tab-btn';
+      document.getElementById('tabRemote').className = tab === 'remote' ? 'tab-btn active' : 'tab-btn';
 
       document.getElementById('viewOverview').style.display = tab === 'overview' ? 'block' : 'none';
       document.getElementById('viewMr').style.display = tab === 'mr' ? 'block' : 'none';
       document.getElementById('viewDiff').style.display = tab === 'diff' ? 'block' : 'none';
+      document.getElementById('viewRemote').style.display = tab === 'remote' ? 'block' : 'none';
 
       if (tab === 'diff') {
         populateDiffSelectors();
@@ -1072,6 +1088,10 @@
       if (tab === 'mr') {
         // 进入 MR Tab 时重拉列表，避免仓库在其他 Tab 发生写操作后展示过期数据
         refreshMergeRequests();
+      }
+      if (tab === 'remote') {
+        // 进入远端分支 Tab 时全量重拉：其他 Tab 的检出/合并会改变工作区分支与 merge 状态
+        refreshRemoteTab();
       }
       syncStateToUrl(pushHistory);
     }
@@ -1169,7 +1189,7 @@
 
         // 恢复 Tab 状态与 Diff 比对
         if (pendingRestoreState) {
-          switchTab(['diff', 'mr'].includes(pendingRestoreState.tab) ? pendingRestoreState.tab : 'overview', false);
+          switchTab(['diff', 'mr', 'remote'].includes(pendingRestoreState.tab) ? pendingRestoreState.tab : 'overview', false);
           if (pendingRestoreState.tab === 'diff') {
             if (pendingRestoreState.diffType === 'uncommitted' && pendingRestoreState.uncommitted) {
               const baseSel = document.getElementById('diffBaseSelect');
@@ -1229,6 +1249,12 @@
         mergeRequestsCache = [];
         renderMrList();
         if (mrDrawerState.isOpen) closeMrDrawer(false);
+        // 远端分支 Tab 同步清空，避免展示上一个仓库的过期数据
+        remoteState.targetWorktree = '';
+        remoteState.branches = [];
+        remoteState.mergeState = null;
+        renderRemoteBranchList();
+        renderRemoteMergePanel();
         document.getElementById('headerPath').textContent = '';
         sel.innerHTML = '<option value="">未扫描到仓库</option>';
         document.getElementById('repoTriggerText').textContent = scanDirectoryConfig.customDirectories.length > 0
@@ -1275,6 +1301,8 @@
         renderFilteredLists();
         populateDiffSelectors();
         refreshMergeRequests();
+        // 远端分支 Tab 展示的是工作区级状态，仓库数据变化后需同步重拉
+        if (activeTab === 'remote') refreshRemoteTab();
       } catch (err) {
         // 服务中断期间在途分析请求失败是常态，绝不能弹阻塞框冻结恢复遮罩（DEF-006）
         notifyRequestFailure(err, '分析失败: ' + toDisplayErrorMessage(err, '无法连接本地服务'));
@@ -4486,6 +4514,713 @@
       }
     }
 
+    /* ================= 远端分支管理 Tab =================
+       覆盖三类能力：基于远端分支创建远端分支（纯远端操作）、
+       目标工作区分支切换/检出远端分支（可重命名）、合并远端分支 +
+       冲突快捷处理（ours/theirs）与自定义编辑冲突区域。 */
+
+    /* 当前选中的目标工作区；未选择时回退主工作区（getWorktrees 首条） */
+    function getRemoteTargetWorktree() {
+      const select = document.getElementById('remoteWorktreeSelect');
+      const selected = select ? select.value : '';
+      if (selected) return selected;
+      const main = currentWorktrees.find(w => w.isMain && w.existsOnDisk !== false);
+      return main ? main.path : (currentWorktrees[0] ? currentWorktrees[0].path : '');
+    }
+
+    /* 重建目标工作区下拉：保留仍然有效的既有选择，否则回退主工作区 */
+    function populateRemoteWorktreeSelect() {
+      const select = document.getElementById('remoteWorktreeSelect');
+      if (!select) return;
+      select.innerHTML = '';
+      currentWorktrees
+        .filter(w => w.existsOnDisk !== false)
+        .forEach(w => {
+          const opt = document.createElement('option');
+          opt.value = w.path;
+          opt.textContent = w.isMain ? `⭐ 主工作区 · ${w.branch || w.head || '(bare)'} · ${w.path}` : `${w.branch || w.head || '(detached)'} · ${w.path}`;
+          select.appendChild(opt);
+        });
+      // 目标失效（被移除等）时回退主工作区；否则保留用户选择
+      const valid = [...select.options].some(o => o.value === remoteState.targetWorktree);
+      if (!valid) remoteState.targetWorktree = getRemoteTargetWorktree();
+      select.value = remoteState.targetWorktree;
+    }
+
+    /* 进入 Tab / 仓库数据变化后的入口：重拉目标工作区、merge 状态与远端分支清单 */
+    function refreshRemoteTab() {
+      populateRemoteWorktreeSelect();
+      refreshRemoteBranches();
+      refreshMergeState();
+    }
+
+    /* 拉取远端分支清单并渲染（请求序列防竞态：仅最后一次响应上屏） */
+    async function refreshRemoteBranches() {
+      const container = document.getElementById('remoteBranchList');
+      if (!currentRepo) {
+        container.innerHTML = '<div class="loading">请先选择仓库</div>';
+        document.getElementById('remoteBranchCount').textContent = '0 个';
+        return;
+      }
+      const seq = ++remoteState.branchesReqSeq;
+      try {
+        const res = await fetch(`/api/remote-branches?path=${encodeURIComponent(currentRepo)}`);
+        const data = await res.json();
+        if (seq !== remoteState.branchesReqSeq) return;
+        if (!data.ok) throw new Error(data.error || '读取远端分支失败');
+        remoteState.branches = data.branches || [];
+        renderRemoteBranchList();
+      } catch (err) {
+        if (seq !== remoteState.branchesReqSeq) return;
+        container.innerHTML = `<div class="loading" style="color: var(--danger);">远端分支加载失败：${escapeHtml(toDisplayErrorMessage(err, '无法连接本地服务'))}</div>`;
+      }
+    }
+
+    /* 单条远端分支的状态徽标：相对主干领先/落后 + 本地同名分支同步状态 */
+    function remoteBranchBadgesHtml(b) {
+      const badges = [];
+      if (b.ahead !== null && b.behind !== null) {
+        if (b.ahead === 0 && b.behind === 0) {
+          badges.push('<span class="badge">与主干同步</span>');
+        } else {
+          if (b.ahead > 0) badges.push(`<span class="badge badge-success">领先主干 ${b.ahead}</span>`);
+          if (b.behind > 0) badges.push(`<span class="badge badge-warning">落后主干 ${b.behind}</span>`);
+        }
+      }
+      if (b.local) {
+        if (b.local.ahead === 0 && b.local.behind === 0) {
+          badges.push('<span class="badge">本地已同步</span>');
+        } else if (b.local.ahead > 0) {
+          badges.push(`<span class="badge badge-warning">本地领先 ${b.local.ahead}</span>`);
+        } else if (b.local.behind > 0) {
+          badges.push(`<span class="badge badge-warning">本地落后 ${b.local.behind}</span>`);
+        }
+        const boundWt = currentWorktrees.find(w => w.branch === b.branch);
+        if (boundWt) badges.push('<span class="badge">已检出</span>');
+      } else {
+        badges.push('<span class="badge badge-danger">未检出</span>');
+      }
+      return badges.join('');
+    }
+
+    /* 渲染远端分支列表（含客户端过滤），并逐行绑定三个操作入口 */
+    function renderRemoteBranchList() {
+      const container = document.getElementById('remoteBranchList');
+      const filterInput = document.getElementById('remoteBranchFilterInput');
+      const keyword = (filterInput ? filterInput.value : '').trim().toLowerCase();
+      const all = remoteState.branches;
+      const filtered = keyword ? all.filter(b => b.name.toLowerCase().includes(keyword)) : all;
+
+      document.getElementById('remoteBranchCount').textContent = `${all.length} 个`;
+      if (!currentRepo) {
+        container.innerHTML = '<div class="loading">请先选择仓库</div>';
+        return;
+      }
+      if (all.length === 0) {
+        container.innerHTML = '<div class="loading">没有远端分支。可点击上方「刷新远端 (fetch)」同步远端状态。</div>';
+        return;
+      }
+      if (filtered.length === 0) {
+        container.innerHTML = '<div class="loading">没有匹配的远端分支</div>';
+        return;
+      }
+
+      container.innerHTML = filtered.map(b => `
+        <div class="list-item" data-remote-branch="${escapeHtml(b.name)}">
+          <div class="item-main">
+            <div class="item-header-row">
+              <span class="item-name">☁️ ${escapeHtml(b.name)}</span>
+              <span class="item-tags">${remoteBranchBadgesHtml(b)}</span>
+            </div>
+            <div class="item-desc">
+              ${escapeHtml(shortSha(b.sha))} · ${escapeHtml(b.author || '-')} ·
+              ${escapeHtml(formatRelativeTimeCn(b.committerDate) || b.committerDate || '-')} ·
+              ${escapeHtml(b.subject || '')}
+            </div>
+          </div>
+          <div class="item-actions">
+            <button class="btn-outline" type="button" data-rb-action="checkout" title="检出为本地跟踪分支（可重命名）到目标工作区">检出</button>
+            <button class="btn-outline" type="button" data-rb-action="merge" title="合并该远端分支到目标工作区当前分支">合并到工作区</button>
+            <button class="btn-outline" type="button" data-rb-action="create" title="以该远端分支为基准创建新的远端分支（纯远端操作）">建远端分支</button>
+          </div>
+        </div>
+      `).join('');
+
+      container.querySelectorAll('[data-rb-action]').forEach(btn => {
+        btn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          const row = btn.closest('[data-remote-branch]');
+          const branch = remoteState.branches.find(b => b.name === row.dataset.remoteBranch);
+          if (!branch) return;
+          if (btn.dataset.rbAction === 'checkout') openCheckoutModal(branch);
+          else if (btn.dataset.rbAction === 'merge') mergeRemoteRef(branch);
+          else if (btn.dataset.rbAction === 'create') openCreateRemoteModal(branch);
+        });
+      });
+    }
+
+    /* 拉取目标工作区的合并进行状态并渲染冲突处理面板 */
+    async function refreshMergeState() {
+      const worktree = remoteState.targetWorktree;
+      if (!worktree) {
+        remoteState.mergeState = null;
+        renderRemoteMergePanel();
+        return;
+      }
+      const seq = ++remoteState.mergeStateReqSeq;
+      try {
+        const res = await fetch(`/api/merge-state?worktree=${encodeURIComponent(worktree)}`);
+        const data = await res.json();
+        if (seq !== remoteState.mergeStateReqSeq) return;
+        if (!data.ok) throw new Error(data.error || '读取合并状态失败');
+        remoteState.mergeState = data;
+        renderRemoteMergePanel();
+        renderRemoteTargetInfo();
+      } catch (err) {
+        if (seq !== remoteState.mergeStateReqSeq) return;
+        remoteState.mergeState = null;
+        renderRemoteMergePanel();
+        console.warn('读取合并状态失败:', err.message);
+      }
+    }
+
+    /* 目标工作区信息行：当前分支 + 未提交修改提示 */
+    function renderRemoteTargetInfo() {
+      const el = document.getElementById('remoteTargetInfo');
+      const wt = currentWorktrees.find(w => w.path === remoteState.targetWorktree);
+      if (!wt) {
+        el.innerHTML = '<span style="color: var(--text-muted);">未选择目标工作区</span>';
+        return;
+      }
+      const dirty = wt.isDirty
+        ? `<span style="color: var(--warning);">⚠️ ${wt.dirtyCount || 0} 个未提交修改</span>`
+        : '<span style="color: var(--success);">工作区干净</span>';
+      el.innerHTML = `当前分支：<strong>${escapeHtml(wt.branch || wt.head || '(detached)')}</strong> · ${dirty}`;
+    }
+
+    /* 渲染合并进行中面板：冲突清单 + 快捷处理按钮 + 完成/放弃合并入口 */
+    function renderRemoteMergePanel() {
+      const panel = document.getElementById('remoteMergePanel');
+      const state = remoteState.mergeState;
+      if (!state || !state.inMerge) {
+        panel.style.display = 'none';
+        return;
+      }
+      panel.style.display = 'block';
+      document.getElementById('remoteMergeLabels').textContent =
+        `${state.oursLabel || '当前分支'} ← ${state.theirsLabel || '来源分支'}`;
+
+      const conflicts = state.conflictFiles || [];
+      const summary = document.getElementById('remoteMergeSummary');
+      if (conflicts.length === 0) {
+        summary.textContent = '✅ 冲突已全部处理，可点击「完成合并」生成合并提交。';
+        summary.className = 'remote-merge-summary done';
+      } else {
+        summary.textContent = `共 ${conflicts.length} 个冲突文件待处理。可逐文件快捷采用某一侧，或进入编辑器自定义修改冲突区域。`;
+        summary.className = 'remote-merge-summary';
+      }
+      document.getElementById('mergeCommitBtn').disabled = conflicts.length > 0;
+
+      const list = document.getElementById('remoteConflictList');
+      list.innerHTML = conflicts.map(f => `
+        <div class="conflict-item" data-conflict-path="${escapeHtml(f.path)}">
+          <div class="conflict-item-main">
+            <div class="conflict-item-path">${escapeHtml(f.path)}</div>
+            <div class="item-tags"><span class="badge badge-warning">${escapeHtml(f.code)} · ${escapeHtml(f.label)}</span></div>
+          </div>
+          <div class="conflict-item-actions">
+            <button class="btn-outline" type="button" data-cf-action="ours" title="采用当前分支（ours）版本解决该冲突">采用当前分支</button>
+            <button class="btn-outline" type="button" data-cf-action="theirs" title="采用合并来源（theirs）版本解决该冲突">采用来源分支</button>
+            <button class="btn-primary" type="button" data-cf-action="edit" title="打开编辑器自定义修改冲突区域">编辑</button>
+          </div>
+        </div>
+      `).join('');
+
+      list.querySelectorAll('[data-cf-action]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const row = btn.closest('[data-conflict-path]');
+          const filePath = row.dataset.conflictPath;
+          if (btn.dataset.cfAction === 'edit') openConflictDrawer(filePath);
+          else resolveConflictFileAction(filePath, btn.dataset.cfAction);
+        });
+      });
+    }
+
+    /* 快捷处理单个冲突文件（ours/theirs），成功后刷新面板与剩余计数 */
+    async function resolveConflictFileAction(filePath, resolution) {
+      const worktree = remoteState.targetWorktree;
+      if (!worktree) return;
+      try {
+        const res = await fetch('/api/merge-resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ worktree, filePath, resolution })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '处理冲突失败');
+        showToast(resolution === 'ours' ? `已采用当前分支版本：${filePath}` : `已采用来源分支版本：${filePath}`);
+        refreshMergeState();
+      } catch (err) {
+        notifyRequestFailure(err, '处理冲突失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
+      }
+    }
+
+    /* 发起合并：确认后调用 merge-ref；干净合并直接完成，冲突时面板自动接管 */
+    async function mergeRemoteRef(branch) {
+      const worktree = remoteState.targetWorktree;
+      if (!worktree) {
+        alert('没有可用的目标工作区');
+        return;
+      }
+      const wt = currentWorktrees.find(w => w.path === worktree);
+      const currentBranch = wt ? (wt.branch || '(detached)') : '?';
+      if (!window.confirm(`确定把远端分支「${branch.name}」合并进工作区「${currentBranch}」吗？\n\n发生冲突时会保留现场，可在下方逐个处理。`)) {
+        return;
+      }
+      try {
+        const res = await fetch('/api/merge-ref', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoPath: currentRepo, worktree, ref: branch.name })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '合并失败');
+        if (data.status === 'merged') {
+          showToast(data.fastForward
+            ? `已快进合并 ${branch.name}（HEAD → ${shortSha(data.head)}）`
+            : `合并完成：${branch.name} → ${currentBranch}（${shortSha(data.head)}）`);
+        } else if (data.status === 'conflict') {
+          showToast(`合并存在 ${data.conflictFiles.length} 个冲突文件，请在下方处理`);
+        }
+        // 合并会改变工作区内容与分支头，全量刷新保持各面板一致
+        inspectRepo(currentRepo);
+        refreshMergeState();
+      } catch (err) {
+        notifyRequestFailure(err, '合并失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
+      }
+    }
+
+    /* 完成/放弃合并动作（面板按钮） */
+    async function completeMerge() {
+      const worktree = remoteState.targetWorktree;
+      if (!worktree || !window.confirm('确定完成合并并生成合并提交吗？')) return;
+      try {
+        const res = await fetch('/api/merge-commit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ worktree })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '完成合并失败');
+        showToast(`合并提交完成（${shortSha(data.head)}）`);
+        inspectRepo(currentRepo);
+        refreshMergeState();
+      } catch (err) {
+        notifyRequestFailure(err, '完成合并失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
+      }
+    }
+
+    async function abortMergeAction() {
+      const worktree = remoteState.targetWorktree;
+      if (!worktree || !window.confirm('确定放弃本次合并吗？工作区将恢复到合并前的状态。')) return;
+      try {
+        const res = await fetch('/api/merge-abort', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ worktree })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '放弃合并失败');
+        showToast('已放弃合并，现场已恢复');
+        inspectRepo(currentRepo);
+        refreshMergeState();
+      } catch (err) {
+        notifyRequestFailure(err, '放弃合并失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
+      }
+    }
+
+    /* 刷新远端（fetch --prune --all）：网络失败按后端 ok:false 展示原始输出摘要 */
+    async function fetchRemotesAction(btn) {
+      if (!currentRepo) return;
+      if (btn) { btn.disabled = true; btn.textContent = '刷新中…'; }
+      try {
+        const res = await fetch('/api/fetch-remotes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoPath: currentRepo })
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          // ok:false 为 git 层失败（网络/凭据/超时），取末行原始输出做摘要
+          showToast(`刷新远端失败：${String(data.output || data.error || '未知原因').split('\n').pop()}`);
+        } else {
+          showToast('远端刷新完成');
+        }
+        refreshRemoteBranches();
+      } catch (err) {
+        notifyRequestFailure(err, '刷新远端失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '刷新远端 (fetch)'; }
+      }
+    }
+
+    /* 检出远端分支弹层：可重命名本地分支名（默认远端分支短名） */
+    function openCheckoutModal(branch) {
+      const worktree = remoteState.targetWorktree;
+      if (!worktree) {
+        alert('没有可用的目标工作区');
+        return;
+      }
+      remoteState.checkoutModalBranch = branch;
+      document.getElementById('checkoutModalSource').textContent = branch.name;
+      const wt = currentWorktrees.find(w => w.path === worktree);
+      document.getElementById('checkoutModalTarget').textContent = wt ? `${wt.branch || wt.head || '(detached)'} · ${wt.path}` : worktree;
+      const nameInput = document.getElementById('checkoutLocalNameInput');
+      nameInput.value = branch.branch;
+      document.getElementById('checkoutModalError').textContent = '';
+      document.getElementById('checkoutBranchModal').style.display = 'flex';
+      nameInput.focus();
+    }
+
+    function closeCheckoutModal() {
+      document.getElementById('checkoutBranchModal').style.display = 'none';
+      remoteState.checkoutModalBranch = null;
+    }
+
+    async function submitCheckoutBranch() {
+      const branch = remoteState.checkoutModalBranch;
+      if (!branch) return;
+      const worktree = remoteState.targetWorktree;
+      const localName = document.getElementById('checkoutLocalNameInput').value.trim();
+      const errorEl = document.getElementById('checkoutModalError');
+      const submitBtn = document.getElementById('checkoutSubmitBtn');
+      errorEl.textContent = '';
+      if (!localName) {
+        errorEl.textContent = '本地分支名不能为空';
+        return;
+      }
+      submitBtn.disabled = true;
+      try {
+        const res = await fetch('/api/checkout-branch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoPath: currentRepo, worktree, refType: 'remote', ref: branch.name, localName })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '检出失败');
+        closeCheckoutModal();
+        showToast(`已检出 ${branch.name} 为本地分支「${data.branch}」`);
+        // 检出会切换工作区分支：总览面板、目标信息与 merge 状态都需要刷新
+        inspectRepo(currentRepo);
+        refreshMergeState();
+      } catch (err) {
+        errorEl.textContent = toDisplayErrorMessage(err, '检出失败');
+      } finally {
+        submitBtn.disabled = false;
+      }
+    }
+
+    /* 创建远端分支弹层：以选中远端分支为基准直接 push 新远端分支 */
+    function openCreateRemoteModal(branch) {
+      remoteState.createRemoteModalBranch = branch;
+      document.getElementById('createRemoteModalSource').textContent = branch.name;
+      const nameInput = document.getElementById('createRemoteBranchNameInput');
+      // 预填建议名：基准名追加 -copy 后缀（远端重名时后端会拒绝并提示）
+      nameInput.value = `${branch.branch}-copy`;
+      document.getElementById('createRemoteModalError').textContent = '';
+      document.getElementById('createRemoteBranchModal').style.display = 'flex';
+      nameInput.focus();
+    }
+
+    function closeCreateRemoteModal() {
+      document.getElementById('createRemoteBranchModal').style.display = 'none';
+      remoteState.createRemoteModalBranch = null;
+    }
+
+    async function submitCreateRemoteBranch() {
+      const branch = remoteState.createRemoteModalBranch;
+      if (!branch) return;
+      const newBranchName = document.getElementById('createRemoteBranchNameInput').value.trim();
+      const errorEl = document.getElementById('createRemoteModalError');
+      const submitBtn = document.getElementById('createRemoteSubmitBtn');
+      errorEl.textContent = '';
+      if (!newBranchName) {
+        errorEl.textContent = '新远端分支名不能为空';
+        return;
+      }
+      submitBtn.disabled = true;
+      try {
+        const res = await fetch('/api/create-remote-branch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoPath: currentRepo, sourceRef: branch.name, newBranchName })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '创建远端分支失败');
+        closeCreateRemoteModal();
+        showToast(`远端分支「${data.remote}/${data.branch}」创建成功`);
+        refreshRemoteBranches();
+      } catch (err) {
+        errorEl.textContent = toDisplayErrorMessage(err, '创建远端分支失败');
+      } finally {
+        submitBtn.disabled = false;
+      }
+    }
+
+    /* 切换/检出分支弹层的候选项：本地分支（直接切换）+ 远端分支（新建跟踪分支检出） */
+    function switchBranchPickerItems() {
+      const localItems = currentBranches.map(b => ({
+        kind: 'branch',
+        value: b.name,
+        identity: `branch:${b.name}`,
+        label: `🌿 ${b.name}`,
+        searchText: b.name,
+        disabled: false
+      }));
+      const remoteItems = remoteState.branches.map(b => ({
+        kind: 'remote',
+        value: b.name,
+        identity: `remote:${b.name}`,
+        label: `☁️ ${b.name}`,
+        searchText: b.name,
+        disabled: false
+      }));
+      return [...localItems, ...remoteItems];
+    }
+
+    function openSwitchBranchModal() {
+      const worktree = remoteState.targetWorktree;
+      if (!worktree) {
+        alert('没有可用的目标工作区');
+        return;
+      }
+      // 远端分支清单可能尚未拉取（直接点按钮的场景），先同步一次再渲染候选
+      const renderPicker = () => {
+        const sel = document.getElementById('switchBranchSelect');
+        sel.innerHTML = '';
+        switchBranchPickerItems().forEach(o => {
+          const opt = document.createElement('option');
+          opt.value = o.identity;
+          opt.textContent = o.label;
+          sel.appendChild(opt);
+        });
+        // 默认不预选（空值提交时提示必须选择）
+        sel.value = '';
+        switchBranchPicker.refresh();
+      };
+      const wt = currentWorktrees.find(w => w.path === worktree);
+      document.getElementById('switchBranchModalTarget').textContent = wt ? `${wt.branch || wt.head || '(detached)'} · ${wt.path}` : worktree;
+      document.getElementById('switchBranchModalError').textContent = '';
+      document.getElementById('switchBranchModal').style.display = 'flex';
+      if (remoteState.branches.length === 0) {
+        refreshRemoteBranches().then(renderPicker);
+      } else {
+        renderPicker();
+      }
+    }
+
+    function closeSwitchBranchModal() {
+      document.getElementById('switchBranchModal').style.display = 'none';
+    }
+
+    async function submitSwitchBranch() {
+      const identity = document.getElementById('switchBranchSelect').value;
+      const errorEl = document.getElementById('switchBranchModalError');
+      errorEl.textContent = '';
+      if (!identity) {
+        errorEl.textContent = '请先选择要切换到的分支';
+        return;
+      }
+      const colonIdx = identity.indexOf(':');
+      const refType = identity.slice(0, colonIdx);
+      const ref = identity.slice(colonIdx + 1);
+      const worktree = remoteState.targetWorktree;
+      const submitBtn = document.getElementById('switchBranchSubmitBtn');
+      submitBtn.disabled = true;
+      try {
+        const res = await fetch('/api/checkout-branch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoPath: currentRepo, worktree, refType, ref })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '切换失败');
+        closeSwitchBranchModal();
+        showToast(refType === 'remote' ? `已检出 ${ref} 为本地分支「${data.branch}」` : `已切换到「${data.branch}」`);
+        inspectRepo(currentRepo);
+        refreshMergeState();
+      } catch (err) {
+        errorEl.textContent = toDisplayErrorMessage(err, '切换失败');
+      } finally {
+        submitBtn.disabled = false;
+      }
+    }
+
+    /* ---- 冲突文件编辑抽屉 ---- */
+
+    /* 打开抽屉并加载冲突文件三方内容；二进制文件只允许 ours/theirs 快捷处理 */
+    async function openConflictDrawer(filePath) {
+      const worktree = remoteState.targetWorktree;
+      if (!worktree) return;
+      let data;
+      try {
+        const res = await fetch(`/api/merge-conflict-file?worktree=${encodeURIComponent(worktree)}&filePath=${encodeURIComponent(filePath)}`);
+        data = await res.json();
+        if (!data.ok) throw new Error(data.error || '读取冲突文件失败');
+      } catch (err) {
+        notifyRequestFailure(err, '读取冲突文件失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
+        return;
+      }
+      remoteState.editingConflictPath = filePath;
+      document.getElementById('conflictDrawerTitle').textContent = `✏️ 编辑冲突文件 · ${filePath}`;
+      const textarea = document.getElementById('conflictEditorTextarea');
+      document.getElementById('conflictDrawerError').textContent = '';
+      if (data.isBinary) {
+        textarea.value = '';
+        textarea.disabled = true;
+        document.getElementById('conflictDrawerHint').textContent = '该文件是二进制文件，不支持文本编辑，请在冲突清单中使用「采用当前分支 / 采用来源分支」。';
+        document.getElementById('conflictHunkTools').innerHTML = '';
+        document.getElementById('conflictSaveBtn').disabled = true;
+      } else {
+        textarea.disabled = false;
+        textarea.value = data.raw || '';
+        document.getElementById('conflictDrawerHint').textContent =
+          '可直接编辑下方完整内容；也可使用上方每个冲突块的快捷按钮按侧采用。保存后文件会写入工作区并标记为已解决。';
+        document.getElementById('conflictSaveBtn').disabled = false;
+        renderConflictHunkTools();
+      }
+      document.getElementById('conflictDrawerOverlay').style.display = 'block';
+      document.getElementById('conflictDrawer').style.display = 'flex';
+      // 与 MR 详情抽屉同一滑入机制：先显示再下一帧加 .open 触发 transform 过渡
+      requestAnimationFrame(() => {
+        document.getElementById('conflictDrawerOverlay').classList.add('open');
+        document.getElementById('conflictDrawer').classList.add('open');
+      });
+      setCommitsDrawerPageScrollLocked(true);
+    }
+
+    function closeConflictDrawer() {
+      if (!remoteState.editingConflictPath) return;
+      remoteState.editingConflictPath = '';
+      setCommitsDrawerPageScrollLocked(false);
+      const overlay = document.getElementById('conflictDrawerOverlay');
+      const drawer = document.getElementById('conflictDrawer');
+      overlay.classList.remove('open');
+      drawer.classList.remove('open');
+      setTimeout(() => {
+        if (!remoteState.editingConflictPath) {
+          drawer.style.display = 'none';
+          overlay.style.display = 'none';
+        }
+      }, 260);
+    }
+
+    /* 解析文本中的冲突标记块，记录各侧行内容与行号区间，供快捷按钮重写内容。
+       兼容 diff3 的 ||||||| 基线段；行号基于按 \n 拆分后的数组下标 */
+    function parseConflictHunks(content) {
+      const lines = content.split('\n');
+      const hunks = [];
+      let current = null;
+      lines.forEach((line, idx) => {
+        if (/^<{7}($|\s)/.test(line)) {
+          current = { startIdx: idx, oursLines: [], baseLines: [], theirsLines: [], phase: 'ours' };
+        } else if (current && current.phase === 'ours' && /^={7}$/.test(line)) {
+          current.midIdx = idx;
+          current.phase = 'theirs';
+        } else if (current && current.phase === 'ours' && /^\|{7}($|\s)/.test(line)) {
+          current.midIdx = idx;
+          current.phase = 'base';
+        } else if (current && current.phase === 'base' && /^={7}$/.test(line)) {
+          current.midIdx = idx;
+          current.phase = 'theirs';
+        } else if (current && current.phase === 'theirs' && /^>{7}($|\s)/.test(line)) {
+          current.endIdx = idx;
+          hunks.push(current);
+          current = null;
+        } else if (current) {
+          if (current.phase === 'ours') current.oursLines.push(line);
+          else if (current.phase === 'base') current.baseLines.push(line);
+          else current.theirsLines.push(line);
+        }
+      });
+      return hunks;
+    }
+
+    /* 渲染冲突块快捷工具：每块展示 ours/theirs 内容与三个采用按钮 */
+    function renderConflictHunkTools() {
+      const holder = document.getElementById('conflictHunkTools');
+      const content = document.getElementById('conflictEditorTextarea').value;
+      const hunks = parseConflictHunks(content);
+      if (hunks.length === 0) {
+        holder.innerHTML = '<div class="remote-modal-hint">内容中已无冲突标记，可直接保存。</div>';
+        return;
+      }
+      holder.innerHTML = hunks.map((hunk, idx) => `
+        <div class="conflict-hunk-card">
+          <div class="conflict-hunk-header">
+            <span>冲突块 #${idx + 1}（当前 ${hunk.oursLines.length} 行 / 来源 ${hunk.theirsLines.length} 行）</span>
+            <div class="conflict-hunk-actions">
+              <button class="btn-outline" type="button" data-hunk-idx="${idx}" data-hunk-choice="ours">采用当前分支</button>
+              <button class="btn-outline" type="button" data-hunk-idx="${idx}" data-hunk-choice="theirs">采用来源分支</button>
+              <button class="btn-outline" type="button" data-hunk-idx="${idx}" data-hunk-choice="both">保留两者</button>
+            </div>
+          </div>
+          <div class="conflict-side conflict-side-ours"><span class="conflict-side-label">当前分支</span>${escapeHtml(hunk.oursLines.join('\n')) || '&lt;空&gt;'}</div>
+          ${hunk.baseLines.length ? `<div class="conflict-side conflict-side-base"><span class="conflict-side-label">共同基线</span>${escapeHtml(hunk.baseLines.join('\n'))}</div>` : ''}
+          <div class="conflict-side conflict-side-theirs"><span class="conflict-side-label">来源分支</span>${escapeHtml(hunk.theirsLines.join('\n')) || '&lt;空&gt;'}</div>
+        </div>
+      `).join('');
+      holder.querySelectorAll('[data-hunk-choice]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          applyConflictHunkChoice(Number(btn.dataset.hunkIdx), btn.dataset.hunkChoice);
+        });
+      });
+    }
+
+    /* 按选择重写编辑区内容：替换指定冲突块的行区间后重新解析渲染（下标随之刷新） */
+    function applyConflictHunkChoice(hunkIdx, choice) {
+      const textarea = document.getElementById('conflictEditorTextarea');
+      const lines = textarea.value.split('\n');
+      const hunks = parseConflictHunks(textarea.value);
+      const hunk = hunks[hunkIdx];
+      if (!hunk) return;
+      let mid;
+      if (choice === 'ours') mid = hunk.oursLines;
+      else if (choice === 'theirs') mid = hunk.theirsLines;
+      else mid = [...hunk.oursLines, ...hunk.theirsLines];
+      const next = [...lines.slice(0, hunk.startIdx), ...mid, ...lines.slice(hunk.endIdx + 1)];
+      textarea.value = next.join('\n');
+      renderConflictHunkTools();
+    }
+
+    /* 保存编辑内容：写入工作区 + git add 标记已解决 */
+    async function saveConflictContent() {
+      const filePath = remoteState.editingConflictPath;
+      const worktree = remoteState.targetWorktree;
+      if (!filePath || !worktree) return;
+      const content = document.getElementById('conflictEditorTextarea').value;
+      const errorEl = document.getElementById('conflictDrawerError');
+      const saveBtn = document.getElementById('conflictSaveBtn');
+      errorEl.textContent = '';
+      saveBtn.disabled = true;
+      try {
+        const res = await fetch('/api/merge-resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ worktree, filePath, resolution: 'content', content })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '保存冲突文件失败');
+        closeConflictDrawer();
+        showToast(`已解决：${filePath}${data.remaining > 0 ? `（剩余 ${data.remaining} 个冲突）` : '（全部冲突已处理）'}`);
+        refreshMergeState();
+      } catch (err) {
+        errorEl.textContent = toDisplayErrorMessage(err, '保存冲突文件失败');
+      } finally {
+        saveBtn.disabled = false;
+      }
+    }
+
     /* 合并落库后联动刷新：提交抽屉若正查看相关分支的提交，按首屏语义重载。
        刷新做法与 commitAction 成功后一致：loadedCount 归零重拉首屏，并作废 ahead/behind 缓存 */
     function refreshCommitsDrawerIfRelatedToBranches(branchNames) {
@@ -4531,7 +5266,7 @@
         document.getElementById('searchInput').value = searchKeyword;
         renderFilteredLists();
 
-        switchTab(['diff', 'mr'].includes(state.tab) ? state.tab : 'overview', false);
+        switchTab(['diff', 'mr', 'remote'].includes(state.tab) ? state.tab : 'overview', false);
         if (state.tab === 'diff' && (state.diffType === 'ref' || state.diffType === 'worktree') && state.base && state.target) {
           // diffType=ref 为新格式；旧链接 diffType=worktree 无类型前缀，base/target 按 worktree 兼容解析
           const baseIdentity = `${state.baseType || 'worktree'}:${state.base}`;
@@ -4673,7 +5408,21 @@
       'clear-commits-filters': () => clearCommitsFilters(),
       'load-more-commits': () => loadMoreCommits(),
       'scroll-to-top': () => scrollToTop(),
-      'commits-back-to-top': (el) => scrollCommitsDrawerToTop(el)
+      'commits-back-to-top': (el) => scrollCommitsDrawerToTop(el),
+      /* 远端分支管理 Tab：工具栏、三个弹层与冲突抽屉的动作入口 */
+      'tab-remote': () => switchTab('remote'),
+      'remote-fetch': (el) => fetchRemotesAction(el),
+      'open-switch-branch': () => openSwitchBranchModal(),
+      'merge-abort': () => abortMergeAction(),
+      'merge-commit': () => completeMerge(),
+      'close-checkout-modal': () => closeCheckoutModal(),
+      'submit-checkout-branch': () => submitCheckoutBranch(),
+      'close-create-remote-modal': () => closeCreateRemoteModal(),
+      'submit-create-remote-branch': () => submitCreateRemoteBranch(),
+      'close-switch-branch-modal': () => closeSwitchBranchModal(),
+      'submit-switch-branch': () => submitSwitchBranch(),
+      'close-conflict-drawer': () => closeConflictDrawer(),
+      'save-conflict-content': () => saveConflictContent()
     };
     document.addEventListener('click', (e) => {
       const el = e.target instanceof Element ? e.target.closest('[data-action]') : null;
@@ -4743,6 +5492,16 @@
     // 点击新建 MR 弹层遮罩区域关闭弹层（与扫描目录弹窗一致）
     document.getElementById('createMrModal').addEventListener('click', (e) => {
       if (e.target.id === 'createMrModal') closeCreateMrModal();
+    });
+    // 远端分支 Tab 三个弹层的遮罩关闭，与既有弹窗行为一致
+    document.getElementById('checkoutBranchModal').addEventListener('click', (e) => {
+      if (e.target.id === 'checkoutBranchModal') closeCheckoutModal();
+    });
+    document.getElementById('createRemoteBranchModal').addEventListener('click', (e) => {
+      if (e.target.id === 'createRemoteBranchModal') closeCreateRemoteModal();
+    });
+    document.getElementById('switchBranchModal').addEventListener('click', (e) => {
+      if (e.target.id === 'switchBranchModal') closeSwitchBranchModal();
     });
     document.addEventListener('DOMContentLoaded', setupCommitsDrawerScrollGuard);
     document.getElementById('refreshBtn').addEventListener('click', () => {
@@ -4830,6 +5589,32 @@
       emptyText: '没有匹配的 Worktree 或分支',
       placeholder: '请选择对比对象',
       onSelect: () => fetchAndRenderRefDiff(null, true)
+    });
+
+    /* 初始化远端分支 Tab「切换/检出分支」弹层的可搜索选择器：
+       候选 = 本地分支 + 远端分支（identity 前缀区分 refType），选项在打开弹层时重建 */
+    switchBranchPicker = createSearchablePicker({
+      wrapperId: 'switchBranchPickerWrapper',
+      triggerId: 'switchBranchPickerTrigger',
+      triggerTextId: 'switchBranchPickerText',
+      dropdownId: 'switchBranchPickerDropdown',
+      searchInputId: 'switchBranchPickerSearch',
+      listId: 'switchBranchPickerList',
+      selectId: 'switchBranchSelect',
+      getItems: switchBranchPickerItems,
+      groupTitles: { branch: '🌿 本地分支', remote: '☁️ 远端分支' },
+      emptyText: '没有匹配的分支',
+      placeholder: '选择本地或远端分支'
+    });
+
+    /* 远端分支 Tab 的本页事件：目标工作区切换、列表过滤 */
+    document.getElementById('remoteWorktreeSelect').addEventListener('change', (e) => {
+      remoteState.targetWorktree = e.target.value;
+      renderRemoteTargetInfo();
+      refreshMergeState();
+    });
+    document.getElementById('remoteBranchFilterInput').addEventListener('input', () => {
+      renderRemoteBranchList();
     });
 
     /* ---- 桌面运行时适配层（契约 §6；浏览器模式以下逻辑全部不生效） ---- */
@@ -5081,6 +5866,19 @@
       if (e.key === 'Escape' && mrDrawerState.isOpen) {
         closeMrDrawer();
       }
+      // 冲突文件编辑抽屉：编辑区聚焦时 Esc 也直接关闭（抽屉级优先于页面级）
+      if (e.key === 'Escape' && remoteState.editingConflictPath) {
+        closeConflictDrawer();
+      }
+      if (e.key === 'Escape' && document.getElementById('checkoutBranchModal').style.display !== 'none') {
+        closeCheckoutModal();
+      }
+      if (e.key === 'Escape' && document.getElementById('createRemoteBranchModal').style.display !== 'none') {
+        closeCreateRemoteModal();
+      }
+      if (e.key === 'Escape' && document.getElementById('switchBranchModal').style.display !== 'none') {
+        closeSwitchBranchModal();
+      }
       if (e.key === 'Escape' && document.getElementById('createMrModal').style.display !== 'none') {
         closeCreateMrModal();
       }
@@ -5097,7 +5895,7 @@
        复用既有 switchTab 入口（内含 URL 状态同步），浏览器/桌面两模式一致。桩测试按
        下方起止标记截取本段源码在沙箱内验证。 */
     /* §17.1.2-CMD-ARROW-START */
-    const TAB_CYCLE_ORDER = ['overview', 'diff', 'mr']; // 循环顺序与顶栏 tab 按钮排列一致：⌘→ 依次前进
+    const TAB_CYCLE_ORDER = ['overview', 'diff', 'mr', 'remote']; // 循环顺序与顶栏 tab 按钮排列一致：⌘→ 依次前进
     // 非 mac 用 Ctrl 兜底（Windows/Linux 上 Ctrl+←/→ 无浏览器默认行为，不冲突）；
     // mac 上 Ctrl+←/→ 属系统空间切换，页面通常收不到，故 mac 仅认 ⌘
     const CMD_ARROW_IS_MAC = /Mac/i.test(navigator.platform);

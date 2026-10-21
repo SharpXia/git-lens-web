@@ -41,6 +41,19 @@ import {
   mergeRequestAction,
   configureGitPath as configureMrGitPath
 } from './merge-request-service.js';
+import {
+  listRemoteBranches,
+  createRemoteBranch,
+  checkoutBranch,
+  mergeRef,
+  getMergeState,
+  getConflictFile,
+  resolveConflictFile,
+  commitMerge,
+  abortMerge,
+  fetchRemotes,
+  configureGitPath as configureRemoteBranchGitPath
+} from './remote-branch-service.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -294,6 +307,7 @@ export function createGitLensServer(options) {
   if (options.gitPath) {
     configureInspectorGitPath(options.gitPath);
     configureMrGitPath(options.gitPath);
+    configureRemoteBranchGitPath(options.gitPath);
   }
 
   const log = (level, message) => {
@@ -1110,6 +1124,129 @@ export function createGitLensServer(options) {
         }
         try {
           const result = await pullWorktree(worktree);
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13. API: 远端分支管理域（契约外新增功能，校验链收敛在 remote-branch-service 内）。
+      // 列表：远端分支 + 相对主干的领先/落后 + 本地同名分支同步状态
+      if (pathname === '/api/remote-branches' && req.method === 'GET') {
+        try {
+          const result = await listRemoteBranches(parsed.query.path);
+          return sendJson(res, 200, { ok: true, ...result });
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.1 刷新远端（fetch --prune --all）。git 层失败（网络/凭据/超时）不抛错，
+      // 按既有 pull 口径返回 200 + ok:false 与原始输出
+      if (pathname === '/api/fetch-remotes' && req.method === 'POST') {
+        const { repoPath } = await readJson();
+        try {
+          const result = await fetchRemotes(repoPath);
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.2 基于现有远端分支创建新远端分支（纯远端操作，不落地本地分支）
+      if (pathname === '/api/create-remote-branch' && req.method === 'POST') {
+        const { repoPath, sourceRef, newBranchName } = await readJson();
+        try {
+          const result = await createRemoteBranch({ repoPath, sourceRef, newBranchName });
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.3 工作区分支切换 / 检出远端分支（可指定新本地分支名）
+      if (pathname === '/api/checkout-branch' && req.method === 'POST') {
+        const { repoPath, worktree, refType, ref, localName } = await readJson();
+        try {
+          const result = await checkoutBranch({ repoPath, worktreePath: worktree, refType, ref, localName });
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.4 合并远端/本地分支到目标工作区。干净合并直接完成（status: merged），
+      // 冲突时保持 merge 现场并返回冲突清单（status: conflict），由 13.5-13.8 处理
+      if (pathname === '/api/merge-ref' && req.method === 'POST') {
+        const { repoPath, worktree, ref } = await readJson();
+        try {
+          const result = await mergeRef({ repoPath, worktreePath: worktree, ref });
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.5 读取工作区合并进行状态（冲突文件清单 + 双方分支标签），供 UI 恢复冲突面板
+      if (pathname === '/api/merge-state' && req.method === 'GET') {
+        try {
+          const result = await getMergeState(parsed.query.worktree);
+          return sendJson(res, 200, { ok: true, ...result });
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.6 读取单个冲突文件的三方内容（工作区当前 / ours / theirs / base）
+      if (pathname === '/api/merge-conflict-file' && req.method === 'GET') {
+        try {
+          const result = await getConflictFile({
+            worktreePath: parsed.query.worktree,
+            filePath: parsed.query.filePath
+          });
+          return sendJson(res, 200, { ok: true, ...result });
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.7 处理单个冲突文件：采用当前分支 / 采用合并来源 / 写入自定义编辑内容，处理后 git add
+      if (pathname === '/api/merge-resolve' && req.method === 'POST') {
+        const { worktree, filePath, resolution, content } = await readJson();
+        try {
+          const result = await resolveConflictFile({ worktreePath: worktree, filePath, resolution, content });
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.8 完成合并（冲突全部处理后生成 merge commit）
+      if (pathname === '/api/merge-commit' && req.method === 'POST') {
+        const { worktree } = await readJson();
+        try {
+          const result = await commitMerge(worktree);
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.9 放弃合并（git merge --abort 恢复现场）
+      if (pathname === '/api/merge-abort' && req.method === 'POST') {
+        const { worktree } = await readJson();
+        try {
+          const result = await abortMerge(worktree);
           return sendJson(res, 200, result);
         } catch (err) {
           const status = err.statusCode || 500;

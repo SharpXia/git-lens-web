@@ -321,8 +321,36 @@ async function buildRepoMain(qaRoot) {
   await writeFileInQaRoot(qaRoot, path.join(wtStash, 'notes.txt'), `main 基础文本。\n${CONFLICT_MARKER_CONTENT}`);
   await git(qaRoot, wtStash, 'stash', 'push', '-q', '-m', 'QA stash 2: 含冲突标记');
 
+  // 远端分支管理素材（W9）：裸仓库充当远端（点前缀目录不会被仓库发现逻辑收录）。
+  // 本地 main 先提交冲突行改写，再从分叉点（上一笔）切出 feature/remote-only 改同一行推送，
+  // 使「合并远端分支」必然产生 notes.txt 的 UU 冲突；main 一并推送供清单与建分支场景使用
+  await writeAndCommit(qaRoot, repo, 'notes.txt', 'remote 冲突素材：本地版本。\n', 'main: 本地改写 notes 冲突行');
+  const bareRemote = path.join(qaRoot, 'repos', '.remote-origin.git');
+  await git(qaRoot, repo, 'init', '--bare', bareRemote);
+  await git(qaRoot, repo, 'remote', 'add', 'origin', bareRemote);
+  await git(qaRoot, repo, 'push', '-q', 'origin', 'main');
+  const tmpRemoteOnly = path.join(qaRoot, 'repos', '.tmp-wt-remote-only');
+  await git(qaRoot, repo, 'worktree', 'add', '-q', '-b', 'feature/remote-only', tmpRemoteOnly, 'HEAD~1');
+  await writeFileInQaRoot(qaRoot, path.join(tmpRemoteOnly, 'notes.txt'), 'remote 冲突素材：远端版本。\n');
+  await writeFileInQaRoot(qaRoot, path.join(tmpRemoteOnly, 'remote-file.txt'), '远端独有文件。\n');
+  await git(qaRoot, tmpRemoteOnly, 'add', '.');
+  await git(qaRoot, tmpRemoteOnly, 'commit', '-q', '-m', 'remote-only: 修改 notes 冲突行');
+  await git(qaRoot, tmpRemoteOnly, 'push', '-q', 'origin', 'feature/remote-only');
+  await git(qaRoot, repo, 'worktree', 'remove', tmpRemoteOnly);
+  // 第二条远端分支：与 feature/remote-only 同分叉点、第三种冲突值，
+  // 供「放弃合并」场景在完成合并后重造一次确定性冲突
+  const tmpRemoteSecond = path.join(qaRoot, 'repos', '.tmp-wt-remote-second');
+  await git(qaRoot, repo, 'worktree', 'add', '-q', '-b', 'feature/remote-second', tmpRemoteSecond, 'HEAD~1');
+  await writeFileInQaRoot(qaRoot, path.join(tmpRemoteSecond, 'notes.txt'), 'remote 冲突素材：第二远端版本。\n');
+  await git(qaRoot, tmpRemoteSecond, 'add', '.');
+  await git(qaRoot, tmpRemoteSecond, 'commit', '-q', '-m', 'remote-second: 修改 notes 冲突行');
+  await git(qaRoot, tmpRemoteSecond, 'push', '-q', 'origin', 'feature/remote-second');
+  await git(qaRoot, repo, 'worktree', 'remove', tmpRemoteSecond);
+  await git(qaRoot, repo, 'fetch', '-q', 'origin');
+
   return {
     repo,
+    remote: { bare: bareRemote, remoteOnlyBranch: 'feature/remote-only' },
     branches: {
       main: 'main',
       merged: 'feature/merged',
@@ -506,6 +534,15 @@ async function verifyFixtures(qaRoot, fx) {
   // 失联 worktree：git worktree list 应给出 prunable 标注（git >= 2.36）
   const wtList = await gitOut(qaRoot, main.repo, 'worktree', 'list', '--porcelain');
   expect(/prunable/.test(wtList), 'feature/lost 的 worktree 应被标记 prunable');
+
+  // 远端分支管理素材：origin 已配置、feature/remote-only 已推送且与本地 main 构成冲突对
+  expect((await gitOut(qaRoot, main.repo, 'remote')).includes('origin'), 'repo-main 应已配置 origin 远端');
+  const remoteOnlySha = await gitOut(qaRoot, main.repo, 'rev-parse', '--verify', 'refs/remotes/origin/feature/remote-only');
+  expect(/^[0-9a-f]{40}$/.test(remoteOnlySha), 'origin/feature/remote-only 应可解析');
+  const localNotes = await gitOut(qaRoot, main.repo, 'show', 'main:notes.txt');
+  const remoteNotes = await gitOut(qaRoot, main.repo, 'show', 'refs/remotes/origin/feature/remote-only:notes.txt');
+  expect(localNotes === 'remote 冲突素材：本地版本。' && remoteNotes === 'remote 冲突素材：远端版本。',
+    'notes.txt 的本地/远端版本应构成冲突素材');
 
   // 吸收判定：两条分支相对 main 的补丁应全部等价（git cherry 输出全为 '-'）
   for (const branch of ['feature/cherry-picked', 'feature/squashed']) {

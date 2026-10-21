@@ -39,6 +39,9 @@
     <button id="tabMr" class="tab-btn" data-action="tab-mr">
       <span>🔀 Merge Requests</span>
     </button>
+    <button id="tabRemote" class="tab-btn" data-action="tab-remote">
+      <span>☁️ 远端分支管理</span>
+    </button>
     <div class="tab-bar-actions">
       <button id="newMrBtn" class="btn-primary" data-action="open-create-mr" title="基于当前仓库的两个本地分支发起 Merge Request">新建 MR</button>
     </div>
@@ -218,6 +221,162 @@
           <div style="font-size: 13px;">支持 Worktree/分支任意组合的领先改动对比与本地未提交（Dirty）代码审查</div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- TAB 4: 远端分支管理（远端操作 + 工作区分支切换 + 合并冲突处理） -->
+  <div id="viewRemote" style="display: none;">
+    <div class="remote-toolbar">
+      <div class="picker-col">
+        <label class="picker-label"><span>目标工作区：</span></label>
+        <select id="remoteWorktreeSelect" class="picker-select" aria-label="选择目标工作区"></select>
+      </div>
+      <div id="remoteTargetInfo" class="remote-target-info"></div>
+      <button id="switchBranchBtn" class="btn-outline" type="button" data-action="open-switch-branch" title="把目标工作区切换到本地分支，或检出远端分支">切换 / 检出分支</button>
+      <button id="remoteFetchBtn" class="btn-outline" type="button" data-action="remote-fetch" title="git fetch --prune --all，同步远端分支清单">刷新远端 (fetch)</button>
+    </div>
+
+    <!-- 合并进行中面板：冲突清单 + 快捷处理 + 完成合并入口（由 merge-state 接口驱动） -->
+    <div id="remoteMergePanel" class="panel remote-merge-panel" style="display: none;">
+      <div class="panel-header">
+        <h2>⚠️ 合并冲突处理 <span id="remoteMergeLabels" class="remote-merge-labels"></span></h2>
+        <div class="remote-merge-actions">
+          <button id="mergeAbortBtn" class="btn-outline" type="button" data-action="merge-abort" title="git merge --abort，恢复合并前现场">放弃合并</button>
+          <button id="mergeCommitBtn" class="btn-primary" type="button" data-action="merge-commit" title="冲突全部处理后生成合并提交">完成合并</button>
+        </div>
+      </div>
+      <div id="remoteMergeSummary" class="remote-merge-summary"></div>
+      <div id="remoteConflictList"></div>
+    </div>
+
+    <div class="panels">
+    <div class="panel">
+      <div class="panel-header">
+        <h2>☁️ 远端分支</h2>
+        <input id="remoteBranchFilterInput" class="remote-filter-input" type="search" placeholder="过滤远端分支..." aria-label="过滤远端分支" autocomplete="off">
+        <span id="remoteBranchCount" class="badge">0 个</span>
+      </div>
+        <div class="remote-list-tip">基于任意远端分支可创建新远端分支（纯远端操作）；检出会把远端分支落到目标工作区。</div>
+        <div id="remoteBranchList">
+          <div class="loading">加载中...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 检出远端分支弹层：可重命名本地分支 -->
+  <div id="checkoutBranchModal" class="scan-directory-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="checkoutBranchModalTitle">
+    <div class="scan-directory-card">
+      <div class="scan-directory-header">
+        <h2 id="checkoutBranchModalTitle">检出远端分支</h2>
+        <button class="drawer-close" type="button" data-action="close-checkout-modal" aria-label="关闭">×</button>
+      </div>
+      <div class="scan-directory-body">
+        <div class="mr-form-group">
+          <label>远端分支</label>
+          <div id="checkoutModalSource" class="remote-modal-source"></div>
+        </div>
+        <div class="mr-form-group">
+          <label for="checkoutLocalNameInput">本地分支名（可重命名）</label>
+          <input id="checkoutLocalNameInput" class="mr-form-input" type="text" placeholder="例如：feature/xxx" maxlength="200" autocomplete="off">
+          <div class="remote-modal-hint">将以该名称创建本地跟踪分支并检出到目标工作区，自动建立 upstream。</div>
+        </div>
+        <div class="mr-form-group">
+          <label>目标工作区</label>
+          <div id="checkoutModalTarget" class="remote-modal-source"></div>
+        </div>
+        <div id="checkoutModalError" class="mr-detail-error" role="alert"></div>
+      </div>
+      <div class="scan-directory-footer">
+        <button class="btn-outline" type="button" data-action="close-checkout-modal">取消</button>
+        <button id="checkoutSubmitBtn" class="btn-primary" type="button" data-action="submit-checkout-branch">检出</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 创建远端分支弹层：基于现有远端分支 push 新远端分支 -->
+  <div id="createRemoteBranchModal" class="scan-directory-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="createRemoteBranchModalTitle">
+    <div class="scan-directory-card">
+      <div class="scan-directory-header">
+        <h2 id="createRemoteBranchModalTitle">创建远端分支</h2>
+        <button class="drawer-close" type="button" data-action="close-create-remote-modal" aria-label="关闭">×</button>
+      </div>
+      <div class="scan-directory-body">
+        <div class="mr-form-group">
+          <label>基准远端分支</label>
+          <div id="createRemoteModalSource" class="remote-modal-source"></div>
+        </div>
+        <div class="mr-form-group">
+          <label for="createRemoteBranchNameInput">新远端分支名</label>
+          <input id="createRemoteBranchNameInput" class="mr-form-input" type="text" placeholder="例如：feature/xxx" maxlength="200" autocomplete="off">
+          <div class="remote-modal-hint">直接 push 到远端创建，不影响任何本地分支与工作区。</div>
+        </div>
+        <div id="createRemoteModalError" class="mr-detail-error" role="alert"></div>
+      </div>
+      <div class="scan-directory-footer">
+        <button class="btn-outline" type="button" data-action="close-create-remote-modal">取消</button>
+        <button id="createRemoteSubmitBtn" class="btn-primary" type="button" data-action="submit-create-remote-branch">创建</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 切换/检出分支弹层：目标工作区的分支级切换入口 -->
+  <div id="switchBranchModal" class="scan-directory-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="switchBranchModalTitle">
+    <div class="scan-directory-card">
+      <div class="scan-directory-header">
+        <h2 id="switchBranchModalTitle">切换 / 检出分支</h2>
+        <button class="drawer-close" type="button" data-action="close-switch-branch-modal" aria-label="关闭">×</button>
+      </div>
+      <div class="scan-directory-body">
+        <div class="mr-form-group">
+          <label>目标工作区</label>
+          <div id="switchBranchModalTarget" class="remote-modal-source"></div>
+        </div>
+        <div class="mr-form-group">
+          <label>选择分支</label>
+          <div class="mr-picker-wrapper" id="switchBranchPickerWrapper">
+            <div class="repo-trigger" id="switchBranchPickerTrigger">
+              <div class="repo-trigger-text" id="switchBranchPickerText"></div>
+              <span class="ref-picker-trigger-caret">▼</span>
+            </div>
+            <div class="repo-dropdown" id="switchBranchPickerDropdown">
+              <div class="repo-search-box">
+                <div class="search-input-wrap">
+                  <input type="text" id="switchBranchPickerSearch" class="repo-search-input" placeholder="搜索本地或远端分支..." autocomplete="off">
+                  <button type="button" class="search-clear-btn" id="switchBranchPickerSearchClearBtn" aria-label="清除分支搜索" title="清除搜索">×</button>
+                </div>
+              </div>
+              <div class="repo-list-container" id="switchBranchPickerList"></div>
+            </div>
+          </div>
+          <select id="switchBranchSelect" style="display: none;"></select>
+          <div class="remote-modal-hint">选择本地分支为直接切换；选择远端分支会以同名新建本地跟踪分支并检出。</div>
+        </div>
+        <div id="switchBranchModalError" class="mr-detail-error" role="alert"></div>
+      </div>
+      <div class="scan-directory-footer">
+        <button class="btn-outline" type="button" data-action="close-switch-branch-modal">取消</button>
+        <button id="switchBranchSubmitBtn" class="btn-primary" type="button" data-action="submit-switch-branch">切换</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 冲突文件编辑抽屉：复用提交抽屉的抽屉 DOM/CSS 模式 -->
+  <div id="conflictDrawerOverlay" class="drawer-overlay" style="display:none" data-action="close-conflict-drawer"></div>
+  <div id="conflictDrawer" class="commits-drawer" style="display:none" role="dialog" aria-label="冲突文件编辑">
+    <div class="commits-drawer-header">
+      <h3 id="conflictDrawerTitle">✏️ 编辑冲突文件</h3>
+      <button class="drawer-close" data-action="close-conflict-drawer" aria-label="关闭">×</button>
+    </div>
+    <div class="conflict-drawer-hint" id="conflictDrawerHint"></div>
+    <div class="conflict-hunk-tools" id="conflictHunkTools"></div>
+    <div class="conflict-drawer-body">
+      <textarea id="conflictEditorTextarea" class="conflict-editor-textarea" spellcheck="false" aria-label="冲突文件内容编辑区"></textarea>
+    </div>
+    <div class="conflict-drawer-footer">
+      <div id="conflictDrawerError" class="mr-detail-error" role="alert"></div>
+      <button class="btn-outline" type="button" data-action="close-conflict-drawer">取消</button>
+      <button id="conflictSaveBtn" class="btn-primary" type="button" data-action="save-conflict-content">保存并标记已解决</button>
     </div>
   </div>
 
