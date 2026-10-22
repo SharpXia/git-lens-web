@@ -56,6 +56,9 @@ import {
   commitMerge,
   abortMerge,
   fetchRemotes,
+  listLocalBranches,
+  deleteRemoteBranch,
+  deleteLocalBranch,
   configureGitPath as configureRemoteBranchGitPath
 } from './remote-branch-service.js';
 
@@ -1204,7 +1207,7 @@ export function createGitLensServer(options) {
         }
       }
 
-      // 13. API: 远端分支管理域（契约外新增功能，校验链收敛在 remote-branch-service 内）。
+      // 13. API: 分支管理域（契约外新增功能，校验链收敛在 remote-branch-service 内）。
       // 列表：远端分支 + 相对主干的领先/落后 + 本地同名分支同步状态
       if (pathname === '/api/remote-branches' && req.method === 'GET') {
         try {
@@ -1320,6 +1323,41 @@ export function createGitLensServer(options) {
         const { worktree } = await readJson();
         try {
           const result = await abortMerge(worktree);
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.10 本地分支清单（检出绑定 + 相对主干合入状态），供分支管理 Tab 左栏使用
+      if (pathname === '/api/local-branches' && req.method === 'GET') {
+        try {
+          const result = await listLocalBranches(parsed.query.path);
+          return sendJson(res, 200, { ok: true, ...result });
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.11 删除远端分支（保护分支即远端默认分支不可删）
+      if (pathname === '/api/delete-remote-branch' && req.method === 'POST') {
+        const { repoPath, ref } = await readJson();
+        try {
+          const result = await deleteRemoteBranch({ repoPath, ref });
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.12 删除本地分支（主分支/被检出/未合入三重保护；force 为强删二次确认）
+      if (pathname === '/api/delete-local-branch' && req.method === 'POST') {
+        const { repoPath, branch, force } = await readJson();
+        try {
+          const result = await deleteLocalBranch({ repoPath, branch, force: force === true });
           return sendJson(res, 200, result);
         } catch (err) {
           const status = err.statusCode || 500;

@@ -1,11 +1,13 @@
 /**
- * remote-branch-service.js —— 远端分支管理域服务。
+ * remote-branch-service.js —— 分支管理域服务（本地分支 + 远端分支）。
  *
- * 覆盖四类能力，全部只经 execFile 参数数组调用 git（绝不拼接 shell 字符串）：
- *  1. 远端分支清单（含相对主干的领先/落后与本地同名分支的同步状态）
+ * 覆盖六类能力，全部只经 execFile 参数数组调用 git（绝不拼接 shell 字符串）：
+ *  1. 远端/本地分支清单（含相对主干的领先/落后、检出绑定与保护分支标记）
  *  2. 纯远端操作：基于现有远端分支 push 出一个新远端分支（不落地任何本地分支）
- *  3. 工作区分支切换：检出本地分支，或检出远端分支为指定名称的本地跟踪分支
- *  4. 合并远端分支到当前工作区，冲突保持现场交由 UI 快捷处理（ours/theirs/自定义编辑）
+ *  3. 分支删除：删除非保护远端分支；删除本地分支（主分支/被检出/未合入三重保护）
+ *  4. 工作区分支切换：检出本地分支，或检出远端分支为指定名称的本地跟踪分支
+ *  5. 合并远端/本地分支到当前工作区，冲突保持现场交由 UI 快捷处理（ours/theirs/自定义编辑）
+ *  6. 远端刷新（fetch --prune --all）与最近 fetch 时间读取
  *
  * 校验链与错误风格与 merge-request-service.js 一致：业务失败抛带 statusCode 的
  * 中文错误（400/404/409），server.js 路由统一按 err.statusCode || 500 捕获返回。
@@ -355,11 +357,33 @@ export async function getLastFetchTime(repoPath) {
 }
 
 /**
+ * 解析一个远端的保护分支集合（不可删除的分支）。
+ *
+ * 保护语义与 GitHub 一致：远端 HEAD 符号引用（refs/remotes/<remote>/HEAD）指向的
+ * 默认分支不可删除。未设置 HEAD 别名（add remote 后未 fetch 过）时退化为保护
+ * 本地主干同名的远端分支，保证 origin/main 这类主干在任何情况下都不会被误删。
+ * @param {string} normalizedRepo - 归一化仓库路径
+ * @param {string} remote - 远端名
+ * @returns {Promise<Set<string>>} 保护分支短名集合
+ */
+async function resolveProtectedRemoteBranches(normalizedRepo, remote) {
+  const protectedSet = new Set();
+  const headRef = (await tryGit(normalizedRepo, ['symbolic-ref', '-q', `refs/remotes/${remote}/HEAD`])).stdout.trim();
+  if (headRef.startsWith(`refs/remotes/${remote}/`)) {
+    protectedSet.add(headRef.slice(`refs/remotes/${remote}/`.length));
+  } else {
+    protectedSet.add(await detectMainBranch(normalizedRepo));
+  }
+  return protectedSet;
+}
+
+/**
  * 列出远端分支及每条的同步状态。
  *
  * 每条返回：名称（remote/branch 形式）、HEAD 提交元信息、相对主干的 ahead/behind
- * （ahead = 该远端分支独有提交数），以及本地同名分支的对应关系
- * （ahead = 本地独有、behind = 远端独有），供 UI 展示「已同步/本地领先/落后」。
+ * （ahead = 该远端分支独有提交数）、本地同名分支的对应关系
+ * （ahead = 本地独有、behind = 远端独有），以及 isProtected（是否为该远端的
+ * 默认分支/保护分支，保护分支不允许删除）。
  * 额外返回 lastFetchAt（仓库级最近一次 fetch 时间），供前端判断清单新鲜度。
  * @param {string} repoPath - 仓库路径
  * @returns {Promise<{mainBranch: string, lastFetchAt: string|null, branches: Array<object>}>}
@@ -388,6 +412,12 @@ export async function listRemoteBranches(repoPath) {
 
   const mainBranch = await detectMainBranch(normalizedRepo);
   const lastFetchAt = await getLastFetchTime(normalizedRepo);
+
+  // 每个远端只探测一次保护分支集合，供删除入口决定是否展示/放行
+  const remotesList = [...new Set(rawRefs.map(ref => ref.refname.split('/')[2]))];
+  const protectedByRemote = new Map(
+    await Promise.all(remotesList.map(async remote => [remote, await resolveProtectedRemoteBranches(normalizedRepo, remote)]))
+  );
 
   // 每条远端分支的对比统计相互独立，可并发；rev-list 无共同祖先时会失败，按 null 降级
   const branches = await Promise.all(rawRefs.map(async (ref) => {
@@ -427,11 +457,180 @@ export async function listRemoteBranches(repoPath) {
       subject: ref.subject,
       ahead,
       behind,
-      local
+      local,
+      isProtected: protectedByRemote.get(remote)?.has(branch) ?? false
     };
   }));
 
   return { mainBranch, lastFetchAt, branches };
+}
+
+/**
+ * 删除远端分支（git push <remote> --delete <branch>）。
+ *
+ * 仅允许删除非保护分支：远端 HEAD 默认分支（或退化口径下的主干同名分支）直接 409。
+ * 删除前经 ls-remote 核对远端真实存在该分支，避免拿过期跟踪引用发出必然失败的 push。
+ * @param {object} params
+ * @param {string} params.repoPath - 仓库路径
+ * @param {string} params.ref - 「远端/分支」形式的远端分支名
+ * @returns {Promise<{ok: boolean, remote: string, branch: string}>}
+ */
+export async function deleteRemoteBranch({ repoPath, ref }) {
+  const normalizedRepo = await resolveRepoPath(repoPath);
+  if (typeof ref !== 'string' || ref.indexOf('/') < 0) {
+    throw httpError('ref 必须是「远端/分支」形式的远端分支名', 400);
+  }
+  const slashIdx = ref.indexOf('/');
+  const remote = ref.slice(0, slashIdx);
+  const remoteBranch = ref.slice(slashIdx + 1);
+  if (!remoteBranch) {
+    throw httpError('ref 必须是「远端/分支」形式的远端分支名', 400);
+  }
+  await validateRefFormat(remoteBranch, '远端分支名', normalizedRepo);
+
+  const remotesOutput = await runGit(normalizedRepo, ['remote']);
+  if (!remotesOutput.split('\n').filter(Boolean).includes(remote)) {
+    throw httpError(`未找到名为「${remote}」的远端`, 404);
+  }
+  const protectedBranches = await resolveProtectedRemoteBranches(normalizedRepo, remote);
+  if (protectedBranches.has(remoteBranch)) {
+    throw httpError(`远端分支「${remote}/${remoteBranch}」是保护分支（远端默认分支），不允许删除`, 409);
+  }
+
+  // 本地跟踪引用可能过期（远端已删/改名），前置 ls-remote 核对真实存在
+  const remoteProbe = await tryGit(normalizedRepo, ['ls-remote', '--heads', remote, remoteBranch], {
+    timeout: REMOTE_TIMEOUT_MS,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+  });
+  if (!remoteProbe.ok) {
+    const reason = remoteProbe.killed ? '连接超时' : summarizeGitFailure(remoteProbe.stderr);
+    throw httpError(`无法核对远端分支状态（${reason}），已取消删除`, 409);
+  }
+  if (!remoteProbe.stdout.trim()) {
+    throw httpError(`远端上不存在分支「${remote}/${remoteBranch}」，请先刷新远端（fetch）后重试`, 404);
+  }
+
+  const pushResult = await tryGit(normalizedRepo, ['push', remote, '--delete', remoteBranch], {
+    timeout: REMOTE_TIMEOUT_MS,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+  });
+  if (!pushResult.ok) {
+    throw httpError(`删除远端分支失败：${summarizeGitFailure(pushResult.stderr)}`, 409);
+  }
+  return { ok: true, remote, branch: remoteBranch };
+}
+
+/**
+ * 列出本地分支及每条的检出/合入状态。
+ *
+ * 每条返回：分支名、HEAD 提交元信息、upstream 跟踪分支、相对主干的 ahead/behind
+ * （ahead = 分支独有提交数，为 0 即已合入主干）、是否主分支，以及检出该分支的
+ * 工作区信息（git 不允许两个工作区共享分支，有工作区占用时删除会被拒绝）。
+ * @param {string} repoPath - 仓库路径
+ * @returns {Promise<{mainBranch: string, branches: Array<object>}>}
+ */
+export async function listLocalBranches(repoPath) {
+  const normalizedRepo = await resolveRepoPath(repoPath);
+
+  // upstream:short 为空时该字段输出空串，split 后保持空串由调用方归一为 null
+  const refFormat = '%(refname:short)|%(objectname)|%(committerdate:iso-strict)|%(authorname)|%(contents:subject)|%(upstream:short)';
+  const refOutput = await runGit(normalizedRepo, ['for-each-ref', 'refs/heads', `--format=${refFormat}`, '--sort=-committerdate']);
+  const rawRefs = refOutput.split('\n').filter(Boolean)
+    .map(line => {
+      const [name = '', objectname = '', committerdate = '', authorname = '', ...rest] = line.split('|');
+      const upstream = rest.pop() || '';
+      return { name, sha: objectname, committerdate, authorname, subject: rest.join('|'), upstream };
+    });
+
+  const mainBranch = await detectMainBranch(normalizedRepo);
+
+  // 分支 → 检出它的工作区映射（detached HEAD 工作区 branch 为空不入映射）
+  const worktrees = await getWorktrees(normalizedRepo);
+  const holderByBranch = new Map();
+  worktrees.forEach(wt => {
+    if (wt.branch && wt.existsOnDisk !== false && wt.isPrunable !== true) {
+      holderByBranch.set(wt.branch, wt);
+    }
+  });
+
+  const branches = await Promise.all(rawRefs.map(async (ref) => {
+    let ahead = null;
+    let behind = null;
+    const vsMain = await tryGit(normalizedRepo, ['rev-list', '--left-right', '--count', `${mainBranch}...${ref.name}`]);
+    if (vsMain.ok) {
+      const [behindCount = '0', aheadCount = '0'] = vsMain.stdout.trim().split(/\s+/);
+      ahead = Number(aheadCount) || 0;
+      behind = Number(behindCount) || 0;
+    }
+    const holder = holderByBranch.get(ref.name) || null;
+    return {
+      name: ref.name,
+      sha: ref.sha,
+      committerDate: ref.committerdate,
+      author: ref.authorname,
+      subject: ref.subject,
+      upstream: ref.upstream || null,
+      isMain: ref.name === mainBranch,
+      ahead,
+      behind,
+      mergedIntoMain: ahead === 0,
+      worktree: holder ? { path: holder.path, isMain: !!holder.isMain } : null
+    };
+  }));
+
+  return { mainBranch, branches };
+}
+
+/**
+ * 删除本地分支（git branch -d / -D）。
+ *
+ * 三重保护：
+ *  1. 主分支不可删除；
+ *  2. 正被任何工作区检出的分支不可删除（需先切换或移除对应工作区）；
+ *  3. 非强制模式下有未合入主干提交的分支拒绝删除（409 引导二次确认）。
+ * force=true 时跳过合入检查直接 -D 强删，由前端 confirm 二次确认后传入。
+ * @param {object} params
+ * @param {string} params.repoPath - 仓库路径
+ * @param {string} params.branch - 本地分支名
+ * @param {boolean} [params.force] - true 时强制删除未合入分支
+ * @returns {Promise<{ok: boolean, branch: string}>}
+ */
+export async function deleteLocalBranch({ repoPath, branch, force = false }) {
+  const normalizedRepo = await resolveRepoPath(repoPath);
+  await validateRefFormat(branch, '分支名', normalizedRepo);
+
+  const mainBranch = await detectMainBranch(normalizedRepo);
+  if (branch === mainBranch) {
+    throw httpError(`「${branch}」是主分支，不允许删除`, 409);
+  }
+  const exists = await tryGit(normalizedRepo, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]);
+  if (!exists.ok) {
+    throw httpError(`本地分支「${branch}」不存在`, 404);
+  }
+  // git 本身会拒绝删除被检出的分支，这里前置给出更明确的操作指引
+  const worktrees = await getWorktrees(normalizedRepo);
+  const holder = worktrees.find(wt => wt.branch === branch);
+  if (holder) {
+    throw httpError(`分支「${branch}」正被工作区检出（${holder.path}），请先切换该工作区的分支或移除工作区后再删除`, 409);
+  }
+
+  if (!force) {
+    // -d 的安全语义前置显式化：未合入主干时引导用户走强删确认，而不是静默失败
+    const branchSha = (await tryGit(normalizedRepo, ['rev-parse', '--verify', `refs/heads/${branch}^{commit}`])).stdout.trim();
+    const mainSha = (await tryGit(normalizedRepo, ['rev-parse', '--verify', `refs/heads/${mainBranch}^{commit}`])).stdout.trim();
+    if (branchSha && mainSha) {
+      const merged = await tryGit(normalizedRepo, ['merge-base', '--is-ancestor', branchSha, mainSha]);
+      if (!merged.ok) {
+        throw httpError(`分支「${branch}」有未合入主干的提交，普通删除会丢失这些提交；已确认要丢弃请使用强制删除`, 409);
+      }
+    }
+  }
+
+  const deleteResult = await tryGit(normalizedRepo, ['branch', force ? '-D' : '-d', branch]);
+  if (!deleteResult.ok) {
+    throw httpError(`删除本地分支失败：${summarizeGitFailure(deleteResult.stderr || deleteResult.stdout)}`, 409);
+  }
+  return { ok: true, branch };
 }
 
 /**

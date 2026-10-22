@@ -2103,6 +2103,15 @@
       color: var(--text-bright);
     }
     .remote-filter-input:focus { outline: 1px solid var(--accent); }
+    /* 分支列表的删除按钮：保留 outline 造型但转为危险色，与「移除」类操作的视觉权重区分开 */
+    .branch-delete-btn {
+      color: var(--danger);
+      border-color: rgba(220, 38, 38, 0.4);
+    }
+    .branch-delete-btn:hover {
+      background: rgba(220, 38, 38, 0.12);
+      border-color: var(--danger);
+    }
     .panel-header-action {
       margin-left: auto;
       margin-right: 8px;

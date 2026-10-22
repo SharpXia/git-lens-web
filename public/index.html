@@ -40,7 +40,7 @@
       <span>🔀 Merge Requests</span>
     </button>
     <button id="tabRemote" class="tab-btn" data-action="tab-remote">
-      <span>☁️ 远端分支管理</span>
+      <span>🌿 分支管理</span>
     </button>
     <div class="tab-bar-actions">
       <button id="newMrBtn" class="btn-primary" data-action="open-create-mr" title="基于当前仓库的两个本地分支发起 Merge Request">新建 MR</button>
@@ -225,7 +225,7 @@
     </div>
   </div>
 
-  <!-- TAB 4: 远端分支管理（远端操作 + 工作区分支切换 + 合并冲突处理） -->
+  <!-- TAB 4: 分支管理（本地/远端分支管理 + 工作区分支切换 + 合并冲突处理） -->
   <div id="viewRemote" style="display: none;">
     <div class="remote-toolbar">
       <div class="picker-col">
@@ -260,13 +260,26 @@
     </div>
 
     <div class="panels">
+    <!-- 左栏：本地分支（检出到任选工作区 + 删除） -->
+    <div class="panel">
+      <div class="panel-header">
+        <h2>🌿 本地分支</h2>
+        <input id="localBranchFilterInput" class="remote-filter-input" type="search" placeholder="过滤本地分支..." aria-label="过滤本地分支" autocomplete="off">
+        <span id="localBranchCount" class="badge">0 个</span>
+      </div>
+      <div class="remote-list-tip">可将本地分支检出到任选工作区；未被检出且已合入主干的分支可安全删除，未合入分支需二次确认强删。</div>
+      <div id="localBranchList">
+        <div class="loading">加载中...</div>
+      </div>
+    </div>
+    <!-- 右栏：远端分支（远端操作 + 检出 + 合并 + 删除非保护分支） -->
     <div class="panel">
       <div class="panel-header">
         <h2>☁️ 远端分支</h2>
         <input id="remoteBranchFilterInput" class="remote-filter-input" type="search" placeholder="过滤远端分支..." aria-label="过滤远端分支" autocomplete="off">
         <span id="remoteBranchCount" class="badge">0 个</span>
       </div>
-        <div class="remote-list-tip">基于任意远端分支可创建新远端分支（纯远端操作）；检出会把远端分支落到目标工作区。</div>
+        <div class="remote-list-tip">基于任意远端分支可创建新远端分支（纯远端操作）；检出会把远端分支落到目标工作区；远端默认分支为保护分支不可删除。</div>
         <div id="remoteBranchList">
           <div class="loading">加载中...</div>
         </div>
@@ -301,6 +314,32 @@
       <div class="scan-directory-footer">
         <button class="btn-outline" type="button" data-action="close-checkout-modal">取消</button>
         <button id="checkoutSubmitBtn" class="btn-primary" type="button" data-action="submit-checkout-branch">检出</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 检出本地分支到工作区弹层：目标工作区可下拉选择 -->
+  <div id="checkoutLocalBranchModal" class="scan-directory-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="checkoutLocalBranchModalTitle">
+    <div class="scan-directory-card">
+      <div class="scan-directory-header">
+        <h2 id="checkoutLocalBranchModalTitle">检出到工作区</h2>
+        <button class="drawer-close" type="button" data-action="close-checkout-local-modal" aria-label="关闭">×</button>
+      </div>
+      <div class="scan-directory-body">
+        <div class="mr-form-group">
+          <label>本地分支</label>
+          <div id="checkoutLocalModalSource" class="remote-modal-source"></div>
+        </div>
+        <div class="mr-form-group">
+          <label for="checkoutLocalWorktreeSelect">目标工作区</label>
+          <select id="checkoutLocalWorktreeSelect" class="picker-select"></select>
+          <div class="remote-modal-hint">分支正被其他工作区检出时无法重复检出；目标工作区需无未提交修改。</div>
+        </div>
+        <div id="checkoutLocalModalError" class="mr-detail-error" role="alert"></div>
+      </div>
+      <div class="scan-directory-footer">
+        <button class="btn-outline" type="button" data-action="close-checkout-local-modal">取消</button>
+        <button id="checkoutLocalSubmitBtn" class="btn-primary" type="button" data-action="submit-checkout-local-branch">检出</button>
       </div>
     </div>
   </div>

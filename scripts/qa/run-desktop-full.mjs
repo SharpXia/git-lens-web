@@ -847,9 +847,10 @@ async function main() {
     record('w8-prune-lost', 'prune 清理失联 worktree（porcelain 列表无失联项）', w8Ok ? 'pass' : 'fail',
       `HTTP=${pruneRes.status} 列表仍含失联=${wtListAfterPrune.includes('wt-lost')}`);
 
-    // ================= 5.5 W9 远端分支管理 =================
-    // 顺序依赖：R2 建远端分支 → R3 检出重命名后切回 main → R4 冲突合并全程 → R5 UI 面板基线。
-    // R4 会给 main 追加一笔合并提交，必须放在所有依赖 main 历史的场景之后
+    // ================= 5.5 W9 分支管理（本地 + 远端） =================
+    // 顺序依赖：R2 建远端分支 → R3 检出重命名后切回 main → R4 冲突合并全程 → R5 UI 面板基线
+    // → R6 删远端分支 → R7 本地分支删除三重保护。R4 会给 main 追加一笔合并提交，
+    // 必须放在所有依赖 main 历史的场景之后
     const remoteBare = fixture.main.remote.bare;
 
     // W9a 远端分支清单：裸远端的 main 与 feature/remote-only 均可见且带同步状态
@@ -927,32 +928,95 @@ async function main() {
     record('w9e-merge-abort', '放弃合并：第二条远端分支重造冲突后 abort，HEAD 与工作区恢复', w9eOk ? 'pass' : 'fail',
       `merge=${mergeSecond.status}/${mergeSecond.body?.status ?? 'x'} abort=${abortRes.status} HEAD恢复=${headAfterAbort === headBeforeAbort} 现场干净=${statusAfterAbort === ''}`);
 
-    // W9f 远端分支 Tab UI：先切回主仓库（MR 截图场景会把页面停在 repo-mr，其无远端），
-    // 再切 Tab 断言列表渲染、目标工作区就绪、无进行中合并面板隐藏
+    // W9f 分支管理 Tab UI：先切回主仓库（MR 截图场景会把页面停在 repo-mr，其无远端），
+    // 再切 Tab 断言左右两栏列表渲染、目标工作区就绪、无进行中合并面板隐藏。
+    // 左栏本地分支的 rev-list 计算比远端清单慢，轮询必须等两栏都出列表，避免快照竞态
     await waitInspect(mainRepo);
     await page.evaluate(() => { window.switchTab('remote'); });
     await pollPage(page, () => {
-      const list = document.getElementById('remoteBranchList');
-      return Boolean(list) && list.querySelectorAll('.list-item').length > 0;
+      const remote = document.getElementById('remoteBranchList');
+      const local = document.getElementById('localBranchList');
+      return Boolean(remote) && remote.querySelectorAll('.list-item').length > 0
+        && Boolean(local) && local.querySelectorAll('.list-item').length > 0;
     }, null, 20000);
     const remoteUi = await page.evaluate(() => ({
       tabActive: document.getElementById('tabRemote')?.className.includes('active'),
       viewVisible: document.getElementById('viewRemote')?.style.display !== 'none',
       rows: document.querySelectorAll('#remoteBranchList .list-item').length,
+      localRows: document.querySelectorAll('#localBranchList .list-item').length,
       countText: document.getElementById('remoteBranchCount')?.textContent,
       targetOptions: document.querySelectorAll('#remoteWorktreeSelect option').length,
       hasCopyBranch: [...document.querySelectorAll('#remoteBranchList .item-name')].some((el) => el.textContent.includes('origin/feature/remote-copy')),
       mergePanelHidden: document.getElementById('remoteMergePanel')?.style.display === 'none'
     }));
     const w9fOk = remoteUi.tabActive && remoteUi.viewVisible && remoteUi.rows >= 3
+      && remoteUi.localRows >= 2
       && remoteUi.targetOptions >= 1 && remoteUi.hasCopyBranch && remoteUi.mergePanelHidden;
-    record('w9f-remote-tab-ui', '远端分支 Tab 渲染：列表含新建远端分支、目标工作区就绪、合并面板隐藏', w9fOk ? 'pass' : 'fail',
+    record('w9f-remote-tab-ui', '分支管理 Tab 渲染：左栏本地分支 + 右栏远端分支、目标工作区就绪、合并面板隐藏', w9fOk ? 'pass' : 'fail',
       JSON.stringify(remoteUi));
     await captureBaseline(page, qaRoot, 'w', 'remote-tab', () => {
       const view = document.getElementById('viewRemote');
       return Boolean(view) && view.style.display !== 'none'
-        && document.querySelectorAll('#remoteBranchList .list-item').length > 0;
+        && document.querySelectorAll('#remoteBranchList .list-item').length > 0
+        && document.querySelectorAll('#localBranchList .list-item').length > 0;
     });
+
+    // W9g 删除远端分支：W9b 创建的 feature/remote-copy 删除后远端消失，保护分支 origin/main 409
+    const remoteDelete = await api('/api/delete-remote-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, ref: 'origin/feature/remote-copy' }
+    });
+    const bareCopyAfterDelete = await gitSnap(qaRoot, remoteBare, 'rev-parse', 'refs/heads/feature/remote-copy').catch(() => '');
+    const protectedDelete = await api('/api/delete-remote-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, ref: 'origin/main' }
+    });
+    const w9gOk = remoteDelete.status === 200 && bareCopyAfterDelete === '' && protectedDelete.status === 409;
+    record('w9g-delete-remote-branch', '删除远端分支：远端落地消失，保护分支（远端默认分支）拒绝 409', w9gOk ? 'pass' : 'fail',
+      `删除=${remoteDelete.status} 裸远端已无=${bareCopyAfterDelete === ''} 保护分支=${protectedDelete.status}`);
+
+    // W9h 本地分支管理：清单绑定/合入状态 + 三重保护（被检出 409 → 未合入 409 → 强删 200 → 主分支 409）+ 安全删除。
+    // fixture 的 repo-main 本地已有 feature/remote-second（远端同名分支的源头），
+    // 检出必须用独立命名的临时本地分支，否则同名 409、切回 main 也会 409
+    const localList = await api(`/api/local-branches?path=${encodeURIComponent(mainRepo)}`);
+    const mainLocal = (localList.body?.branches || []).find((b) => b.name === 'main');
+    // 以未进主干的第二条远端分支为起点建独立命名本地分支，并检出到主工作区
+    const checkoutTmpUnmerged = await api('/api/checkout-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, worktree: mainRepo, refType: 'remote', ref: 'origin/feature/remote-second', localName: 'feature/qa-tmp-unmerged' }
+    });
+    const delWhileHeld = await api('/api/delete-local-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, branch: 'feature/qa-tmp-unmerged' }
+    });
+    const backToMainAgain = await api('/api/checkout-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, worktree: mainRepo, refType: 'local', ref: 'main' }
+    });
+    const delUnmergedPlain = await api('/api/delete-local-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, branch: 'feature/qa-tmp-unmerged' }
+    });
+    const delUnmergedForce = await api('/api/delete-local-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, branch: 'feature/qa-tmp-unmerged', force: true }
+    });
+    const delMainBranch = await api('/api/delete-local-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, branch: 'main' }
+    });
+    // W9d 已把 origin/feature/remote-only 合入 main，W9c 建的本地重命名分支已合入 → 安全删除放行
+    const delRenamedMerged = await api('/api/delete-local-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, branch: 'feature/remote-renamed' }
+    });
+    const w9hOk = localList.status === 200 && mainLocal?.isMain === true && mainLocal?.worktree?.isMain === true
+      && checkoutTmpUnmerged.status === 200 && delWhileHeld.status === 409
+      && backToMainAgain.status === 200 && delUnmergedPlain.status === 409 && delUnmergedForce.status === 200
+      && delMainBranch.status === 409 && delRenamedMerged.status === 200;
+    record('w9h-local-branches', '本地分支管理：清单检出绑定 + 被检出/未合入/主分支三重保护与安全删除', w9hOk ? 'pass' : 'fail',
+      `清单=${localList.status} main绑定=${mainLocal?.worktree?.isMain ?? 'x'} 检出临时=${checkoutTmpUnmerged.status} 被检出=${delWhileHeld.status} 切回=${backToMainAgain.status} 未合入=${delUnmergedPlain.status} 强删=${delUnmergedForce.status} 主分支=${delMainBranch.status} 安全删除=${delRenamedMerged.status}`);
+
     // 回到总览，避免影响后续崩溃恢复场景的会话状态语义
     await page.evaluate(() => { window.switchTab('overview'); });
 

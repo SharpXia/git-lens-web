@@ -244,3 +244,58 @@ test('POST /api/fetch-remotes 刷新远端并把网络失败按 200 + ok:false �
   const noRemote = await request('POST', '/api/fetch-remotes', { repoPath: lonely });
   assert.equal(noRemote.status, 409);
 });
+
+test('分支管理新增路由：local-branches 清单、delete-remote-branch 保护、delete-local-branch 防护', async (t) => {
+  const { request } = await startServer(t);
+  const { repo, bare } = await makeFixture(t);
+
+  // 本地分支清单：main 为主分支且被主工作区检出
+  const list = await request('GET', `/api/local-branches?path=${encodeURIComponent(repo)}`);
+  assert.equal(list.status, 200);
+  assert.equal(list.body.mainBranch, 'main');
+  const mainEntry = list.body.branches.find(b => b.name === 'main');
+  assert.equal(mainEntry.isMain, true);
+  assert.equal(mainEntry.worktree?.isMain, true);
+  assert.equal(mainEntry.mergedIntoMain, true);
+
+  // 删除远端分支：先建后删成功；保护分支 origin/main（无 HEAD 别名时退化为保护主干同名）拒绝
+  await request('POST', '/api/create-remote-branch', {
+    repoPath: repo, sourceRef: 'origin/main', newBranchName: 'feature/api-delete'
+  });
+  const delRemote = await request('POST', '/api/delete-remote-branch', {
+    repoPath: repo, ref: 'origin/feature/api-delete'
+  });
+  assert.equal(delRemote.status, 200);
+  await assert.rejects(git(bare, 'rev-parse', '--verify', '--quiet', 'refs/heads/feature/api-delete'));
+  const delProtected = await request('POST', '/api/delete-remote-branch', { repoPath: repo, ref: 'origin/main' });
+  assert.equal(delProtected.status, 409);
+  const delGhost = await request('POST', '/api/delete-remote-branch', { repoPath: repo, ref: 'origin/ghost' });
+  assert.equal(delGhost.status, 404);
+
+  // 删除本地分支：已合入安全删除放行；未合入普通删除 409、force 放行；主分支 409
+  await git(repo, 'branch', 'feature/api-merged');
+  const delMerged = await request('POST', '/api/delete-local-branch', {
+    repoPath: repo, branch: 'feature/api-merged'
+  });
+  assert.equal(delMerged.status, 200);
+
+  await git(repo, 'checkout', '-q', '-b', 'feature/api-ahead');
+  await fs.writeFile(path.join(repo, 'ahead.txt'), '未合入\n');
+  await git(repo, 'add', '.');
+  await git(repo, 'commit', '-m', 'ahead: 独立提交');
+  await git(repo, 'checkout', '-q', 'main');
+
+  const delAheadPlain = await request('POST', '/api/delete-local-branch', {
+    repoPath: repo, branch: 'feature/api-ahead'
+  });
+  assert.equal(delAheadPlain.status, 409);
+  const delAheadForce = await request('POST', '/api/delete-local-branch', {
+    repoPath: repo, branch: 'feature/api-ahead', force: true
+  });
+  assert.equal(delAheadForce.status, 200);
+
+  const delMain = await request('POST', '/api/delete-local-branch', { repoPath: repo, branch: 'main' });
+  assert.equal(delMain.status, 409);
+  const delInvalid = await request('POST', '/api/delete-local-branch', { repoPath: repo, branch: '-evil' });
+  assert.equal(delInvalid.status, 400);
+});

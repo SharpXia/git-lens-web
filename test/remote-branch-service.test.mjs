@@ -1,11 +1,12 @@
 /**
- * 远端分支管理域服务（src/remote-branch-service.js）的回归测试。
+ * 分支管理域服务（src/remote-branch-service.js）的回归测试。
  *
  * fixture 采用本地裸仓库作为远端（file 路径直连，无需网络）：
  *   origin.git（bare）← seed 推送 main 与 feature/remote-only → repo（clone，主工作区）
- * 覆盖：远端分支清单、纯远端建分支（push 远端跟踪引用）、工作区分支切换/
- * 检出重命名、合并冲突现场的保持与恢复、三方内容读取、ours/theirs/自定义内容
- * 三种解决方式、完成/放弃合并、fetch 全量刷新。
+ * 覆盖：远端/本地分支清单、纯远端建分支（push 远端跟踪引用）、删除远端/本地
+ * 分支（保护分支与未合入防护）、工作区分支切换/检出重命名、合并冲突现场的
+ * 保持与恢复、三方内容读取、ours/theirs/自定义内容三种解决方式、完成/放弃
+ * 合并、fetch 全量刷新。
  *
  * 全部使用 mkdtemp 临时目录与隔离 git 配置，不触碰宿主仓库与真实远端。
  */
@@ -27,7 +28,10 @@ import {
   resolveConflictFile,
   commitMerge,
   abortMerge,
-  fetchRemotes
+  fetchRemotes,
+  listLocalBranches,
+  deleteRemoteBranch,
+  deleteLocalBranch
 } from '../src/remote-branch-service.js';
 
 const execGit = promisify(execFile);
@@ -431,4 +435,117 @@ test('fetchRemotes 刷新远端并在无远端配置时给出中文错误', asyn
   t.after(() => fs.rm(path.dirname(lonely), { recursive: true, force: true }));
   await git(path.dirname(lonely), 'init', '-b', 'main', 'lonely');
   await assert.rejects(fetchRemotes(lonely), err => err.statusCode === 409 && /远端/.test(err.message));
+});
+
+test('远端分支清单把远端默认分支标记为保护分支', async (t) => {
+  const { repo } = await makeFixture(t);
+  const { branches } = await listRemoteBranches(repo);
+
+  // fixture 已 set-head origin main：origin/main 是保护分支，其余可删
+  const originMain = branches.find(b => b.name === 'origin/main');
+  assert.equal(originMain.isProtected, true);
+  const remoteOnly = branches.find(b => b.name === 'origin/feature/remote-only');
+  assert.equal(remoteOnly.isProtected, false);
+});
+
+test('删除远端分支：远端与本地跟踪引用同步消失，保护分支与幽灵分支被拒绝', async (t) => {
+  const { bare, repo } = await makeFixture(t);
+  await createRemoteBranch({ repoPath: repo, sourceRef: 'origin/feature/remote-only', newBranchName: 'feature/to-delete' });
+
+  const result = await deleteRemoteBranch({ repoPath: repo, ref: 'origin/feature/to-delete' });
+  assert.equal(result.ok, true);
+  assert.equal(result.remote, 'origin');
+  assert.equal(result.branch, 'feature/to-delete');
+  await gitFail(bare, 'rev-parse', '--verify', '--quiet', 'refs/heads/feature/to-delete');
+  await gitFail(repo, 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/feature/to-delete');
+
+  // 保护分支（远端默认分支）不可删
+  await assert.rejects(
+    deleteRemoteBranch({ repoPath: repo, ref: 'origin/main' }),
+    err => err.statusCode === 409 && /保护分支/.test(err.message)
+  );
+  // 远端上不存在的分支（本地跟踪引用过期场景）提示先 fetch
+  await assert.rejects(
+    deleteRemoteBranch({ repoPath: repo, ref: 'origin/ghost' }),
+    err => err.statusCode === 404 && /fetch/.test(err.message)
+  );
+});
+
+test('本地分支清单：检出绑定、合入判定与 upstream 一并返回', async (t) => {
+  const { root, repo } = await makeFixture(t);
+  // 与 main 同点的分支（已合入）与领先 main 一笔的分支（未合入）
+  await git(repo, 'branch', 'feature/merged-at-head');
+  await git(repo, 'branch', 'feature/ahead');
+
+  const { mainBranch, branches } = await listLocalBranches(repo);
+  assert.equal(mainBranch, 'main');
+
+  const main = branches.find(b => b.name === 'main');
+  assert.equal(main.isMain, true);
+  assert.equal(main.worktree?.path, repo);
+  assert.equal(main.worktree?.isMain, true);
+
+  const merged = branches.find(b => b.name === 'feature/merged-at-head');
+  assert.equal(merged.isMain, false);
+  assert.equal(merged.mergedIntoMain, true);
+  assert.equal(merged.worktree, null);
+
+  // 领先分支追加独立提交后未合入判定翻转
+  await fs.writeFile(path.join(repo, 'ahead.txt'), '领先提交\n');
+  await git(repo, 'checkout', '-q', 'feature/ahead');
+  await git(repo, 'add', '.');
+  await git(repo, 'commit', '-m', 'ahead: 独立提交');
+  await git(repo, 'checkout', '-q', 'main');
+  const ahead = (await listLocalBranches(repo)).branches.find(b => b.name === 'feature/ahead');
+  assert.equal(ahead.ahead, 1);
+  assert.equal(ahead.mergedIntoMain, false);
+
+  // 其他工作区检出的分支带 worktree 绑定（服务端返回的是 realpath，需归一后比对）
+  const otherWt = path.join(root, 'wt-holder');
+  await git(repo, 'worktree', 'add', '-q', '-b', 'feature/held', otherWt);
+  const held = (await listLocalBranches(repo)).branches.find(b => b.name === 'feature/held');
+  assert.equal(held.worktree?.path, await fs.realpath(otherWt));
+});
+
+test('删除本地分支：安全删除放行，未合入/被检出/主分支均被保护', async (t) => {
+  const { root, repo } = await makeFixture(t);
+  await git(repo, 'branch', 'feature/safe');
+  await git(repo, 'branch', 'feature/danger');
+  await fs.writeFile(path.join(repo, 'danger.txt'), '未合入提交\n');
+  await git(repo, 'checkout', '-q', 'feature/danger');
+  await git(repo, 'add', '.');
+  await git(repo, 'commit', '-m', 'danger: 未合入提交');
+  await git(repo, 'checkout', '-q', 'main');
+
+  // 未合入分支普通删除被拒，强制删除放行
+  await assert.rejects(
+    deleteLocalBranch({ repoPath: repo, branch: 'feature/danger' }),
+    err => err.statusCode === 409 && /未合入主干/.test(err.message)
+  );
+  const forced = await deleteLocalBranch({ repoPath: repo, branch: 'feature/danger', force: true });
+  assert.equal(forced.ok, true);
+  await gitFail(repo, 'rev-parse', '--verify', '--quiet', 'refs/heads/feature/danger');
+
+  // 已合入分支安全删除直接放行
+  const safe = await deleteLocalBranch({ repoPath: repo, branch: 'feature/safe' });
+  assert.equal(safe.ok, true);
+  await gitFail(repo, 'rev-parse', '--verify', '--quiet', 'refs/heads/feature/safe');
+
+  // 被其他工作区检出的分支拒绝删除
+  const otherWt = path.join(root, 'wt-holder');
+  await git(repo, 'worktree', 'add', '-q', '-b', 'feature/held', otherWt);
+  await assert.rejects(
+    deleteLocalBranch({ repoPath: repo, branch: 'feature/held' }),
+    err => err.statusCode === 409 && /被工作区检出/.test(err.message)
+  );
+
+  // 主分支与不存在的分支分别 409 / 404
+  await assert.rejects(
+    deleteLocalBranch({ repoPath: repo, branch: 'main' }),
+    err => err.statusCode === 409 && /主分支/.test(err.message)
+  );
+  await assert.rejects(
+    deleteLocalBranch({ repoPath: repo, branch: 'no/such' }),
+    err => err.statusCode === 404
+  );
 });
