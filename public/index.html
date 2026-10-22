@@ -292,8 +292,9 @@
           <div class="remote-modal-hint">将以该名称创建本地跟踪分支并检出到目标工作区，自动建立 upstream。</div>
         </div>
         <div class="mr-form-group">
-          <label>目标工作区</label>
-          <div id="checkoutModalTarget" class="remote-modal-source"></div>
+          <label for="checkoutWorktreeSelect">目标工作区</label>
+          <select id="checkoutWorktreeSelect" class="picker-select"></select>
+          <div class="remote-modal-hint">检出会把远端分支落到这里选中的工作区。</div>
         </div>
         <div id="checkoutModalError" class="mr-detail-error" role="alert"></div>
       </div>
@@ -339,8 +340,8 @@
       </div>
       <div class="scan-directory-body">
         <div class="mr-form-group">
-          <label>目标工作区</label>
-          <div id="switchBranchModalTarget" class="remote-modal-source"></div>
+          <label for="switchWorktreeSelect">目标工作区</label>
+          <select id="switchWorktreeSelect" class="picker-select"></select>
         </div>
         <div class="mr-form-group">
           <label>选择分支</label>

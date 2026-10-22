@@ -5306,7 +5306,23 @@
 
     /* ================= Worktree 管理扩展结束 ================= */
 
-    /* 检出远端分支弹层：可重命名本地分支名（默认远端分支短名） */
+    /* 填充弹层内的「目标工作区」下拉（全部在盘工作区），并选中默认值 */
+    function populateWorktreeSelectOptions(selectEl, selectedPath) {
+      if (!selectEl) return;
+      selectEl.innerHTML = '';
+      currentWorktrees
+        .filter(w => w.existsOnDisk !== false)
+        .forEach(w => {
+          const opt = document.createElement('option');
+          opt.value = w.path;
+          opt.textContent = w.isMain ? `⭐ 主工作区 · ${w.branch || '(detached)'} · ${w.path}` : `${w.branch || '(detached)'} · ${w.path}`;
+          selectEl.appendChild(opt);
+        });
+      const valid = [...selectEl.options].some(o => o.value === selectedPath);
+      selectEl.value = valid ? selectedPath : (selectEl.options[0] ? selectEl.options[0].value : '');
+    }
+
+    /* 检出远端分支弹层：可重命名本地分支名（默认远端分支短名），目标工作区可下拉选择 */
     function openCheckoutModal(branch) {
       const worktree = remoteState.targetWorktree;
       if (!worktree) {
@@ -5315,8 +5331,7 @@
       }
       remoteState.checkoutModalBranch = branch;
       document.getElementById('checkoutModalSource').textContent = branch.name;
-      const wt = currentWorktrees.find(w => w.path === worktree);
-      document.getElementById('checkoutModalTarget').textContent = wt ? `${wt.branch || wt.head || '(detached)'} · ${wt.path}` : worktree;
+      populateWorktreeSelectOptions(document.getElementById('checkoutWorktreeSelect'), worktree);
       const nameInput = document.getElementById('checkoutLocalNameInput');
       nameInput.value = branch.branch;
       document.getElementById('checkoutModalError').textContent = '';
@@ -5332,7 +5347,8 @@
     async function submitCheckoutBranch() {
       const branch = remoteState.checkoutModalBranch;
       if (!branch) return;
-      const worktree = remoteState.targetWorktree;
+      // 目标工作区以弹层下拉为准；所选与工具栏不同时同步工具栏上下文
+      const worktree = document.getElementById('checkoutWorktreeSelect').value || remoteState.targetWorktree;
       const localName = document.getElementById('checkoutLocalNameInput').value.trim();
       const errorEl = document.getElementById('checkoutModalError');
       const submitBtn = document.getElementById('checkoutSubmitBtn');
@@ -5351,6 +5367,7 @@
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || '检出失败');
         closeCheckoutModal();
+        syncTargetWorktreeAfterModal(worktree);
         showToast(`已检出 ${branch.name} 为本地分支「${data.branch}」`);
         // 检出会切换工作区分支：总览面板、目标信息与 merge 状态都需要刷新
         inspectRepo(currentRepo);
@@ -5360,6 +5377,15 @@
       } finally {
         submitBtn.disabled = false;
       }
+    }
+
+    /* 弹层里选过目标工作区后，把工具栏上下文同步到同一工作区，保持后续操作一致 */
+    function syncTargetWorktreeAfterModal(worktree) {
+      if (!worktree || remoteState.targetWorktree === worktree) return;
+      remoteState.targetWorktree = worktree;
+      const select = document.getElementById('remoteWorktreeSelect');
+      if (select) select.value = worktree;
+      renderRemoteTargetInfo();
     }
 
     /* 创建远端分支弹层：以选中远端分支为基准直接 push 新远端分支 */
@@ -5450,8 +5476,7 @@
         sel.value = '';
         switchBranchPicker.refresh();
       };
-      const wt = currentWorktrees.find(w => w.path === worktree);
-      document.getElementById('switchBranchModalTarget').textContent = wt ? `${wt.branch || wt.head || '(detached)'} · ${wt.path}` : worktree;
+      populateWorktreeSelectOptions(document.getElementById('switchWorktreeSelect'), worktree);
       document.getElementById('switchBranchModalError').textContent = '';
       document.getElementById('switchBranchModal').style.display = 'flex';
       if (remoteState.branches.length === 0) {
@@ -5476,7 +5501,8 @@
       const colonIdx = identity.indexOf(':');
       const refType = identity.slice(0, colonIdx);
       const ref = identity.slice(colonIdx + 1);
-      const worktree = remoteState.targetWorktree;
+      // 目标工作区以弹层下拉为准；所选与工具栏不同时同步工具栏上下文
+      const worktree = document.getElementById('switchWorktreeSelect').value || remoteState.targetWorktree;
       const submitBtn = document.getElementById('switchBranchSubmitBtn');
       submitBtn.disabled = true;
       try {
@@ -5488,6 +5514,7 @@
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || '切换失败');
         closeSwitchBranchModal();
+        syncTargetWorktreeAfterModal(worktree);
         showToast(refType === 'remote' ? `已检出 ${ref} 为本地分支「${data.branch}」` : `已切换到「${data.branch}」`);
         inspectRepo(currentRepo);
         refreshMergeState();
