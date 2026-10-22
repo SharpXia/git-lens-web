@@ -337,13 +337,32 @@ const UNMERGED_CODE_LABELS = {
 };
 
 /**
+ * 读取本仓库最近一次成功 fetch 的时间（FETCH_HEAD 的修改时间）。
+ * 从未 fetch 过（clone 后未拉取、无远端等）返回 null，供「合并前久未刷新提醒」使用。
+ * rev-parse --git-path 自动把 worktree 路径归位到共享 .git 目录，FETCH_HEAD 为仓库级文件。
+ * @param {string} repoPath - 仓库路径
+ * @returns {Promise<string|null>} ISO 时间字符串；无法确定时返回 null
+ */
+export async function getLastFetchTime(repoPath) {
+  const fetchHead = (await tryGit(repoPath, ['rev-parse', '--git-path', 'FETCH_HEAD'])).stdout.trim();
+  if (!fetchHead) return null;
+  try {
+    const stat = await fs.stat(path.resolve(repoPath, fetchHead));
+    return stat.mtime.toISOString();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 列出远端分支及每条的同步状态。
  *
  * 每条返回：名称（remote/branch 形式）、HEAD 提交元信息、相对主干的 ahead/behind
  * （ahead = 该远端分支独有提交数），以及本地同名分支的对应关系
  * （ahead = 本地独有、behind = 远端独有），供 UI 展示「已同步/本地领先/落后」。
+ * 额外返回 lastFetchAt（仓库级最近一次 fetch 时间），供前端判断清单新鲜度。
  * @param {string} repoPath - 仓库路径
- * @returns {Promise<{mainBranch: string, branches: Array<object>}>}
+ * @returns {Promise<{mainBranch: string, lastFetchAt: string|null, branches: Array<object>}>}
  */
 export async function listRemoteBranches(repoPath) {
   const normalizedRepo = await resolveRepoPath(repoPath);
@@ -368,6 +387,7 @@ export async function listRemoteBranches(repoPath) {
   );
 
   const mainBranch = await detectMainBranch(normalizedRepo);
+  const lastFetchAt = await getLastFetchTime(normalizedRepo);
 
   // 每条远端分支的对比统计相互独立，可并发；rev-list 无共同祖先时会失败，按 null 降级
   const branches = await Promise.all(rawRefs.map(async (ref) => {
@@ -411,7 +431,7 @@ export async function listRemoteBranches(repoPath) {
     };
   }));
 
-  return { mainBranch, branches };
+  return { mainBranch, lastFetchAt, branches };
 }
 
 /**

@@ -100,14 +100,29 @@
     const remoteState = {
       targetWorktree: '',        // 目标工作区绝对路径（默认主工作区）
       branches: [],              // 最近一次拉取的远端分支清单
+      lastFetchAt: null,         // 仓库级最近一次 fetch 时间（ISO，来自 /api/remote-branches）
       branchesReqSeq: 0,
       mergeState: null,          // 最近一次 /api/merge-state 响应
       mergeStateReqSeq: 0,
       checkoutModalBranch: null, // 检出弹层当前来源远端分支对象
       createRemoteModalBranch: null, // 建远端分支弹层当前基准分支对象
-      editingConflictPath: ''    // 冲突编辑抽屉当前文件（空串表示未打开）
+      editingConflictPath: '',   // 冲突编辑抽屉当前文件（空串表示未打开）
+      editWorktreePath: ''       // 编辑 Worktree 信息弹层的目标路径（空串表示未打开）
     };
     let switchBranchPicker = null; // 切换分支弹层的可搜索选择器
+
+    // 自动刷新远端：频率档位与 localStorage 键；定时器在远端 Tab 激活时静默 fetch
+    const REMOTE_AUTO_FETCH_STORAGE_KEY = 'git_lens_remote_auto_fetch';
+    const REMOTE_AUTO_FETCH_INTERVALS = { '30s': 30 * 1000, '10m': 10 * 60 * 1000, '1h': 60 * 60 * 1000 };
+    let remoteAutoFetchTimer = null;
+    let remoteAutoFetching = false;
+
+    // 合并前的新鲜度阈值：距上次 fetch 超过该时长时提示先刷新
+    const REMOTE_FETCH_STALE_MS = 10 * 60 * 1000;
+
+    /* 创建 Worktree 弹层状态：分支来源模式（existing=检出已有分支 / new=以起点新建分支） */
+    let createWtBranchMode = 'existing';
+    let worktreeCreateSubmitSeq = 0;
 
     function selectDiffMode(mode) {
       if (mode === currentDiffMode) return;
@@ -1326,7 +1341,7 @@
     function renderFilteredLists() {
       const keyword = searchKeyword.trim().toLocaleLowerCase();
       let worktrees = keyword
-        ? currentWorktrees.filter(wt => includesKeyword([wt.path, wt.branch, wt.lastCommit?.relativeTime, wt.lastCommit?.author, wt.lastCommit?.subject], keyword))
+        ? currentWorktrees.filter(wt => includesKeyword([wt.path, wt.branch, wt.name, wt.lastCommit?.relativeTime, wt.lastCommit?.author, wt.lastCommit?.subject], keyword))
         : [...currentWorktrees];
 
       // 智能排序：Main 工作区永远置顶；有实际文件差异或本地未提交修改的 Worktree 优先。
@@ -1361,7 +1376,7 @@
 
     function updateListCountBadges(worktreeCount = null, branchCount = null, keyword = searchKeyword.trim().toLocaleLowerCase()) {
       const visibleWorktrees = worktreeCount === null
-        ? (keyword ? currentWorktrees.filter(wt => includesKeyword([wt.path, wt.branch, wt.lastCommit?.relativeTime, wt.lastCommit?.author, wt.lastCommit?.subject], keyword)) : currentWorktrees)
+        ? (keyword ? currentWorktrees.filter(wt => includesKeyword([wt.path, wt.branch, wt.name, wt.lastCommit?.relativeTime, wt.lastCommit?.author, wt.lastCommit?.subject], keyword)) : currentWorktrees)
         : null;
       const visibleBranches = branchCount === null
         ? (keyword ? currentBranches.filter(b => includesKeyword([b.name, b.relativeTime, b.author, b.subject, b.redundancyReason], keyword)) : currentBranches)
@@ -1407,9 +1422,12 @@
         } else if (wt.isContentEqualToMain && historyAheadCount > 0) {
           tags.push(`<span class="badge badge-success" title="提交历史领先 ${historyAheadCount} 个提交，但分支改动已被主干吸收（revert 抵消 / cherry-pick / squash 合入等），合入主干不会产生实际变化">内容已与主干同步</span>`);
         }
-        if (wt.isLocked) tags.push('<span class="badge">已加锁</span>');
+        if (wt.isLocked) tags.push('<span class="badge">🔒 已加锁</span>');
 
         const dirName = wt.path.split('/').filter(Boolean).pop() || wt.path;
+        // 别名（应用内命名）存在时作为主标签展示，原目录名降级为徽标
+        const displayName = wt.name || dirName;
+        if (wt.name) tags.unshift(`<span class="badge wt-name-badge" title="目录名：${escapeHtml(dirName)}">📁 ${escapeHtml(dirName)}</span>`);
         // 提交人/提交说明是外部可控的 Git 元数据，必须逐字段转义后再进 HTML
         let lastInfo = wt.lastCommit
           ? `最新提交: ${escapeHtml(wt.lastCommit.relativeTime)} by ${escapeHtml(wt.lastCommit.author)} · "${escapeHtml(wt.lastCommit.subject)}"`
@@ -1420,7 +1438,7 @@
             <div class="item-header-row">
               <div class="item-name" title="${escapeHtml(wt.path)}">
                 <span>📁</span>
-                <span>${escapeHtml(dirName)}</span>
+                <span>${escapeHtml(displayName)}</span>
               </div>
               <div class="item-tags">${tags.join(' ')}</div>
             </div>
@@ -1438,6 +1456,8 @@
               <button class="btn-outline" data-action="wt-diff-vs-main">与主干对比</button>
             </div>
             ${wt.isMain ? '<button class="btn-outline" data-action="wt-pull" title="从远程拉取当前分支最新提交（仅快进，分叉时不会自动合并）">Pull</button>' : ''}
+            ${wt.existsOnDisk ? `<button class="btn-outline" data-action="wt-lock-toggle" title="${wt.isLocked ? '解除 git worktree 锁定（允许 remove/prune 等破坏性操作）' : 'git worktree lock：上锁后 git 拒绝对该工作区执行移除/清理等破坏性操作'}">${wt.isLocked ? '🔓 解锁' : '🔒 上锁'}</button>` : ''}
+            <button class="btn-outline" data-action="wt-edit-info" title="编辑工作区名称（应用内标识，仅本应用展示）">✏️ 编辑</button>
             ${!isSafeMain ? `<button class="btn-danger btn-remove-wt" id="btn-rm-wt-${encodeURIComponent(wt.path).replace(/%/g, '_')}" data-action="wt-remove">移除</button>` : ''}
           </div>
         `;
@@ -1448,6 +1468,8 @@
           'wt-open-commits': () => openCommitsDrawer(wt.path),
           'wt-diff-vs-main': () => viewDiffAgainstMain(wt.path),
           'wt-pull': (el) => pullMainWorktree(el, wt.path),
+          'wt-lock-toggle': () => toggleWorktreeLock(wt),
+          'wt-edit-info': () => openEditWorktreeModal(wt),
           'wt-remove': () => removeWt(wt.path)
         });
         container.appendChild(div);
@@ -4569,6 +4591,7 @@
         if (seq !== remoteState.branchesReqSeq) return;
         if (!data.ok) throw new Error(data.error || '读取远端分支失败');
         remoteState.branches = data.branches || [];
+        remoteState.lastFetchAt = data.lastFetchAt || null;
         renderRemoteBranchList();
       } catch (err) {
         if (seq !== remoteState.branchesReqSeq) return;
@@ -4765,13 +4788,15 @@
       }
     }
 
-    /* 发起合并：确认后调用 merge-ref；干净合并直接完成，冲突时面板自动接管 */
+    /* 发起合并：先做远端新鲜度检查（久未 fetch 提示），确认后调用 merge-ref；
+       干净合并直接完成，冲突时面板自动接管 */
     async function mergeRemoteRef(branch) {
       const worktree = remoteState.targetWorktree;
       if (!worktree) {
         alert('没有可用的目标工作区');
         return;
       }
+      await ensureFreshRemoteBeforeMerge();
       const wt = currentWorktrees.find(w => w.path === worktree);
       const currentBranch = wt ? (wt.branch || '(detached)') : '?';
       if (!window.confirm(`确定把远端分支「${branch.name}」合并进工作区「${currentBranch}」吗？\n\n发生冲突时会保留现场，可在下方逐个处理。`)) {
@@ -4839,6 +4864,87 @@
       }
     }
 
+    /* 自动刷新远端：按所选频率链式排队；远端 Tab 激活且选中仓库时静默 fetch 并重拉清单。
+       Tab 未激活时跳过本 tick（不 fetch 但保持队列），保证切回 Tab 后的下一个周期恢复工作 */
+    function scheduleRemoteAutoFetch() {
+      if (remoteAutoFetchTimer) {
+        clearTimeout(remoteAutoFetchTimer);
+        remoteAutoFetchTimer = null;
+      }
+      const mode = localStorage.getItem(REMOTE_AUTO_FETCH_STORAGE_KEY) || 'off';
+      const interval = REMOTE_AUTO_FETCH_INTERVALS[mode];
+      if (!interval) return;
+      remoteAutoFetchTimer = setTimeout(async () => {
+        remoteAutoFetchTimer = null;
+        if (activeTab === 'remote' && currentRepo && !remoteAutoFetching && !document.hidden) {
+          remoteAutoFetching = true;
+          try {
+            const res = await fetch('/api/fetch-remotes', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ repoPath: currentRepo })
+            });
+            const data = await res.json();
+            if (data.ok) {
+              refreshRemoteBranches();
+            }
+          } catch {
+            // 网络层失败保持静默：自动刷新不打断用户，状态由手动刷新或下次 tick 修正
+          } finally {
+            remoteAutoFetching = false;
+          }
+        }
+        scheduleRemoteAutoFetch();
+      }, interval);
+    }
+
+    /* 读取自动刷新档位（初始化下拉与恢复持久化值） */
+    function initRemoteAutoFetchControl() {
+      const select = document.getElementById('remoteAutoFetchSelect');
+      if (!select) return;
+      const saved = localStorage.getItem(REMOTE_AUTO_FETCH_STORAGE_KEY);
+      select.value = REMOTE_AUTO_FETCH_INTERVALS[saved] ? saved : 'off';
+      select.addEventListener('change', () => {
+        localStorage.setItem(REMOTE_AUTO_FETCH_STORAGE_KEY, select.value);
+        scheduleRemoteAutoFetch();
+      });
+      scheduleRemoteAutoFetch();
+    }
+
+    /* 合并前的新鲜度检查：距上次 fetch 超过阈值（或从未 fetch）时确认是否先刷新。
+       确定则执行 fetch 并重拉清单后继续；取消则按本地缓存的远端状态直接合并 */
+    async function ensureFreshRemoteBeforeMerge() {
+      const lastFetchAt = remoteState.lastFetchAt;
+      let staleHint;
+      if (!lastFetchAt) {
+        staleHint = '本仓库尚未刷新过远端（fetch）';
+      } else {
+        const age = Date.now() - new Date(lastFetchAt).getTime();
+        if (!(age >= REMOTE_FETCH_STALE_MS)) return;
+        staleHint = `距上次刷新远端已约 ${Math.max(1, Math.round(age / 60000))} 分钟`;
+      }
+      const doFetch = window.confirm(
+        `${staleHint}，远端分支信息可能过期。\n\n是否先刷新远端（fetch）再合并？\n【确定】先刷新再合并　【取消】用当前远端快照直接合并`
+      );
+      if (!doFetch) return;
+      try {
+        const res = await fetch('/api/fetch-remotes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoPath: currentRepo })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          await refreshRemoteBranches();
+          showToast('远端已刷新，继续合并');
+        } else {
+          showToast(`刷新远端失败：${String(data.output || data.error || '未知原因').split('\n').pop()}（将用当前快照合并）`);
+        }
+      } catch (err) {
+        notifyRequestFailure(err, '刷新远端失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
+      }
+    }
+
     /* 刷新远端（fetch --prune --all）：网络失败按后端 ok:false 展示原始输出摘要 */
     async function fetchRemotesAction(btn) {
       if (!currentRepo) return;
@@ -4863,6 +4969,195 @@
         if (btn) { btn.disabled = false; btn.textContent = '刷新远端 (fetch)'; }
       }
     }
+
+    /* ================= Worktree 管理扩展：上锁/解锁、别名编辑、创建工作区 ================= */
+
+    /* 上锁/解锁（git worktree lock/unlock）：上锁后 git 拒绝对该工作区的移除与清理 */
+    async function toggleWorktreeLock(wt) {
+      const locking = !wt.isLocked;
+      if (!window.confirm(locking
+        ? `确定锁定工作区「${wt.name || wt.path}」吗？\n上锁后 git 会拒绝移除/清理该工作区（保护现场）。`
+        : `确定解锁工作区「${wt.name || wt.path}」吗？\n解锁后该工作区可被移除与清理。`)) {
+        return;
+      }
+      try {
+        const res = await fetch('/api/worktree-lock', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoPath: currentRepo, worktreePath: wt.path, lock: locking })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || (locking ? '上锁失败' : '解锁失败'));
+        showToast(locking ? '已上锁：该工作区受 git 保护' : '已解锁');
+        inspectRepo(currentRepo);
+      } catch (err) {
+        notifyRequestFailure(err, (locking ? '上锁' : '解锁') + '失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
+      }
+    }
+
+    /* 编辑 Worktree 信息（别名）：别名仅本应用内展示，git 本身无 worktree 命名概念 */
+    function openEditWorktreeModal(wt) {
+      remoteState.editWorktreePath = wt.path;
+      document.getElementById('editWtPath').textContent = wt.path;
+      document.getElementById('editWtNameInput').value = wt.name || '';
+      document.getElementById('editWtError').textContent = '';
+      document.getElementById('editWorktreeModal').style.display = 'flex';
+      document.getElementById('editWtNameInput').focus();
+    }
+
+    function closeEditWorktreeModal() {
+      document.getElementById('editWorktreeModal').style.display = 'none';
+      remoteState.editWorktreePath = '';
+    }
+
+    async function submitEditWorktree() {
+      const worktreePath = remoteState.editWorktreePath;
+      if (!worktreePath) return;
+      const name = document.getElementById('editWtNameInput').value.trim();
+      const errorEl = document.getElementById('editWtError');
+      const submitBtn = document.getElementById('editWtSubmitBtn');
+      errorEl.textContent = '';
+      submitBtn.disabled = true;
+      try {
+        const res = await fetch('/api/worktree-meta', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoPath: currentRepo, worktreePath, name })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '保存失败');
+        closeEditWorktreeModal();
+        showToast(data.name ? `工作区名称已设为「${data.name}」` : '工作区名称已清除');
+        inspectRepo(currentRepo);
+      } catch (err) {
+        errorEl.textContent = toDisplayErrorMessage(err, '保存失败');
+      } finally {
+        submitBtn.disabled = false;
+      }
+    }
+
+    /* 打开创建 Worktree 弹层：填充「未绑定分支」候选与「新建分支起点」候选 */
+    function openCreateWorktreeModal() {
+      if (!currentRepo) {
+        alert('请先选择仓库');
+        return;
+      }
+      document.getElementById('createWtNameInput').value = '';
+      document.getElementById('createWtPathInput').value = '';
+      document.getElementById('createWtNewBranchInput').value = '';
+      document.getElementById('createWtError').textContent = '';
+      setCreateWtBranchMode('existing');
+
+      // 已有分支候选：未被任何 worktree 检出（git 不允许两个工作区共享同一分支）
+      const boundBranches = new Set(currentWorktrees.map(w => w.branch).filter(Boolean));
+      const existingSelect = document.getElementById('createWtExistingSelect');
+      existingSelect.innerHTML = '';
+      const freeBranches = currentBranches.filter(b => !b.isMain && !boundBranches.has(b.name));
+      if (freeBranches.length === 0) {
+        existingSelect.innerHTML = '<option value="">（没有未绑定的本地分支，可改用「新建分支」）</option>';
+      } else {
+        freeBranches.forEach(b => {
+          const opt = document.createElement('option');
+          opt.value = b.name;
+          opt.textContent = `🌿 ${b.name}`;
+          existingSelect.appendChild(opt);
+        });
+      }
+
+      // 新建分支起点候选：本地分支 + 远端分支（identity 前缀区分），默认空 = HEAD
+      const startPointSelect = document.getElementById('createWtStartPointSelect');
+      startPointSelect.innerHTML = '<option value="">（当前 HEAD）</option>';
+      currentBranches.forEach(b => {
+        const opt = document.createElement('option');
+        opt.value = `branch:${b.name}`;
+        opt.textContent = `🌿 ${b.name}`;
+        startPointSelect.appendChild(opt);
+      });
+      remoteState.branches.forEach(b => {
+        const opt = document.createElement('option');
+        opt.value = `remote:${b.name}`;
+        opt.textContent = `☁️ ${b.name}`;
+        startPointSelect.appendChild(opt);
+      });
+
+      document.getElementById('createWorktreeModal').style.display = 'flex';
+      document.getElementById('createWtNameInput').focus();
+    }
+
+    function closeCreateWorktreeModal() {
+      document.getElementById('createWorktreeModal').style.display = 'none';
+    }
+
+    /* 切换分支来源模式：已有分支 / 以起点新建分支 */
+    function setCreateWtBranchMode(mode) {
+      createWtBranchMode = mode === 'new' ? 'new' : 'existing';
+      document.querySelectorAll('#createWtBranchModeGroup .diff-mode-btn').forEach(btn => {
+        btn.className = btn.dataset.mode === createWtBranchMode ? 'diff-mode-btn active' : 'diff-mode-btn';
+      });
+      document.getElementById('createWtExistingGroup').style.display = createWtBranchMode === 'existing' ? 'block' : 'none';
+      document.getElementById('createWtNewGroup').style.display = createWtBranchMode === 'new' ? 'block' : 'none';
+    }
+
+    async function submitCreateWorktree() {
+      const worktreePath = document.getElementById('createWtPathInput').value.trim();
+      const name = document.getElementById('createWtNameInput').value.trim();
+      const errorEl = document.getElementById('createWtError');
+      const submitBtn = document.getElementById('createWtSubmitBtn');
+      errorEl.textContent = '';
+      if (!worktreePath) {
+        errorEl.textContent = '目标目录不能为空';
+        return;
+      }
+      // 绝对路径粗校验（POSIX 以 / 开头；Windows 接受盘符或 UNC），权威校验由服务端完成
+      if (!/^(\/|[a-zA-Z]:[\\/]|\\\\)/.test(worktreePath)) {
+        errorEl.textContent = '目标目录必须为绝对路径';
+        return;
+      }
+      let branchMode = createWtBranchMode;
+      let branchName = '';
+      let startPoint = '';
+      if (createWtBranchMode === 'existing') {
+        branchName = document.getElementById('createWtExistingSelect').value;
+        if (!branchName) {
+          errorEl.textContent = '请选择要检出的本地分支，或改用「新建分支」模式';
+          return;
+        }
+      } else {
+        branchName = document.getElementById('createWtNewBranchInput').value.trim();
+        const startIdentity = document.getElementById('createWtStartPointSelect').value;
+        if (!branchName) {
+          errorEl.textContent = '新建分支名不能为空';
+          return;
+        }
+        if (startIdentity) {
+          // identity 形如 branch:main / remote:origin/x；两者去掉前缀后即是合法起点引用
+          startPoint = startIdentity.slice(startIdentity.indexOf(':') + 1);
+        }
+      }
+      submitBtn.disabled = true;
+      const seq = ++worktreeCreateSubmitSeq;
+      try {
+        const res = await fetch('/api/create-worktree', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoPath: currentRepo, worktreePath, branchMode, branchName, startPoint, name })
+        });
+        const data = await res.json();
+        if (seq !== worktreeCreateSubmitSeq) return;
+        if (!data.ok) throw new Error(data.error || '创建失败');
+        closeCreateWorktreeModal();
+        showToast(`Worktree 已创建：${data.branch} → ${data.path}`);
+        if (data.nameError) showToast(`⚠️ ${data.nameError}`);
+        inspectRepo(currentRepo);
+      } catch (err) {
+        if (seq !== worktreeCreateSubmitSeq) return;
+        errorEl.textContent = toDisplayErrorMessage(err, '创建失败');
+      } finally {
+        if (seq === worktreeCreateSubmitSeq) submitBtn.disabled = false;
+      }
+    }
+
+    /* ================= Worktree 管理扩展结束 ================= */
 
     /* 检出远端分支弹层：可重命名本地分支名（默认远端分支短名） */
     function openCheckoutModal(branch) {
@@ -5422,7 +5717,14 @@
       'close-switch-branch-modal': () => closeSwitchBranchModal(),
       'submit-switch-branch': () => submitSwitchBranch(),
       'close-conflict-drawer': () => closeConflictDrawer(),
-      'save-conflict-content': () => saveConflictContent()
+      'save-conflict-content': () => saveConflictContent(),
+      /* Worktree 管理扩展：创建工作区弹层与别名编辑 */
+      'open-create-worktree': () => openCreateWorktreeModal(),
+      'close-create-worktree-modal': () => closeCreateWorktreeModal(),
+      'submit-create-worktree': () => submitCreateWorktree(),
+      'create-wt-branch-mode': (el) => setCreateWtBranchMode(el.dataset.mode),
+      'close-edit-worktree-modal': () => closeEditWorktreeModal(),
+      'submit-edit-worktree': () => submitEditWorktree()
     };
     document.addEventListener('click', (e) => {
       const el = e.target instanceof Element ? e.target.closest('[data-action]') : null;
@@ -5502,6 +5804,12 @@
     });
     document.getElementById('switchBranchModal').addEventListener('click', (e) => {
       if (e.target.id === 'switchBranchModal') closeSwitchBranchModal();
+    });
+    document.getElementById('createWorktreeModal').addEventListener('click', (e) => {
+      if (e.target.id === 'createWorktreeModal') closeCreateWorktreeModal();
+    });
+    document.getElementById('editWorktreeModal').addEventListener('click', (e) => {
+      if (e.target.id === 'editWorktreeModal') closeEditWorktreeModal();
     });
     document.addEventListener('DOMContentLoaded', setupCommitsDrawerScrollGuard);
     document.getElementById('refreshBtn').addEventListener('click', () => {
@@ -5607,7 +5915,7 @@
       placeholder: '选择本地或远端分支'
     });
 
-    /* 远端分支 Tab 的本页事件：目标工作区切换、列表过滤 */
+    /* 远端分支 Tab 的本页事件：目标工作区切换、列表过滤、自动刷新档位 */
     document.getElementById('remoteWorktreeSelect').addEventListener('change', (e) => {
       remoteState.targetWorktree = e.target.value;
       renderRemoteTargetInfo();
@@ -5616,6 +5924,7 @@
     document.getElementById('remoteBranchFilterInput').addEventListener('input', () => {
       renderRemoteBranchList();
     });
+    initRemoteAutoFetchControl();
 
     /* ---- 桌面运行时适配层（契约 §6；浏览器模式以下逻辑全部不生效） ---- */
 
@@ -5878,6 +6187,12 @@
       }
       if (e.key === 'Escape' && document.getElementById('switchBranchModal').style.display !== 'none') {
         closeSwitchBranchModal();
+      }
+      if (e.key === 'Escape' && document.getElementById('createWorktreeModal').style.display !== 'none') {
+        closeCreateWorktreeModal();
+      }
+      if (e.key === 'Escape' && document.getElementById('editWorktreeModal').style.display !== 'none') {
+        closeEditWorktreeModal();
       }
       if (e.key === 'Escape' && document.getElementById('createMrModal').style.display !== 'none') {
         closeCreateMrModal();

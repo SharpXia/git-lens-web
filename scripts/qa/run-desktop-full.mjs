@@ -956,6 +956,66 @@ async function main() {
     // 回到总览，避免影响后续崩溃恢复场景的会话状态语义
     await page.evaluate(() => { window.switchTab('overview'); });
 
+    // ================= 5.6 W10 Worktree 管理扩展（创建/上锁/别名） =================
+    // 顺序依赖：在 W9 之后执行；结束前移除新建 worktree，避免影响后续场景的仓库发现
+    const createdWtPath = path.join(qaRoot, 'repos', 'wt-created');
+
+    // W10a 创建 Worktree：以远端分支为起点新建分支 + 别名，inspect 注入别名、upstream 建立
+    const createWt = await api('/api/create-worktree', {
+      method: 'POST',
+      body: {
+        repoPath: mainRepo, worktreePath: createdWtPath, branchMode: 'new',
+        branchName: 'feature/wt-created', startPoint: 'origin/feature/remote-only', name: '别名工作区'
+      }
+    });
+    const createdUpstream = await gitSnap(qaRoot, mainRepo, 'rev-parse', '--abbrev-ref', 'feature/wt-created@{upstream}').catch(() => '');
+    const inspectAfterCreate = await api(`/api/inspect?path=${encodeURIComponent(mainRepo)}`);
+    const createdEntry = (inspectAfterCreate.body?.worktrees || []).find((w) => w.branch === 'feature/wt-created');
+    const w10aOk = createWt.status === 200 && createWt.body?.branch === 'feature/wt-created'
+      && createWt.body?.name === '别名工作区' && createdUpstream === 'origin/feature/remote-only'
+      && createdEntry?.name === '别名工作区';
+    record('w10a-create-worktree', '创建 Worktree：远端起点新建分支 + upstream + 别名注入 inspect', w10aOk ? 'pass' : 'fail',
+      `HTTP=${createWt.status} 分支=${createWt.body?.branch ?? 'x'} upstream=${createdUpstream} 别名=${createdEntry?.name ?? 'x'}`);
+
+    // W10b 总览 UI 渲染别名（别名作为主标签、目录名进徽标区）。
+    // selectRepo 对相同仓库是 no-op，必须显式 inspectRepo 重拉，否则列表仍是创建前的旧数据
+    await page.evaluate((p) => { window.selectRepo(p); window.inspectRepo(p); }, mainRepo);
+    const uiHasAlias = await pollPage(page, () => {
+      const text = document.getElementById('wtList')?.textContent || '';
+      return text.includes('别名工作区') && text.includes('wt-created');
+    }, null, 20000);
+    record('w10b-worktree-alias-ui', '总览 Worktree 列表渲染别名与目录名', uiHasAlias ? 'pass' : 'fail',
+      `列表含别名=${Boolean(uiHasAlias)}`);
+
+    // W10c 上锁/解锁与别名编辑：porcelain 联动 + inspect 别名更新。
+    // porcelain 按 worktree 分段后只看 wt-created 段，避免主仓库段的 locked 词样干扰
+    const lockCreated = await api('/api/worktree-lock', { method: 'POST', body: { repoPath: mainRepo, worktreePath: createdWtPath, lock: true } });
+    const porcelainWhileLocked = await gitSnap(qaRoot, mainRepo, 'worktree', 'list', '--porcelain');
+    const unlockCreated = await api('/api/worktree-lock', { method: 'POST', body: { repoPath: mainRepo, worktreePath: createdWtPath, lock: false } });
+    const porcelainAfterUnlock = await gitSnap(qaRoot, mainRepo, 'worktree', 'list', '--porcelain');
+    const segmentOf = (porcelain) => porcelain
+      .split(/\n(?=worktree )/).find((seg) => seg.includes('wt-created')) || '';
+    const renameRes = await api('/api/worktree-meta', {
+      method: 'POST',
+      body: { repoPath: mainRepo, worktreePath: createdWtPath, name: '改名后的工作区' }
+    });
+    const inspectAfterRename = await api(`/api/inspect?path=${encodeURIComponent(mainRepo)}`);
+    const renamedEntry = (inspectAfterRename.body?.worktrees || []).find((w) => w.branch === 'feature/wt-created');
+    const w10cOk = lockCreated.status === 200 && segmentOf(porcelainWhileLocked).includes('locked')
+      && unlockCreated.status === 200 && !segmentOf(porcelainAfterUnlock).includes('locked')
+      && renameRes.status === 200 && renamedEntry?.name === '改名后的工作区';
+    record('w10c-lock-rename', 'Worktree 上锁/解锁（porcelain 联动）与别名编辑（inspect 更新）', w10cOk ? 'pass' : 'fail',
+      `lock=${lockCreated.status} 锁标记=${segmentOf(porcelainWhileLocked).includes('locked')} unlock=${unlockCreated.status} 解锁后=${segmentOf(porcelainAfterUnlock).includes('locked')} rename=${renameRes.status} 新别名=${renamedEntry?.name ?? 'x'}`);
+
+    // W10d 清理：移除测试 worktree（此时已解锁，常规移除即可）
+    const removeCreated = await api('/api/remove-worktree', {
+      method: 'POST',
+      body: { repoPath: mainRepo, worktreePath: createdWtPath }
+    });
+    const createdGone = !(await fs.stat(createdWtPath).then(() => true).catch(() => false));
+    record('w10d-cleanup', '清理：移除本轮创建的 Worktree', removeCreated.status === 200 && createdGone ? 'pass' : 'fail',
+      `HTTP=${removeCreated.status} 目录删除=${createdGone}`);
+
     // ================= 6. 崩溃恢复（含恢复页截图 + 选中仓库恢复） =================
     // 先把选中仓库设为主仓库；selectRepo 对相同仓库是 no-op，先切走再切回
     // 保证 syncStateToUrl 真正把 repo 写入 sessionStorage（重启恢复的数据源）

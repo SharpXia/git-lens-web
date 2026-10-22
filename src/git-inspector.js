@@ -895,6 +895,171 @@ export async function removeWorktree(repoPath, worktreePath, force = false) {
 }
 
 /**
+ * 校验 worktree 别名：trim 后允许空（清空别名），否则 1-60 个可见字符且不含控制字符。
+ * @param {unknown} name - 待校验的别名
+ * @returns {string} 规整后的别名（空串表示清除）
+ */
+export function normalizeWorktreeName(name) {
+  if (name === undefined || name === null) return '';
+  if (typeof name !== 'string') {
+    throw Object.assign(new Error('工作区名称必须为字符串'), { statusCode: 400 });
+  }
+  const trimmed = name.trim();
+  if (!trimmed) return '';
+  if (/[\n\r\0]/.test(trimmed) || trimmed.length > 60) {
+    throw Object.assign(new Error('工作区名称需为 1-60 个字符且不含换行等控制字符'), { statusCode: 400 });
+  }
+  return trimmed;
+}
+
+/**
+ * 在指定目录基于指定分支创建新的 Worktree。
+ *
+ * branchMode 语义：
+ * - 'existing'：检出已有本地分支（git worktree add <path> <branch>）；该分支已被
+ *   其他 worktree 检出时 git 会拒绝，这里前置给出中文指引；
+ * - 'new'：以 startPoint（本地分支名或「远端/分支」，缺省 HEAD）为起点新建分支并检出
+ *   （git worktree add -b <branchName> <path> [<startPoint>]）；起点为远端跟踪分支时
+ *   git 默认建立 upstream。分支名已存在时新建模式拒绝。
+ *
+ * @param {object} params
+ * @param {string} params.repoPath - 仓库路径
+ * @param {string} params.worktreePath - 新 worktree 的绝对目录（须不存在或为空目录）
+ * @param {'existing'|'new'} params.branchMode - 分支来源模式
+ * @param {string} params.branchName - existing 为已有本地分支名；new 为新建分支名
+ * @param {string} [params.startPoint] - new 模式的起点引用（缺省 HEAD）
+ * @returns {Promise<{ok: boolean, path: string, branch: string, head: string}>}
+ */
+export async function createWorktree({ repoPath, worktreePath, branchMode, branchName, startPoint }) {
+  if (!repoPath || !path.isAbsolute(repoPath) || !(await isGitRepo(repoPath))) {
+    throw Object.assign(new Error('repoPath 必须为 Git 仓库的绝对路径'), { statusCode: 400 });
+  }
+  if (!worktreePath || !path.isAbsolute(worktreePath) || worktreePath === path.parse(worktreePath).root) {
+    throw Object.assign(new Error('worktree 目录必须为非根的绝对路径'), { statusCode: 400 });
+  }
+  if (branchMode !== 'existing' && branchMode !== 'new') {
+    throw Object.assign(new Error('branchMode 只允许 existing 或 new'), { statusCode: 400 });
+  }
+  if (typeof branchName !== 'string' || branchName.startsWith('-') || /[\s\0]/.test(branchName) || branchName.length > 250) {
+    throw Object.assign(new Error('分支名不合法'), { statusCode: 400 });
+  }
+  const refFormat = await runGitResult(repoPath, ['check-ref-format', '--branch', branchName]);
+  if (!refFormat.ok) {
+    throw Object.assign(new Error(`分支名「${branchName}」不是合法的分支名`), { statusCode: 400 });
+  }
+
+  // 目标目录：不存在，或存在且为空目录（git worktree add 本身允许空目录复用）
+  const pathStat = await fs.stat(worktreePath).then(s => s, () => null);
+  if (pathStat) {
+    if (!pathStat.isDirectory()) {
+      throw Object.assign(new Error('目标路径已存在且不是目录'), { statusCode: 409 });
+    }
+    const entries = await fs.readdir(worktreePath);
+    if (entries.length > 0) {
+      throw Object.assign(new Error('目标目录已存在且非空，请更换目录'), { statusCode: 409 });
+    }
+  }
+
+  const worktrees = await getWorktrees(repoPath);
+  if (branchMode === 'existing') {
+    const exists = await runGitResult(repoPath, ['show-ref', '--verify', '--quiet', `refs/heads/${branchName}`]);
+    if (!exists.ok) {
+      throw Object.assign(new Error(`本地分支「${branchName}」不存在；如需以远端分支为起点，请改用「新建分支」模式`), { statusCode: 404 });
+    }
+    const holder = worktrees.find(wt => wt.branch === branchName);
+    if (holder) {
+      throw Object.assign(new Error(`分支「${branchName}」已被工作区 ${holder.path} 检出，git 不允许两个工作区共享同一分支`), { statusCode: 409 });
+    }
+  } else {
+    // 新建分支名不得与既有分支冲突（-b 直接报错，这里前置给出可操作的指引）
+    const dup = await runGitResult(repoPath, ['show-ref', '--verify', '--quiet', `refs/heads/${branchName}`]);
+    if (dup.ok) {
+      throw Object.assign(new Error(`本地分支「${branchName}」已存在，无法新建同名分支；如需检出它请改用「已有分支」模式`), { statusCode: 409 });
+    }
+  }
+
+  const args = ['worktree', 'add'];
+  if (branchMode === 'new') args.push('-b', branchName);
+  args.push(worktreePath);
+  if (branchMode === 'existing') {
+    args.push(branchName);
+  } else if (typeof startPoint === 'string' && startPoint.trim() !== '') {
+    // 起点只接受可解析引用（本地分支 / 远端跟踪分支），拒绝选项注入
+    const ref = startPoint.trim();
+    if (ref.startsWith('-') || /[\s\0]/.test(ref) || ref.length > 250) {
+      throw Object.assign(new Error('起点引用不合法'), { statusCode: 400 });
+    }
+    const startOk = await runGitResult(repoPath, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+    if (!startOk.ok) {
+      throw Object.assign(new Error(`起点引用「${ref}」不可解析（可用本地分支或「远端/分支」）`), { statusCode: 404 });
+    }
+    args.push(ref);
+  }
+
+  try {
+    await runGit(repoPath, args);
+  } catch (err) {
+    throw Object.assign(new Error(`创建 Worktree 失败：${err.message}`), { statusCode: 409 });
+  }
+
+  // 检出后读取实际分支（new 模式下 -b 的分支即 branchName；upstream 由 git 按起点自动建立）
+  const branch = (await runGit(worktreePath, ['symbolic-ref', '--short', 'HEAD']).catch(() => '')) || branchName;
+  const head = await runGit(worktreePath, ['rev-parse', 'HEAD']);
+  return { ok: true, path: path.resolve(worktreePath), branch, head };
+}
+
+/**
+ * 对指定 Worktree 上锁 / 解锁（git worktree lock / unlock）。
+ * 上锁后的 worktree 会被 git 保护：`worktree remove`、`prune` 等破坏性操作拒绝生效。
+ * @param {object} params
+ * @param {string} params.repoPath - 仓库路径
+ * @param {string} params.worktreePath - 目标 worktree 绝对路径
+ * @param {boolean} params.lock - true 上锁，false 解锁
+ * @param {string} [params.reason] - 上锁原因（可选，git worktree lock --reason）
+ * @returns {Promise<{ok: boolean, worktreePath: string, locked: boolean}>}
+ */
+export async function setWorktreeLock({ repoPath, worktreePath, lock, reason }) {
+  if (!repoPath || !path.isAbsolute(repoPath) || !(await isGitRepo(repoPath))) {
+    throw Object.assign(new Error('repoPath 必须为 Git 仓库的绝对路径'), { statusCode: 400 });
+  }
+  if (!worktreePath || !path.isAbsolute(worktreePath)) {
+    throw Object.assign(new Error('worktree 路径必须为绝对路径'), { statusCode: 400 });
+  }
+  const worktrees = await getWorktrees(repoPath);
+  const targetReal = await toRealPathSafe(worktreePath);
+  const entries = await Promise.all(worktrees.map(async wt => ({ wt, realPath: await toRealPathSafe(wt.path) })));
+  const target = entries.find(entry => entry.realPath === targetReal)?.wt;
+  if (!target || target.existsOnDisk === false) {
+    throw Object.assign(new Error('指定的工作区不属于当前仓库或已失联'), { statusCode: 404 });
+  }
+  if (typeof lock !== 'boolean') {
+    throw Object.assign(new Error('lock 必须为布尔值'), { statusCode: 400 });
+  }
+  if (lock && target.isLocked) {
+    throw Object.assign(new Error('该工作区已处于上锁状态'), { statusCode: 409 });
+  }
+  if (!lock && !target.isLocked) {
+    throw Object.assign(new Error('该工作区当前未上锁'), { statusCode: 409 });
+  }
+
+  const args = lock ? ['worktree', 'lock'] : ['worktree', 'unlock'];
+  if (lock && typeof reason === 'string' && reason.trim()) {
+    const cleanReason = reason.trim();
+    if (/[\n\r\0]/.test(cleanReason) || cleanReason.length > 200) {
+      throw Object.assign(new Error('上锁原因需为 1-200 个字符且不含换行等控制字符'), { statusCode: 400 });
+    }
+    args.push('--reason', cleanReason);
+  }
+  args.push(target.path);
+  try {
+    await runGit(repoPath, args);
+  } catch (err) {
+    throw Object.assign(new Error(`${lock ? '上锁' : '解锁'}失败：${err.message}`), { statusCode: 409 });
+  }
+  return { ok: true, worktreePath: target.path, locked: lock };
+}
+
+/**
  * 执行 worktree prune (清理无效的元数据引用)
  */
 export async function pruneWorktrees(repoPath) {

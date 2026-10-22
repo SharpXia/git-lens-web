@@ -17,6 +17,9 @@ import {
   pullWorktree,
   checkBranchExists,
   checkWorktreeExists,
+  createWorktree,
+  setWorktreeLock,
+  normalizeWorktreeName,
   getWorktreeDiff,
   getUncommittedDiff,
   getFileContentBuffer,
@@ -359,6 +362,9 @@ export function createGitLensServer(options) {
   // 因此 web 与桌面共享同一 configDir 时星标自动互通，隔离目录互不可见。
   const starsFilePath = path.join(configDir, 'stars.json');
 
+  // worktree 别名元数据：与星标同目录落位，键为 worktree realpath，跨会话保留
+  const worktreeMetaFilePath = path.join(configDir, 'worktree-meta.json');
+
   /**
    * 读取星标列表。文件不存在按空列表处理（首次使用）；JSON 损坏或结构异常
    * 同样视为空列表且不抛错（记 warn 日志），避免一个坏文件拖垮整个页面。
@@ -430,6 +436,63 @@ export function createGitLensServer(options) {
       }
     }
     return repos;
+  }
+
+  /**
+   * 读取 worktree 别名元数据（<configDir>/worktree-meta.json）。
+   * 文件不存在或结构异常时按空映射处理（记 warn 日志），键为 worktree realpath。
+   * @returns {Promise<Object<string, {name: string}>>} realpath → 元数据映射
+   */
+  async function readWorktreeMeta() {
+    try {
+      const raw = await fs.readFile(worktreeMetaFilePath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed.worktrees !== 'object' || parsed.worktrees === null) return {};
+      const result = {};
+      for (const [key, value] of Object.entries(parsed.worktrees)) {
+        if (typeof key === 'string' && value && typeof value === 'object' && typeof value.name === 'string') {
+          result[key] = { name: value.name };
+        }
+      }
+      return result;
+    } catch (err) {
+      if (err.code !== 'ENOENT') {
+        log('warn', `worktree-meta.json 读取失败，已按空映射处理：${err.message}`);
+      }
+      return {};
+    }
+  }
+
+  /**
+   * 原子写入 worktree 别名元数据（临时文件 + rename，与 stars.json 同一模式）。
+   * @param {Object<string, {name: string}>} meta - realpath → 元数据映射
+   */
+  async function writeWorktreeMeta(meta) {
+    await fs.mkdir(configDir, { recursive: true });
+    const tmp = `${worktreeMetaFilePath}.tmp-${process.pid}-${crypto.randomUUID()}`;
+    try {
+      await fs.writeFile(tmp, JSON.stringify({ version: 1, worktrees: meta }, null, 2) + '\n', 'utf-8');
+      await fs.rename(tmp, worktreeMetaFilePath);
+    } catch (err) {
+      await fs.rm(tmp, { force: true }).catch(() => {});
+      throw err;
+    }
+  }
+
+  /**
+   * 设置单个 worktree 的别名；空名清除该条目，其余条目保持不变。
+   * @param {string} worktreePath - worktree 路径（realpath 归一后作为键）
+   * @param {string} name - 规整后的别名（空串表示清除）
+   */
+  async function setWorktreeName(worktreePath, name) {
+    const key = await fs.realpath(worktreePath).catch(() => path.resolve(worktreePath));
+    const meta = await readWorktreeMeta();
+    if (name) {
+      meta[key] = { name };
+    } else {
+      delete meta[key];
+    }
+    await writeWorktreeMeta(meta);
   }
 
   /**
@@ -664,6 +727,15 @@ export function createGitLensServer(options) {
           getWorktrees(repoPath),
           getBranches(repoPath)
         ]);
+
+        // 工作区别名注入（worktree-meta.json 以 realpath 为键，逐个归一后匹配）
+        const worktreeMetaMap = await readWorktreeMeta();
+        if (Object.keys(worktreeMetaMap).length > 0) {
+          await Promise.all(worktrees.map(async (wt) => {
+            const real = await fs.realpath(wt.path).catch(() => path.resolve(wt.path));
+            if (worktreeMetaMap[real]) wt.name = worktreeMetaMap[real].name;
+          }));
+        }
 
         // 传递吸收判定收尾：worktree 自身的四方判定没有全局分支视图。
         // 先同步分支侧结论（含历史整合推断覆盖的场景），再对 worktree 直接探测载体——
@@ -1248,6 +1320,91 @@ export function createGitLensServer(options) {
         try {
           const result = await abortMerge(worktree);
           return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 14.1 创建 Worktree：指定目录 + 分支（检出已有分支，或以起点引用新建分支），可同时登记别名
+      if (pathname === '/api/create-worktree' && req.method === 'POST') {
+        const { repoPath, worktreePath, branchMode, branchName, startPoint, name } = await readJson();
+        let alias = '';
+        try {
+          alias = normalizeWorktreeName(name);
+        } catch (err) {
+          return sendJson(res, err.statusCode || 400, { ok: false, error: err.message });
+        }
+        try {
+          const result = await createWorktree({ repoPath, worktreePath, branchMode, branchName, startPoint });
+          if (alias) {
+            // 别名登记失败不影响创建结果，但要把失败原因带回给用户
+            try {
+              await setWorktreeName(result.path, alias);
+              result.name = alias;
+            } catch (metaErr) {
+              result.nameError = `工作区已创建，但别名保存失败：${metaErr.message}`;
+            }
+          }
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 14.2 Worktree 上锁 / 解锁（git worktree lock / unlock）
+      if (pathname === '/api/worktree-lock' && req.method === 'POST') {
+        const { repoPath, worktreePath, lock, reason } = await readJson();
+        try {
+          const result = await setWorktreeLock({ repoPath, worktreePath, lock, reason });
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 14.3 Worktree 别名读取（仅返回属于该仓库各 worktree 的条目）与设置（空名清除）
+      if (pathname === '/api/worktree-meta' && req.method === 'GET') {
+        const repoPath = parsed.query.path;
+        if (!repoPath || !(await isGitRepo(repoPath))) {
+          return sendJson(res, 400, { ok: false, error: '仓库路径无效' });
+        }
+        const allMeta = await readWorktreeMeta();
+        const worktrees = await getWorktrees(repoPath);
+        const meta = {};
+        await Promise.all(worktrees.map(async (wt) => {
+          const real = await fs.realpath(wt.path).catch(() => path.resolve(wt.path));
+          if (allMeta[real]) meta[real] = allMeta[real];
+        }));
+        return sendJson(res, 200, { ok: true, meta });
+      }
+
+      if (pathname === '/api/worktree-meta' && req.method === 'POST') {
+        const { repoPath, worktreePath, name } = await readJson();
+        if (!repoPath || !(await isGitRepo(repoPath))) {
+          return sendJson(res, 400, { ok: false, error: '仓库路径无效' });
+        }
+        // 目标必须是本仓库的在册 worktree，防止借元数据接口给任意路径写文件。
+        // realpath 归一后比对（/tmp 与 /private/tmp 这类符号链接别名视为同一路径）
+        const worktrees = await getWorktrees(repoPath);
+        const targetReal = await fs.realpath(worktreePath).catch(() => path.resolve(worktreePath));
+        const registered = await Promise.all(
+          worktrees.map(async (wt) => fs.realpath(wt.path).catch(() => path.resolve(wt.path)))
+        ).then(realPaths => realPaths.includes(targetReal));
+        if (!registered) {
+          return sendJson(res, 404, { ok: false, error: '指定的工作区不属于当前仓库或已失联' });
+        }
+        let alias = '';
+        try {
+          alias = normalizeWorktreeName(name);
+        } catch (err) {
+          return sendJson(res, err.statusCode || 400, { ok: false, error: err.message });
+        }
+        try {
+          await setWorktreeName(worktreePath, alias);
+          return sendJson(res, 200, { ok: true, worktreePath, name: alias });
         } catch (err) {
           const status = err.statusCode || 500;
           return sendJson(res, status, { ok: false, error: err.message });

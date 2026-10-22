@@ -114,6 +114,7 @@
       <div class="panel">
         <div class="panel-header">
           <h2>🌳 Git Worktrees 隔离工作区</h2>
+          <button id="createWorktreeBtn" class="btn-outline panel-header-action" type="button" data-action="open-create-worktree" title="在指定目录基于指定分支创建新的 Worktree">➕ 创建工作区</button>
           <span id="wtCountBadge" class="badge">0 个</span>
         </div>
         <div id="wtList">
@@ -233,6 +234,15 @@
       </div>
       <div id="remoteTargetInfo" class="remote-target-info"></div>
       <button id="switchBranchBtn" class="btn-outline" type="button" data-action="open-switch-branch" title="把目标工作区切换到本地分支，或检出远端分支">切换 / 检出分支</button>
+      <div class="remote-autofetch-group">
+        <label for="remoteAutoFetchSelect" class="picker-label"><span>自动刷新：</span></label>
+        <select id="remoteAutoFetchSelect" class="picker-select" aria-label="自动刷新频率">
+          <option value="off">从不</option>
+          <option value="30s">每 30 秒</option>
+          <option value="10m">每 10 分钟</option>
+          <option value="1h">每 1 小时</option>
+        </select>
+      </div>
       <button id="remoteFetchBtn" class="btn-outline" type="button" data-action="remote-fetch" title="git fetch --prune --all，同步远端分支清单">刷新远端 (fetch)</button>
     </div>
 
@@ -377,6 +387,76 @@
       <div id="conflictDrawerError" class="mr-detail-error" role="alert"></div>
       <button class="btn-outline" type="button" data-action="close-conflict-drawer">取消</button>
       <button id="conflictSaveBtn" class="btn-primary" type="button" data-action="save-conflict-content">保存并标记已解决</button>
+    </div>
+  </div>
+
+  <!-- 创建 Worktree 弹层：指定目录 + 分支（已有/新建）+ 可选别名 -->
+  <div id="createWorktreeModal" class="scan-directory-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="createWorktreeModalTitle">
+    <div class="scan-directory-card">
+      <div class="scan-directory-header">
+        <h2 id="createWorktreeModalTitle">创建 Worktree</h2>
+        <button class="drawer-close" type="button" data-action="close-create-worktree-modal" aria-label="关闭">×</button>
+      </div>
+      <div class="scan-directory-body">
+        <div class="mr-form-group">
+          <label for="createWtNameInput">工作区名称（可选，便于识别）</label>
+          <input id="createWtNameInput" class="mr-form-input" type="text" placeholder="例如：订单服务开发" maxlength="60" autocomplete="off">
+        </div>
+        <div class="mr-form-group">
+          <label for="createWtPathInput">目标目录（绝对路径，须为空或不存在）</label>
+          <input id="createWtPathInput" class="mr-form-input" type="text" placeholder="例如：/Users/me/work/demo-wt" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="mr-form-group">
+          <label>分支来源</label>
+          <div class="diff-mode-segmented" id="createWtBranchModeGroup">
+            <button type="button" class="diff-mode-btn active" data-mode="existing" data-action="create-wt-branch-mode">检出已有分支</button>
+            <button type="button" class="diff-mode-btn" data-mode="new" data-action="create-wt-branch-mode">以起点新建分支</button>
+          </div>
+        </div>
+        <div class="mr-form-group" id="createWtExistingGroup">
+          <label for="createWtExistingSelect">选择已有本地分支</label>
+          <select id="createWtExistingSelect" class="picker-select"></select>
+          <div class="remote-modal-hint">仅列出尚未被任何 Worktree 检出的本地分支（git 不允许两个工作区共享同一分支）。</div>
+        </div>
+        <div class="mr-form-group" id="createWtNewGroup" style="display: none;">
+          <label for="createWtNewBranchInput">新建分支名</label>
+          <input id="createWtNewBranchInput" class="mr-form-input" type="text" placeholder="例如：feature/new-thing" maxlength="200" autocomplete="off">
+          <label for="createWtStartPointSelect" style="margin-top: 8px;">起点（缺省为当前 HEAD）</label>
+          <select id="createWtStartPointSelect" class="picker-select"></select>
+          <div class="remote-modal-hint">起点选远端分支时自动建立 upstream；起点是本仓库快照，创建后请按需 fetch 更新。</div>
+        </div>
+        <div id="createWtError" class="mr-detail-error" role="alert"></div>
+      </div>
+      <div class="scan-directory-footer">
+        <button class="btn-outline" type="button" data-action="close-create-worktree-modal">取消</button>
+        <button id="createWtSubmitBtn" class="btn-primary" type="button" data-action="submit-create-worktree">创建</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 编辑 Worktree 信息弹层：别名可编辑、路径只读展示 -->
+  <div id="editWorktreeModal" class="scan-directory-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="editWorktreeModalTitle">
+    <div class="scan-directory-card">
+      <div class="scan-directory-header">
+        <h2 id="editWorktreeModalTitle">编辑 Worktree 信息</h2>
+        <button class="drawer-close" type="button" data-action="close-edit-worktree-modal" aria-label="关闭">×</button>
+      </div>
+      <div class="scan-directory-body">
+        <div class="mr-form-group">
+          <label>路径</label>
+          <div id="editWtPath" class="remote-modal-source"></div>
+        </div>
+        <div class="mr-form-group">
+          <label for="editWtNameInput">工作区名称</label>
+          <input id="editWtNameInput" class="mr-form-input" type="text" placeholder="留空表示清除名称" maxlength="60" autocomplete="off">
+          <div class="remote-modal-hint">名称仅在本应用内用于标识展示（git 本身没有 worktree 命名概念），留空保存即清除。</div>
+        </div>
+        <div id="editWtError" class="mr-detail-error" role="alert"></div>
+      </div>
+      <div class="scan-directory-footer">
+        <button class="btn-outline" type="button" data-action="close-edit-worktree-modal">取消</button>
+        <button id="editWtSubmitBtn" class="btn-primary" type="button" data-action="submit-edit-worktree">应用</button>
+      </div>
     </div>
   </div>
 
