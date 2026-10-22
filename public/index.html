@@ -234,8 +234,9 @@
       </div>
       <div id="remoteTargetInfo" class="remote-target-info"></div>
       <button id="switchBranchBtn" class="btn-outline" type="button" data-action="open-switch-branch" title="把目标工作区切换到本地分支，或检出远端分支">切换 / 检出分支</button>
+      <button id="remoteFetchBtn" class="btn-outline" type="button" data-action="remote-fetch" title="git fetch --prune --all，同步远端分支清单">刷新远端 (fetch)</button>
       <div class="remote-autofetch-group">
-        <label for="remoteAutoFetchSelect" class="picker-label"><span>自动刷新：</span></label>
+        <label for="remoteAutoFetchSelect" class="picker-label"><span>自动刷新</span></label>
         <select id="remoteAutoFetchSelect" class="picker-select" aria-label="自动刷新频率">
           <option value="off">从不</option>
           <option value="30s">每 30 秒</option>
@@ -243,7 +244,6 @@
           <option value="1h">每 1 小时</option>
         </select>
       </div>
-      <button id="remoteFetchBtn" class="btn-outline" type="button" data-action="remote-fetch" title="git fetch --prune --all，同步远端分支清单">刷新远端 (fetch)</button>
     </div>
 
     <!-- 合并进行中面板：冲突清单 + 快捷处理 + 完成合并入口（由 merge-state 接口驱动） -->
@@ -404,7 +404,11 @@
         </div>
         <div class="mr-form-group">
           <label for="createWtPathInput">目标目录（绝对路径，须为空或不存在）</label>
-          <input id="createWtPathInput" class="mr-form-input" type="text" placeholder="例如：/Users/me/work/demo-wt" autocomplete="off" spellcheck="false">
+          <div class="wt-path-row">
+            <input id="createWtPathInput" class="mr-form-input" type="text" placeholder="例如：/Users/me/work/demo-wt" autocomplete="off" spellcheck="false">
+            <button class="btn-outline wt-path-pick-btn" type="button" data-action="choose-create-wt-parent" title="用系统文件夹选择器挑选父目录，目录名保持不变">选择父目录…</button>
+          </div>
+          <div class="remote-modal-hint">默认位于仓库同级目录，可手动修改或点击「选择父目录…」更换父目录。</div>
         </div>
         <div class="mr-form-group">
           <label>分支来源</label>

@@ -123,6 +123,9 @@
     /* 创建 Worktree 弹层状态：分支来源模式（existing=检出已有分支 / new=以起点新建分支） */
     let createWtBranchMode = 'existing';
     let worktreeCreateSubmitSeq = 0;
+    // 目录/名称字段是否被用户手动改过：改过则分支切换时不再覆盖默认值
+    let createWtDirTouched = false;
+    let createWtNameTouched = false;
 
     function selectDiffMode(mode) {
       if (mode === currentDiffMode) return;
@@ -1398,42 +1401,62 @@
       }
       container.innerHTML = '';
       worktrees.forEach(wt => {
-        const div = document.createElement('div');
-        div.className = 'list-item';
-        div.id = 'wt-item-' + encodeURIComponent(wt.path).replace(/%/g, '_');
+        container.appendChild(createWorktreeItemDom(wt));
+      });
+    }
 
-        const isSafeMain = wt.isMain;
-        // 服务端数值字段统一收敛为数字后再进 HTML 插值，保证异常响应也不会注入标记
-        const dirtyCount = Number(wt.dirtyCount) || 0;
-        const aheadCount = Number(wt.aheadCount) || 0;
-        const historyAheadCount = Number(wt.historyAheadCount) || 0;
-        let tags = [];
-        if (wt.isMain) tags.push('<span class="badge badge-success">Main 工作区</span>');
-        if (wt.branch) tags.push(`<span class="badge" title="${escapeHtml(wt.branch)}">🌿 ${escapeHtml(wt.branch)}</span>`);
-        if (!wt.existsOnDisk) tags.push('<span class="badge badge-danger">磁盘已失联</span>');
-        if (wt.isDirty) tags.push(`<span class="badge badge-warning">⚡ 未提交修改 (${dirtyCount})</span>`);
-        if (aheadCount > 0) {
-          if (wt.deliveredViaBranch) {
-            // 传递吸收判定命中：提交的机械领先是过时快照，成果已经由载体分支进入主干
-            tags.push(`<span class="badge badge-success" title="提交历史领先 ${historyAheadCount || aheadCount} 个提交，但这些提交已全部包含在已合入主干的分支 ${escapeHtml(wt.deliveredViaBranch)} 中，成果已经交付。本 Worktree 为过时快照：合并会带回旧内容，确认后可直接移除">✓ 成果已经由 ${escapeHtml(wt.deliveredViaBranch)} 进入主干</span>`);
-          } else {
-            tags.push(`<span class="badge badge-success" title="分支文件内容相对 Main 仍有实际差异，提交历史领先 ${historyAheadCount || aheadCount} 个提交">🚀 领先 ${aheadCount} 提交</span>`);
-          }
-        } else if (wt.isContentEqualToMain && historyAheadCount > 0) {
-          tags.push(`<span class="badge badge-success" title="提交历史领先 ${historyAheadCount} 个提交，但分支改动已被主干吸收（revert 抵消 / cherry-pick / squash 合入等），合入主干不会产生实际变化">内容已与主干同步</span>`);
+    /* 构建单个 Worktree 条目 DOM。独立成函数供「只刷新单条 item」的局部更新复用
+       （上锁/别名编辑不再触发整页 inspect），结构与 createBranchItemDom 同款 */
+    function createWorktreeItemDom(wt) {
+      const div = document.createElement('div');
+      div.className = 'list-item';
+      div.id = 'wt-item-' + encodeURIComponent(wt.path).replace(/%/g, '_');
+
+      const isSafeMain = wt.isMain;
+      // 服务端数值字段统一收敛为数字后再进 HTML 插值，保证异常响应也不会注入标记
+      const dirtyCount = Number(wt.dirtyCount) || 0;
+      const aheadCount = Number(wt.aheadCount) || 0;
+      const historyAheadCount = Number(wt.historyAheadCount) || 0;
+      let tags = [];
+      if (wt.isMain) tags.push('<span class="badge badge-success">Main 工作区</span>');
+      if (wt.branch) tags.push(`<span class="badge" title="${escapeHtml(wt.branch)}">🌿 ${escapeHtml(wt.branch)}</span>`);
+      if (!wt.existsOnDisk) tags.push('<span class="badge badge-danger">磁盘已失联</span>');
+      if (wt.isDirty) tags.push(`<span class="badge badge-warning">⚡ 未提交修改 (${dirtyCount})</span>`);
+      if (aheadCount > 0) {
+        if (wt.deliveredViaBranch) {
+          // 传递吸收判定命中：提交的机械领先是过时快照，成果已经由载体分支进入主干
+          tags.push(`<span class="badge badge-success" title="提交历史领先 ${historyAheadCount || aheadCount} 个提交，但这些提交已全部包含在已合入主干的分支 ${escapeHtml(wt.deliveredViaBranch)} 中，成果已经交付。本 Worktree 为过时快照：合并会带回旧内容，确认后可直接移除">✓ 成果已经由 ${escapeHtml(wt.deliveredViaBranch)} 进入主干</span>`);
+        } else {
+          tags.push(`<span class="badge badge-success" title="分支文件内容相对 Main 仍有实际差异，提交历史领先 ${historyAheadCount || aheadCount} 个提交">🚀 领先 ${aheadCount} 提交</span>`);
         }
-        if (wt.isLocked) tags.push('<span class="badge">🔒 已加锁</span>');
+      } else if (wt.isContentEqualToMain && historyAheadCount > 0) {
+        tags.push(`<span class="badge badge-success" title="提交历史领先 ${historyAheadCount} 个提交，但分支改动已被主干吸收（revert 抵消 / cherry-pick / squash 合入等），合入主干不会产生实际变化">内容已与主干同步</span>`);
+      }
+      // 上锁/编辑工具放在标题行内（与标题 y 轴居中）。
+      // 主工作区不提供上锁入口；失联工作区无法执行 git 锁操作，退化为只读徽标；
+      // 上锁徽标本身就是开关：已加锁点击解锁，未上锁点击上锁
+      let lockTool = '';
+      if (wt.isLocked) {
+        lockTool = wt.existsOnDisk
+          ? `<button class="wt-lock-btn locked" type="button" data-action="wt-lock-toggle" title="已加锁：git 拒绝对该工作区执行移除/清理。点击解锁">🔒 已加锁</button>`
+          : '<span class="badge" title="已加锁（工作区失联，请先恢复目录后再操作）">🔒 已加锁</span>';
+      } else if (wt.existsOnDisk && !wt.isPrunable) {
+        lockTool = wt.isMain
+          ? ''
+          : `<button class="wt-lock-btn" type="button" data-action="wt-lock-toggle" title="点击上锁：上锁后 git 会拒绝移除/清理该工作区（保护现场）">🔓 未上锁</button>`;
+      }
+      const editTool = `<button class="wt-edit-btn" type="button" data-action="wt-edit-info" title="编辑工作区名称（应用内标识）">✏️</button>`;
 
-        const dirName = wt.path.split('/').filter(Boolean).pop() || wt.path;
-        // 别名（应用内命名）存在时作为主标签展示，原目录名降级为徽标
-        const displayName = wt.name || dirName;
-        if (wt.name) tags.unshift(`<span class="badge wt-name-badge" title="目录名：${escapeHtml(dirName)}">📁 ${escapeHtml(dirName)}</span>`);
-        // 提交人/提交说明是外部可控的 Git 元数据，必须逐字段转义后再进 HTML
-        let lastInfo = wt.lastCommit
-          ? `最新提交: ${escapeHtml(wt.lastCommit.relativeTime)} by ${escapeHtml(wt.lastCommit.author)} · "${escapeHtml(wt.lastCommit.subject)}"`
-          : '';
+      const dirName = wt.path.split('/').filter(Boolean).pop() || wt.path;
+      // 别名（应用内命名）存在时作为主标签展示，原目录名降级为徽标
+      const displayName = wt.name || dirName;
+      if (wt.name) tags.unshift(`<span class="badge wt-name-badge" title="目录名：${escapeHtml(dirName)}">📁 ${escapeHtml(dirName)}</span>`);
+      // 提交人/提交说明是外部可控的 Git 元数据，必须逐字段转义后再进 HTML
+      let lastInfo = wt.lastCommit
+        ? `最新提交: ${escapeHtml(wt.lastCommit.relativeTime)} by ${escapeHtml(wt.lastCommit.author)} · "${escapeHtml(wt.lastCommit.subject)}"`
+        : '';
 
-        div.innerHTML = `
+      div.innerHTML = `
           <div class="item-main">
             <div class="item-header-row">
               <div class="item-name" title="${escapeHtml(wt.path)}">
@@ -1441,6 +1464,7 @@
                 <span>${escapeHtml(displayName)}</span>
               </div>
               <div class="item-tags">${tags.join(' ')}</div>
+              <div class="wt-title-tools">${lockTool}${editTool}</div>
             </div>
             <div class="item-path-box">
               <span class="item-path-text">${escapeHtml(wt.path)}</span>
@@ -1456,24 +1480,34 @@
               <button class="btn-outline" data-action="wt-diff-vs-main">与主干对比</button>
             </div>
             ${wt.isMain ? '<button class="btn-outline" data-action="wt-pull" title="从远程拉取当前分支最新提交（仅快进，分叉时不会自动合并）">Pull</button>' : ''}
-            ${wt.existsOnDisk ? `<button class="btn-outline" data-action="wt-lock-toggle" title="${wt.isLocked ? '解除 git worktree 锁定（允许 remove/prune 等破坏性操作）' : 'git worktree lock：上锁后 git 拒绝对该工作区执行移除/清理等破坏性操作'}">${wt.isLocked ? '🔓 解锁' : '🔒 上锁'}</button>` : ''}
-            <button class="btn-outline" data-action="wt-edit-info" title="编辑工作区名称（应用内标识，仅本应用展示）">✏️ 编辑</button>
             ${!isSafeMain ? `<button class="btn-danger btn-remove-wt" id="btn-rm-wt-${encodeURIComponent(wt.path).replace(/%/g, '_')}" data-action="wt-remove">移除</button>` : ''}
           </div>
         `;
-        // 事件闭包直引 wt 对象，路径等含特殊字符的实参不再经内联字符串往返（CSP 迁移）
-        bindActions(div, {
-          'wt-copy-path': (el) => copyText(wt.path, el),
-          'wt-uncommitted-diff': () => viewUncommittedDiff(wt.path),
-          'wt-open-commits': () => openCommitsDrawer(wt.path),
-          'wt-diff-vs-main': () => viewDiffAgainstMain(wt.path),
-          'wt-pull': (el) => pullMainWorktree(el, wt.path),
-          'wt-lock-toggle': () => toggleWorktreeLock(wt),
-          'wt-edit-info': () => openEditWorktreeModal(wt),
-          'wt-remove': () => removeWt(wt.path)
-        });
-        container.appendChild(div);
+      // 事件闭包直引 wt 对象，路径等含特殊字符的实参不再经内联字符串往返（CSP 迁移）
+      bindActions(div, {
+        'wt-copy-path': (el) => copyText(wt.path, el),
+        'wt-uncommitted-diff': () => viewUncommittedDiff(wt.path),
+        'wt-open-commits': () => openCommitsDrawer(wt.path),
+        'wt-diff-vs-main': () => viewDiffAgainstMain(wt.path),
+        'wt-pull': (el) => pullMainWorktree(el, wt.path),
+        'wt-lock-toggle': () => toggleWorktreeLock(wt),
+        'wt-edit-info': () => openEditWorktreeModal(wt),
+        'wt-remove': () => removeWt(wt.path)
       });
+      return div;
+    }
+
+    /* 就地刷新单个 Worktree 条目（锁状态/别名等纯展示字段变化时用，
+       避免为展示层变化承担整页 inspect 的开销） */
+    function refreshWorktreeItemInPlace(worktreePath) {
+      const wt = currentWorktrees.find(w => w.path === worktreePath);
+      if (!wt) return;
+      const existing = document.getElementById('wt-item-' + encodeURIComponent(worktreePath).replace(/%/g, '_'));
+      if (!existing) {
+        renderFilteredLists();
+        return;
+      }
+      existing.replaceWith(createWorktreeItemDom(wt));
     }
 
     function createBranchItemDom(b, mainBranch) {
@@ -4989,7 +5023,9 @@
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || (locking ? '上锁失败' : '解锁失败'));
         showToast(locking ? '已上锁：该工作区受 git 保护' : '已解锁');
-        inspectRepo(currentRepo);
+        // 纯展示字段变化：只就地刷新该条目，不做整页 inspect
+        wt.isLocked = locking;
+        refreshWorktreeItemInPlace(wt.path);
       } catch (err) {
         notifyRequestFailure(err, (locking ? '上锁' : '解锁') + '失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
       }
@@ -5028,7 +5064,13 @@
         if (!data.ok) throw new Error(data.error || '保存失败');
         closeEditWorktreeModal();
         showToast(data.name ? `工作区名称已设为「${data.name}」` : '工作区名称已清除');
-        inspectRepo(currentRepo);
+        // 纯展示字段变化：只就地刷新该条目，不做整页 inspect
+        const target = currentWorktrees.find(w => w.path === worktreePath);
+        if (target) {
+          if (data.name) target.name = data.name;
+          else delete target.name;
+          refreshWorktreeItemInPlace(worktreePath);
+        }
       } catch (err) {
         errorEl.textContent = toDisplayErrorMessage(err, '保存失败');
       } finally {
@@ -5036,12 +5078,15 @@
       }
     }
 
-    /* 打开创建 Worktree 弹层：填充「未绑定分支」候选与「新建分支起点」候选 */
+    /* 打开创建 Worktree 弹层：填充「未绑定分支」候选与「新建分支起点」候选，
+       并按所选分支预填默认目录（仓库同级）与默认工作区名称 */
     function openCreateWorktreeModal() {
       if (!currentRepo) {
         alert('请先选择仓库');
         return;
       }
+      createWtDirTouched = false;
+      createWtNameTouched = false;
       document.getElementById('createWtNameInput').value = '';
       document.getElementById('createWtPathInput').value = '';
       document.getElementById('createWtNewBranchInput').value = '';
@@ -5080,8 +5125,55 @@
         startPointSelect.appendChild(opt);
       });
 
+      updateCreateWtDefaults();
       document.getElementById('createWorktreeModal').style.display = 'flex';
       document.getElementById('createWtNameInput').focus();
+    }
+
+    /* 从分支名推导默认目录名/工作区名：取末段并替换路径非法字符 */
+    function wtDefaultSegment(raw) {
+      const segment = String(raw || '').split('/').filter(Boolean).pop() || '';
+      return segment.replace(/[\s\\:*\?"<>|]/g, '-');
+    }
+
+    /* 当前分支选择对应的默认名（末段）；无法推导时回退 new-worktree */
+    function createWtCurrentSegment() {
+      const raw = createWtBranchMode === 'existing'
+        ? document.getElementById('createWtExistingSelect').value
+        : document.getElementById('createWtNewBranchInput').value.trim();
+      return wtDefaultSegment(raw) || 'new-worktree';
+    }
+
+    /* 仓库同级目录 + 默认名 组成默认目标目录 */
+    function wtDefaultDirectory(segment) {
+      const repoParent = currentRepo.split('/').slice(0, -1).join('/') || '/';
+      return `${repoParent}/${segment}`;
+    }
+
+    /* 分支选择/输入变化时重算默认目录与默认名称；用户手动改过的字段不覆盖 */
+    function updateCreateWtDefaults() {
+      const segment = createWtCurrentSegment();
+      if (!createWtDirTouched) {
+        document.getElementById('createWtPathInput').value = wtDefaultDirectory(segment);
+      }
+      if (!createWtNameTouched) {
+        document.getElementById('createWtNameInput').value = segment;
+      }
+    }
+
+    /* 系统文件夹选择器挑选父目录：替换目录的父级部分，目录名保持不变 */
+    async function chooseCreateWtParent() {
+      const directory = await chooseScanDirectory();
+      if (!directory) return;
+      const pathInput = document.getElementById('createWtPathInput');
+      const current = pathInput.value.trim();
+      const parent = directory.replace(/[/\\]+$/, '');
+      // 当前目录为空时用默认目录名兜底，否则保留用户已填的目录名
+      const baseName = current
+        ? (current.split('/').filter(Boolean).pop() || current.split('\\').filter(Boolean).pop() || '')
+        : createWtCurrentSegment();
+      pathInput.value = baseName ? `${parent}/${baseName}` : parent;
+      createWtDirTouched = true;
     }
 
     function closeCreateWorktreeModal() {
@@ -5096,6 +5188,7 @@
       });
       document.getElementById('createWtExistingGroup').style.display = createWtBranchMode === 'existing' ? 'block' : 'none';
       document.getElementById('createWtNewGroup').style.display = createWtBranchMode === 'new' ? 'block' : 'none';
+      updateCreateWtDefaults();
     }
 
     async function submitCreateWorktree() {
@@ -5724,7 +5817,8 @@
       'submit-create-worktree': () => submitCreateWorktree(),
       'create-wt-branch-mode': (el) => setCreateWtBranchMode(el.dataset.mode),
       'close-edit-worktree-modal': () => closeEditWorktreeModal(),
-      'submit-edit-worktree': () => submitEditWorktree()
+      'submit-edit-worktree': () => submitEditWorktree(),
+      'choose-create-wt-parent': () => chooseCreateWtParent()
     };
     document.addEventListener('click', (e) => {
       const el = e.target instanceof Element ? e.target.closest('[data-action]') : null;
@@ -5925,6 +6019,12 @@
       renderRemoteBranchList();
     });
     initRemoteAutoFetchControl();
+
+    /* 创建 Worktree 弹层：分支变化重算默认目录/名称；目录/名称被手动修改后不再自动覆盖 */
+    document.getElementById('createWtExistingSelect').addEventListener('change', updateCreateWtDefaults);
+    document.getElementById('createWtNewBranchInput').addEventListener('input', updateCreateWtDefaults);
+    document.getElementById('createWtPathInput').addEventListener('input', () => { createWtDirTouched = true; });
+    document.getElementById('createWtNameInput').addEventListener('input', () => { createWtNameTouched = true; });
 
     /* ---- 桌面运行时适配层（契约 §6；浏览器模式以下逻辑全部不生效） ---- */
 
