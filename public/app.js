@@ -5049,27 +5049,58 @@
     async function submitEditWorktree() {
       const worktreePath = remoteState.editWorktreePath;
       if (!worktreePath) return;
+      const target = currentWorktrees.find(w => w.path === worktreePath);
       const name = document.getElementById('editWtNameInput').value.trim();
       const errorEl = document.getElementById('editWtError');
       const submitBtn = document.getElementById('editWtSubmitBtn');
       errorEl.textContent = '';
+      if (!name && !(target && target.isMain)) {
+        // 非主工作区的名称即目录名，不允许为空；主工作区仅改别名，允许清除
+        errorEl.textContent = '名称不能为空（它会同步作为工作区目录名）';
+        return;
+      }
       submitBtn.disabled = true;
       try {
-        const res = await fetch('/api/worktree-meta', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ repoPath: currentRepo, worktreePath, name })
-        });
-        const data = await res.json();
-        if (!data.ok) throw new Error(data.error || '保存失败');
-        closeEditWorktreeModal();
-        showToast(data.name ? `工作区名称已设为「${data.name}」` : '工作区名称已清除');
-        // 纯展示字段变化：只就地刷新该条目，不做整页 inspect
-        const target = currentWorktrees.find(w => w.path === worktreePath);
-        if (target) {
-          if (data.name) target.name = data.name;
-          else delete target.name;
-          refreshWorktreeItemInPlace(worktreePath);
+        let data;
+        if (target && !target.isMain) {
+          // 非主工作区：名称同步作为根目录名（git worktree move + 别名随目录迁移）
+          const res = await fetch('/api/worktree-rename', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ repoPath: currentRepo, worktreePath, name })
+          });
+          data = await res.json();
+          if (!data.ok) throw new Error(data.error || '重命名失败');
+          closeEditWorktreeModal();
+          showToast(`目录与名称已同步为「${data.name}」`);
+          // 就地刷新该条目并同步远端 Tab 的目标工作区引用（路径变了，不整页重分析）
+          const oldNodeId = 'wt-item-' + encodeURIComponent(worktreePath).replace(/%/g, '_');
+          target.path = data.worktreePath;
+          target.name = data.name;
+          const oldNode = document.getElementById(oldNodeId);
+          if (oldNode) oldNode.replaceWith(createWorktreeItemDom(target));
+          if (remoteState.targetWorktree === worktreePath) {
+            remoteState.targetWorktree = data.worktreePath;
+            const select = document.getElementById('remoteWorktreeSelect');
+            if (select) select.value = data.worktreePath;
+            renderRemoteTargetInfo();
+          }
+        } else {
+          // 主工作区：目录承载共享 .git 不重命名，仅更新应用内别名
+          const res = await fetch('/api/worktree-meta', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ repoPath: currentRepo, worktreePath, name })
+          });
+          data = await res.json();
+          if (!data.ok) throw new Error(data.error || '保存失败');
+          closeEditWorktreeModal();
+          showToast(data.name ? `工作区名称已设为「${data.name}」` : '工作区名称已清除');
+          if (target) {
+            if (data.name) target.name = data.name;
+            else delete target.name;
+            refreshWorktreeItemInPlace(worktreePath);
+          }
         }
       } catch (err) {
         errorEl.textContent = toDisplayErrorMessage(err, '保存失败');
@@ -5161,9 +5192,32 @@
       }
     }
 
+    /* 调起系统目录选择对话框：桌面走 preload 直连，浏览器走服务端系统选择器。
+       返回所选目录绝对路径；取消或失败返回 null（与扫描目录弹窗的处理器独立，
+       那个函数会把结果写进扫描草稿且恒返回 undefined，不能复用） */
+    async function pickDirectoryDialog() {
+      if (isDesktop && typeof window.gitLens?.chooseDirectory === 'function') {
+        try {
+          return await window.gitLens.chooseDirectory();
+        } catch {
+          return null;
+        }
+      }
+      try {
+        const res = await fetch('/api/choose-scan-directory', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await res.json();
+        return data.ok ? (data.directory || null) : null;
+      } catch {
+        return null;
+      }
+    }
+
     /* 系统文件夹选择器挑选父目录：替换目录的父级部分，目录名保持不变 */
     async function chooseCreateWtParent() {
-      const directory = await chooseScanDirectory();
+      const directory = await pickDirectoryDialog();
       if (!directory) return;
       const pathInput = document.getElementById('createWtPathInput');
       const current = pathInput.value.trim();

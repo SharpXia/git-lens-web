@@ -1060,6 +1060,114 @@ export async function setWorktreeLock({ repoPath, worktreePath, lock, reason }) 
 }
 
 /**
+ * 以别名同步重命名 Worktree 根目录（git worktree move）。
+ *
+ * 语义约束：
+ * - 主工作区目录承载共享 .git（全部衍生 worktree 的 .git 文件按绝对路径指向它），
+ *   重命名会破坏整个仓库链接，一律拒绝（上层可仅保留应用内别名）；
+ * - 目录名取别名的文件系统安全形式（路径分隔符/盘符冒号等替换为 '-'）；
+ * - 已加锁的工作区 git 拒绝 move，这里自动「解锁 → 移动 → 按原样重新上锁」
+ *   （原锁原因从 porcelain 解析后原样带回）。
+ * @param {object} params
+ * @param {string} params.repoPath - 仓库路径
+ * @param {string} params.worktreePath - 目标 worktree 当前路径
+ * @param {string} params.newName - 目标名称（别名，目录名取其安全形式）
+ * @returns {Promise<{ok: boolean, from: string, to: string, moved: boolean, locked: boolean}>}
+ */
+export async function renameWorktreeDirectory({ repoPath, worktreePath, newName }) {
+  if (!repoPath || !path.isAbsolute(repoPath) || !(await isGitRepo(repoPath))) {
+    throw Object.assign(new Error('repoPath 必须为 Git 仓库的绝对路径'), { statusCode: 400 });
+  }
+  if (!worktreePath || !path.isAbsolute(worktreePath)) {
+    throw Object.assign(new Error('worktree 路径必须为绝对路径'), { statusCode: 400 });
+  }
+  if (typeof newName !== 'string' || !newName.trim()) {
+    throw Object.assign(new Error('名称不能为空'), { statusCode: 400 });
+  }
+
+  const worktrees = await getWorktrees(repoPath);
+  const targetReal = await toRealPathSafe(worktreePath);
+  const entries = await Promise.all(worktrees.map(async wt => ({ wt, realPath: await toRealPathSafe(wt.path) })));
+  const target = entries.find(entry => entry.realPath === targetReal)?.wt;
+  if (!target || target.existsOnDisk === false) {
+    throw Object.assign(new Error('指定的工作区不属于当前仓库或已失联'), { statusCode: 404 });
+  }
+  if (target.isMain) {
+    throw Object.assign(
+      new Error('主工作区目录承载共享 .git，重命名会破坏全部衍生工作区；主工作区仅支持改应用内别名，不重命名目录'),
+      { statusCode: 409 }
+    );
+  }
+
+  // 目录名安全化：路径分隔符/盘符冒号/控制字符替换为 '-'，去首尾空白与点（Windows 兼容）
+  const baseName = newName.trim().replace(/[/\\:*?"<>|\0\r\n]/g, '-').replace(/^[.\s]+|[.\s]+$/g, '');
+  if (!baseName) {
+    throw Object.assign(new Error(`名称「${newName}」无法用作目录名`), { statusCode: 400 });
+  }
+  const fromPath = target.path;
+  const parentDir = path.dirname(fromPath);
+  const toPath = path.join(parentDir, baseName);
+  if (toPath === fromPath) {
+    return { ok: true, from: fromPath, to: toPath, moved: false, locked: Boolean(target.isLocked) };
+  }
+  const targetStat = await fs.stat(toPath).then(() => true, () => false);
+  if (targetStat) {
+    throw Object.assign(new Error(`目标目录「${toPath}」已存在，无法重命名`), { statusCode: 409 });
+  }
+
+  // 锁定原因从 porcelain 解析（isLocked 已知结论，这里取 --reason 以便移动后原样恢复）。
+  // 关闭 quotePath：中文等原因默认会被 C 风格转义加引号，原样带回会写入乱码
+  const porcelain = await runGit(repoPath, ['-c', 'core.quotePath=false', 'worktree', 'list', '--porcelain']);
+  let lockReason = null;
+  const lines = porcelain.split('\n');
+  for (let i = 0; i < lines.length; i += 1) {
+    if (lines[i].startsWith('worktree ') && path.resolve(lines[i].slice(9).trim()) === path.resolve(fromPath)) {
+      for (let j = i + 1; j < lines.length && !lines[j].startsWith('worktree '); j += 1) {
+        if (lines[j].startsWith('locked')) {
+          lockReason = lines[j].slice(6).trim() || null;
+        }
+      }
+      break;
+    }
+  }
+  const wasLocked = Boolean(target.isLocked);
+  let unlocked = false;
+  if (wasLocked) {
+    try {
+      await runGit(repoPath, ['worktree', 'unlock', fromPath]);
+      unlocked = true;
+    } catch (err) {
+      throw Object.assign(new Error(`重命名前自动解锁失败：${err.message}`), { statusCode: 409 });
+    }
+  }
+  try {
+    await runGit(repoPath, ['worktree', 'move', fromPath, toPath]);
+  } catch (err) {
+    // 移动失败必须恢复上锁状态，不留下静默解锁的工作区
+    if (unlocked) {
+      await runGit(repoPath, wasLocked && lockReason
+        ? ['worktree', 'lock', '--reason', lockReason, fromPath]
+        : ['worktree', 'lock', fromPath]).catch(() => {});
+    }
+    throw Object.assign(new Error(`重命名工作区目录失败：${err.message}`), { statusCode: 409 });
+  }
+  if (wasLocked) {
+    try {
+      await runGit(repoPath, lockReason
+        ? ['worktree', 'lock', '--reason', lockReason, toPath]
+        : ['worktree', 'lock', toPath]);
+    } catch (err) {
+      // 移动已完成，重新上锁失败只提示不回滚
+      throw Object.assign(
+        new Error(`目录已重命名为 ${toPath}，但恢复上锁失败，请手动执行 git worktree lock：${err.message}`),
+        { statusCode: 409 }
+      );
+    }
+  }
+  return { ok: true, from: fromPath, to: toPath, moved: true, locked: wasLocked };
+}
+
+/**
  * 执行 worktree prune (清理无效的元数据引用)
  */
 export async function pruneWorktrees(repoPath) {

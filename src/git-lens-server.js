@@ -19,6 +19,7 @@ import {
   checkWorktreeExists,
   createWorktree,
   setWorktreeLock,
+  renameWorktreeDirectory,
   normalizeWorktreeName,
   getWorktreeDiff,
   getUncommittedDiff,
@@ -1405,6 +1406,46 @@ export function createGitLensServer(options) {
         try {
           await setWorktreeName(worktreePath, alias);
           return sendJson(res, 200, { ok: true, worktreePath, name: alias });
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 14.4 以别名同步重命名 Worktree 根目录（git worktree move）并迁移别名元数据。
+      // 主工作区目录承载共享 .git，仅支持改别名、不重命名目录（服务返回 moved:false 语义由 409 明示）
+      if (pathname === '/api/worktree-rename' && req.method === 'POST') {
+        const { repoPath, worktreePath, name } = await readJson();
+        if (!repoPath || !(await isGitRepo(repoPath))) {
+          return sendJson(res, 400, { ok: false, error: '仓库路径无效' });
+        }
+        let alias = '';
+        try {
+          alias = normalizeWorktreeName(name);
+          if (!alias) throw httpError('名称不能为空', 400);
+        } catch (err) {
+          return sendJson(res, err.statusCode || 400, { ok: false, error: err.message });
+        }
+        // 别名元数据以 realpath 为键，迁移前先取旧键
+        const worktreesBefore = await getWorktrees(repoPath);
+        const oldReal = await fs.realpath(worktreePath).catch(() => path.resolve(worktreePath));
+        const isRegistered = await Promise.all(
+          worktreesBefore.map(async (wt) => fs.realpath(wt.path).catch(() => path.resolve(wt.path)))
+        ).then(realPaths => realPaths.includes(oldReal));
+        if (!isRegistered) {
+          return sendJson(res, 404, { ok: false, error: '指定的工作区不属于当前仓库或已失联' });
+        }
+        try {
+          const result = await renameWorktreeDirectory({ repoPath, worktreePath: oldReal, newName: alias });
+          // 别名随目录迁移：旧键清除、新键写入
+          const meta = await readWorktreeMeta();
+          if (meta[oldReal]) {
+            delete meta[oldReal];
+            await writeWorktreeMeta(meta);
+          }
+          const newReal = await fs.realpath(result.to).catch(() => result.to);
+          await setWorktreeName(newReal, alias);
+          return sendJson(res, 200, { ok: true, worktreePath: newReal, name: alias, moved: result.moved, from: result.from });
         } catch (err) {
           const status = err.statusCode || 500;
           return sendJson(res, status, { ok: false, error: err.message });

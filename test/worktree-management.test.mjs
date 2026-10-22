@@ -222,3 +222,65 @@ test('远端分支清单携带 lastFetchAt：fetch 前为 null，fetch 后为 IS
   const list = await request('GET', `/api/remote-branches?path=${encodeURIComponent(repo)}`);
   assert.ok(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T/.test(list.body.lastFetchAt || ''), `lastFetchAt 应为 ISO 时间，实际：${list.body.lastFetchAt}`);
 });
+
+test('Worktree 重命名：目录随别名移动、别名元数据迁移、upstream 保持', async (t) => {
+  const { request } = await startServer(t);
+  const { root, repo } = await makeFixture(t);
+  const wtPath = path.join(root, 'wt-rename');
+  await request('POST', '/api/create-worktree', {
+    repoPath: repo, worktreePath: wtPath, branchMode: 'new',
+    branchName: 'feature/from-start', startPoint: 'origin/feature/from-remote', name: '旧名'
+  });
+
+  const res = await request('POST', '/api/worktree-rename', { repoPath: repo, worktreePath: wtPath, name: '新名字' });
+  assert.equal(res.status, 200);
+  const newPath = res.body.worktreePath;
+  assert.equal(res.body.moved, true);
+  assert.equal(path.basename(newPath), '新名字');
+  assert.ok(await fs.stat(newPath).then(() => true, () => false), '新目录应存在');
+  assert.ok(await fs.stat(wtPath).then(() => false, () => true), '旧目录应不存在');
+  // git 元数据随移动更新：分支/upstream/别名全部就位
+  assert.equal(await git(newPath, 'rev-parse', '--abbrev-ref', 'HEAD'), 'feature/from-start');
+  assert.equal(await git(newPath, 'rev-parse', '--abbrev-ref', 'feature/from-start@{upstream}'), 'origin/feature/from-remote');
+  const meta = await request('GET', `/api/worktree-meta?path=${encodeURIComponent(repo)}`);
+  assert.equal(meta.body.meta[await fs.realpath(newPath)]?.name, '新名字');
+  // porcelain 登记新路径
+  assert.ok((await git(repo, 'worktree', 'list', '--porcelain')).includes(newPath));
+
+  // 目标目录已被占用 → 409；空名称 → 400
+  const occupied = path.join(root, 'occupied');
+  await fs.mkdir(occupied);
+  const conflict = await request('POST', '/api/worktree-rename', {
+    repoPath: repo, worktreePath: newPath, name: 'occupied'
+  });
+  assert.equal(conflict.status, 409);
+  const empty = await request('POST', '/api/worktree-rename', { repoPath: repo, worktreePath: newPath, name: '' });
+  assert.equal(empty.status, 400);
+});
+
+test('Worktree 重命名：已加锁工作区移动后恢复上锁', async (t) => {
+  const { request } = await startServer(t);
+  const { root, repo } = await makeFixture(t);
+  const wtPath = path.join(root, 'wt-locked-rename');
+  await request('POST', '/api/create-worktree', {
+    repoPath: repo, worktreePath: wtPath, branchMode: 'new', branchName: 'feature/lock-rename'
+  });
+  await request('POST', '/api/worktree-lock', { repoPath: repo, worktreePath: wtPath, lock: true, reason: '保护现场' });
+
+  const res = await request('POST', '/api/worktree-rename', { repoPath: repo, worktreePath: wtPath, name: '锁着改名' });
+  assert.equal(res.status, 200);
+  const newPath = res.body.worktreePath;
+  // 与服务端同口径关闭 quotePath，否则中文原因在 porcelain 里被 C 风格转义
+  const porcelain = await git(repo, '-c', 'core.quotePath=false', 'worktree', 'list', '--porcelain');
+  const segment = porcelain.split(/\n(?=worktree )/).find(seg => seg.includes('锁着改名')) || '';
+  assert.ok(segment.includes('locked'), '移动后应恢复上锁');
+  assert.ok(segment.includes('保护现场'), '锁原因应原样保留');
+});
+
+test('Worktree 重命名：主工作区拒绝移动目录', async (t) => {
+  const { request } = await startServer(t);
+  const { repo } = await makeFixture(t);
+  const res = await request('POST', '/api/worktree-rename', { repoPath: repo, worktreePath: repo, name: '改名主仓库' });
+  assert.equal(res.status, 409);
+  assert.ok(/主工作区/.test(res.body.error));
+});

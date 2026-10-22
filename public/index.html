@@ -452,8 +452,8 @@
         </div>
         <div class="mr-form-group">
           <label for="editWtNameInput">工作区名称</label>
-          <input id="editWtNameInput" class="mr-form-input" type="text" placeholder="留空表示清除名称" maxlength="60" autocomplete="off">
-          <div class="remote-modal-hint">名称仅在本应用内用于标识展示（git 本身没有 worktree 命名概念），留空保存即清除。</div>
+          <input id="editWtNameInput" class="mr-form-input" type="text" placeholder="例如：订单服务开发" maxlength="60" autocomplete="off">
+          <div class="remote-modal-hint">保存后会把工作区根目录重命名为该名称（git worktree move），应用内别名同步更新；主工作区目录承载共享 .git 不重命名，仅改显示名。</div>
         </div>
         <div id="editWtError" class="mr-detail-error" role="alert"></div>
       </div>

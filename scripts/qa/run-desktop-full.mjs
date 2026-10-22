@@ -987,7 +987,7 @@ async function main() {
     record('w10b-worktree-alias-ui', '总览 Worktree 列表渲染别名与目录名', uiHasAlias ? 'pass' : 'fail',
       `列表含别名=${Boolean(uiHasAlias)}`);
 
-    // W10c 上锁/解锁与别名编辑：porcelain 联动 + inspect 别名更新。
+    // W10c 上锁/解锁与重命名：porcelain 联动 + 「别名同步重命名目录」全链路。
     // porcelain 按 worktree 分段后只看 wt-created 段，避免主仓库段的 locked 词样干扰
     const lockCreated = await api('/api/worktree-lock', { method: 'POST', body: { repoPath: mainRepo, worktreePath: createdWtPath, lock: true } });
     const porcelainWhileLocked = await gitSnap(qaRoot, mainRepo, 'worktree', 'list', '--porcelain');
@@ -995,25 +995,33 @@ async function main() {
     const porcelainAfterUnlock = await gitSnap(qaRoot, mainRepo, 'worktree', 'list', '--porcelain');
     const segmentOf = (porcelain) => porcelain
       .split(/\n(?=worktree )/).find((seg) => seg.includes('wt-created')) || '';
-    const renameRes = await api('/api/worktree-meta', {
+    // 别名编辑走重命名端点：目录随名称移动（git worktree move），别名元数据随路径迁移
+    const renameRes = await api('/api/worktree-rename', {
       method: 'POST',
       body: { repoPath: mainRepo, worktreePath: createdWtPath, name: '改名后的工作区' }
     });
+    const renamedPath = renameRes.body?.worktreePath || '';
+    const oldDirGone = !(await fs.stat(createdWtPath).then(() => true).catch(() => false));
+    const newDirExists = Boolean(renamedPath) && await fs.stat(renamedPath).then(() => true, () => false);
+    const porcelainAfterRename = await gitSnap(qaRoot, mainRepo, 'worktree', 'list', '--porcelain');
     const inspectAfterRename = await api(`/api/inspect?path=${encodeURIComponent(mainRepo)}`);
     const renamedEntry = (inspectAfterRename.body?.worktrees || []).find((w) => w.branch === 'feature/wt-created');
+    const metaAfterRename = await api(`/api/worktree-meta?path=${encodeURIComponent(mainRepo)}`);
     const w10cOk = lockCreated.status === 200 && segmentOf(porcelainWhileLocked).includes('locked')
       && unlockCreated.status === 200 && !segmentOf(porcelainAfterUnlock).includes('locked')
-      && renameRes.status === 200 && renamedEntry?.name === '改名后的工作区';
-    record('w10c-lock-rename', 'Worktree 上锁/解锁（porcelain 联动）与别名编辑（inspect 更新）', w10cOk ? 'pass' : 'fail',
-      `lock=${lockCreated.status} 锁标记=${segmentOf(porcelainWhileLocked).includes('locked')} unlock=${unlockCreated.status} 解锁后=${segmentOf(porcelainAfterUnlock).includes('locked')} rename=${renameRes.status} 新别名=${renamedEntry?.name ?? 'x'}`);
+      && renameRes.status === 200 && renameRes.body?.moved === true
+      && oldDirGone && newDirExists && segmentOf(porcelainAfterRename).includes(renamedPath)
+      && renamedEntry?.path === renamedPath && renamedEntry?.name === '改名后的工作区'
+      && metaAfterRename.body?.meta?.[renamedPath]?.name === '改名后的工作区';
+    record('w10c-lock-rename', 'Worktree 上锁/解锁（porcelain 联动）与别名重命名（目录移动+元数据迁移）', w10cOk ? 'pass' : 'fail',
+      `lock=${lockCreated.status} 锁标记=${segmentOf(porcelainWhileLocked).includes('locked')} unlock=${unlockCreated.status} rename=${renameRes.status}/${renameRes.body?.moved ?? 'x'} 旧目录删=${oldDirGone} inspect新路径=${renamedEntry?.path === renamedPath} 新别名=${renamedEntry?.name ?? 'x'}`);
 
-    // W10d 清理：移除测试 worktree（此时已解锁，常规移除即可）
-    const removeCreated = await api('/api/remove-worktree', {
-      method: 'POST',
-      body: { repoPath: mainRepo, worktreePath: createdWtPath }
-    });
-    const createdGone = !(await fs.stat(createdWtPath).then(() => true).catch(() => false));
-    record('w10d-cleanup', '清理：移除本轮创建的 Worktree', removeCreated.status === 200 && createdGone ? 'pass' : 'fail',
+    // W10d 清理：移除测试 worktree（重命名后的新路径，此时已解锁，常规移除即可）
+    const removeCreated = renamedPath
+      ? await api('/api/remove-worktree', { method: 'POST', body: { repoPath: mainRepo, worktreePath: renamedPath } })
+      : { status: 0 };
+    const createdGone = !renamedPath || !(await fs.stat(renamedPath).then(() => true).catch(() => false));
+    record('w10d-cleanup', '清理：移除本轮创建并已重命名的 Worktree', removeCreated.status === 200 && createdGone ? 'pass' : 'fail',
       `HTTP=${removeCreated.status} 目录删除=${createdGone}`);
 
     // ================= 6. 崩溃恢复（含恢复页截图 + 选中仓库恢复） =================
