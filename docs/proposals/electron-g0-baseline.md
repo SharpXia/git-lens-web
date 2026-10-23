@@ -25,6 +25,6 @@ GIT_LENS_CONFIG_DIR=/tmp/glwt-electron-baseline/config node --test test/*.test.m
 
 ## 基线风险备忘（供后续门禁对照）
 
-1. `src/server.js` 导入即监听，`npm start` 默认 9527——G1 拆分后需回归本基线全部 41 项。
+1. `src/server.js` 导入即监听，`pnpm start` 默认 9527——G1 拆分后需回归本基线全部 41 项。
 2. 全部 API 响应带 `Access-Control-Allow-Origin: *`——G1 移除后需确认既有测试不依赖该头。
 3. `scripts/verify-mr-branch-diff.mjs` 当前可指向任意 URL 并读取 `--config-dir` 元数据——改造为 fail-closed 前禁止用于桌面版验收（契约 §8.3）。

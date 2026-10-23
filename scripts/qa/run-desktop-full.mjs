@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * run-desktop-full.mjs —— G4 功能与 UI 矩阵全量入口（契约 §8.3，`npm run test:desktop:full`）
+ * run-desktop-full.mjs —— G4 功能与 UI 矩阵全量入口（契约 §8.3，`pnpm run test:desktop:full`）
  *
  * 在快速冒烟（run-desktop.mjs）之外覆盖计划书 §7 的功能矩阵：
  *   1. Diff 与提交视图：diff-refs 三组合 × 三模式 API 矩阵；UI 三组合渲染与模式按钮
@@ -37,7 +37,7 @@
  * 页面级 CDP 会话驱动；`_electron` 句柄仅用于 app 级操作（主进程 evaluate、close）。
  *
  * 用法：
- *   npm run test:desktop:full
+ *   pnpm run test:desktop:full
  *   node scripts/qa/run-desktop-full.mjs --keep   # 成功时也保留 qa-root（供取视觉基线截图）
  *
  * 已知边界：原生目录选择对话框与焦点/菜单类断言留人工清单。

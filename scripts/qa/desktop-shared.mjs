@@ -796,7 +796,7 @@ export function buildDesktopLaunchArgs(env) {
  */
 export async function startDesktopApp({ qaRoot, runId, env } = {}) {
   if (!fsSync.existsSync(ELECTRON_BIN)) {
-    throw new Error(`未找到 Electron 可执行文件: ${ELECTRON_BIN}（请先 npm install 让 electron postinstall 下载二进制）`);
+    throw new Error(`未找到 Electron 可执行文件: ${ELECTRON_BIN}（请先 pnpm install，再执行 pnpm exec install-electron 下载二进制）`);
   }
   const resolvedEnv = env || buildDesktopEnv({ qaRoot, runId });
   const app = await _electron.launch({

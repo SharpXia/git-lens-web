@@ -3,6 +3,7 @@
   "version": "1.1.4",
   "description": "Local Git Project Lens - Clean & Worktree Inspector",
   "type": "module",
+  "packageManager": "pnpm@11.7.0",
   "scripts": {
     "start": "node src/server.js",
     "test:isolated": "node scripts/qa/run.mjs",
@@ -25,8 +26,5 @@
     "cors": "^2.8.6",
     "electron-updater": "^6.8.9",
     "express": "^5.2.1"
-  },
-  "allowScripts": {
-    "electron@44.4.5": true
   }
 }

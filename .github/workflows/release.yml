@@ -72,14 +72,20 @@ jobs:
             exit 1
           }
 
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+          run_install: false
+
       - name: 设置 Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          cache: pnpm
 
       - name: 安装依赖
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: 准备签名与公证凭据
         id: credentials
@@ -134,7 +140,7 @@ jobs:
           echo "release_mode=$release_mode" >> "$GITHUB_OUTPUT"
 
       - name: 构建安装包
-        run: npx electron-builder --config "$BUILD_CONFIG" --mac --${{ matrix.arch }} --publish never
+        run: pnpm exec electron-builder --config "$BUILD_CONFIG" --mac --${{ matrix.arch }} --publish never
 
       - name: 校验应用包签名
         run: |

@@ -51,7 +51,7 @@ Git Lens Web 把这些信息放进一个本地页面，先展示事实和 Diff�
 ### 环境要求
 
 - 已安装 Git，并且 `git` 可以在终端直接调用；
-- 已安装 npm；
+- 已安装 pnpm 11（推荐通过 `corepack enable` 启用）；
 - Node.js 版本满足 `^20.19.0 || >=22.12.0`；
 - 当前机器可以访问本机浏览器。
 
@@ -60,8 +60,8 @@ Git Lens Web 把这些信息放进一个本地页面，先展示事实和 Diff�
 ```bash
 git clone YOUR_REPOSITORY_URL
 cd git-lens-web
-npm ci
-npm start
+pnpm install --frozen-lockfile
+pnpm start
 ```
 
 启动后打开 [http://127.0.0.1:9527](http://127.0.0.1:9527)。
@@ -69,14 +69,14 @@ npm start
 如果端口已占用，可以换一个端口：
 
 ```bash
-PORT=8080 npm start
+PORT=8080 pnpm start
 ```
 
 Windows PowerShell：
 
 ```powershell
 $env:PORT=8080
-npm start
+pnpm start
 ```
 
 服务只监听本机 `127.0.0.1`。不要直接双击打开 `public/index.html`，页面需要通过本地服务访问 Git API 和系统目录选择器。
@@ -221,7 +221,7 @@ test/                   Git 状态、Diff、MR、Stash 和清理测试
 docs/images/            README 界面流程动图
 ```
 
-当前前端使用原生 HTML、CSS 和 JavaScript，服务通过 `npm start` 直接运行，无需先生成前端构建产物。Node 服务通过 Git CLI 读取和修改本地仓库。
+当前前端使用原生 HTML、CSS 和 JavaScript，服务通过 `pnpm start` 直接运行，无需先生成前端构建产物。Node 服务通过 Git CLI 读取和修改本地仓库。
 
 ## 验证
 
@@ -229,7 +229,9 @@ docs/images/            README 界面流程动图
 
 ```bash
 # 首次运行时安装图片预览回归测试使用的浏览器
-npx playwright install chromium
+pnpm exec playwright install chromium
+# Electron 44 起二进制按需下载，桌面相关测试前先补齐
+pnpm exec install-electron
 node --test
 ```
 

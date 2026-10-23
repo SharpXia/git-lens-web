@@ -3,7 +3,7 @@
  *
  * 覆盖：工厂导入零副作用、port:0 返回真实端口、close 幂等与 EADDRINUSE 中文报错、
  * 测试握手接口的开/关与 runId 一致性、Host/Origin/会话凭据各拒绝路径、
- * 413/415 请求体校验、browser 模式同源请求照常工作、CLI（npm start）语义不变。
+ * 413/415 请求体校验、browser 模式同源请求照常工作、CLI（pnpm start）语义不变。
  *
  * 全部测试使用 fs.mkdtemp 临时目录 + 私有 GIT_LENS_CONFIG_DIR + port 0（系统分配），
  * 绝不触碰 9527 端口与真实配置；结束后统一清理并断言无残留监听。
