@@ -86,6 +86,12 @@ export function buildDesktopEnv({ qaRoot, runId, suffix = '' } = {}) {
     GIT_LENS_E2E_TOKEN_FILE: path.join(artifactsDir, 'token.txt'),
     GIT_LENS_TEST_MODE: '1',
     GIT_LENS_TEST_RUN_ID: runId,
+    // 背景验证：默认 hidden——窗口永不显示，不抢焦点、不遮挡、不进 Dock；
+    // 需要人工盯着窗口看时用 GIT_LENS_E2E_FOREGROUND=1 恢复前台窗口，
+    // 或用 GIT_LENS_E2E_BACKGROUND=inactive 保留屏内可见但不抢焦点的窗口
+    GIT_LENS_E2E_BACKGROUND: process.env.GIT_LENS_E2E_FOREGROUND === '1'
+      ? '0'
+      : (process.env.GIT_LENS_E2E_BACKGROUND || 'hidden'),
     // web 语义的配置目录：desktop 服务实际读取 <userData>/git-lens-config（契约 §5），
     // 此处保留注入仅为对齐 web 侧习惯并供诊断对照
     GIT_LENS_CONFIG_DIR: path.join(qaRoot, 'config'),

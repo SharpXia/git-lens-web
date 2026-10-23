@@ -156,6 +156,8 @@ function buildAppEnv(ctx, extraEnv = {}) {
     GIT_LENS_E2E_TOKEN_FILE: ctx.tokenFile,
     GIT_LENS_TEST_MODE: '1',
     GIT_LENS_TEST_RUN_ID: ctx.runId,
+    // 背景验证：窗口永不显示，自动化期间既不抢焦点也不遮挡桌面
+    GIT_LENS_E2E_BACKGROUND: 'hidden',
     GIT_CONFIG_GLOBAL: path.join(ctx.root, 'gitconfig'),
     XDG_CONFIG_HOME: path.join(ctx.root, 'xdg-config'),
     ...extraEnv,

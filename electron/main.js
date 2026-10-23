@@ -122,6 +122,36 @@ const e2eTokenFile = process.env.GIT_LENS_E2E_TOKEN_FILE
   ? path.resolve(process.env.GIT_LENS_E2E_TOKEN_FILE)
   : null;
 
+/**
+ * 背景验证模式（E2E）：自动化测试对用户桌面零干扰（不抢焦点、不遮挡、不进 Dock）。
+ * 取值：
+ *  - 'hidden'（启动器默认）：窗口创建后永不显示。实测窗口未显示时系统前台不切换，
+ *    而页面仍按可见态运行（document.visibilityState=visible），rAF 121fps、CSS 过渡
+ *    312ms、DPR 2、截图 2560×1524 全部与屏内一致——渲染能力没有任何损失。
+ *  - 'inactive'：窗口在屏内可见但不激活（不抢焦点、仍会遮挡），供人工观察用。
+ *  - 其他/未设置：与生产一致（前台激活窗口）。
+ */
+const e2eBackgroundMode = (process.env.GIT_LENS_E2E_BACKGROUND === 'hidden' || process.env.GIT_LENS_E2E_BACKGROUND === '1')
+  ? 'hidden'
+  : process.env.GIT_LENS_E2E_BACKGROUND === 'inactive' ? 'inactive' : '';
+const e2eBackgroundWindow = e2eBackgroundMode !== '';
+
+// 后台窗口可能被系统判定为遮挡或后台化，Chromium 随之把定时器降频到 1s/次、
+// 停止渲染调度；E2E 场景大量依赖页面轮询与 rAF，必须显式关闭这些降频
+if (e2eBackgroundWindow) {
+  app.commandLine.appendSwitch('disable-background-timer-throttling');
+  app.commandLine.appendSwitch('disable-renderer-backgrounding');
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+  // 关键：激活策略必须在 ready 之前设置。放到 bootstrap 里已经太晚——应用会先以
+  // regular 策略完成启动并抢走系统前台约 2 秒（实测 lsappinfo front 切换），
+  // 用户正在输入的焦点会被硬生生打断。ready 前设为 accessory 后进程启动即
+  // 不参与前台切换，Dock 也不出现图标。
+  if (process.platform === 'darwin' && app.setActivationPolicy) {
+    app.setActivationPolicy('accessory');
+    if (app.dock) app.dock.hide();
+  }
+}
+
 // ---- 运行期状态 ----
 
 /** 仅存主进程的本地 API 会话凭据（契约 §4.6：crypto 随机 ≥32 字节，不暴露给页面） */
@@ -1356,7 +1386,10 @@ function createMainWindow() {
     minWidth: WINDOW_MIN_WIDTH,
     minHeight: WINDOW_MIN_HEIGHT,
     title: 'Git Lens',
-    show: true,
+    // 背景验证模式下建窗即不显示：hidden 档位全程不显示，inactive 档位在函数末尾
+    // showInactive；focusable:false 保证窗口永远不会成为 key window
+    show: !e2eBackgroundWindow,
+    ...(e2eBackgroundWindow ? { focusable: false } : {}),
     backgroundColor: '#0d1117',
     // 契约 §17：窗口 chrome 融合——标签条兼任标题栏。darwin 用 hiddenInset 隐藏
     // 原生标题栏并把红绿灯压进 38px 标签条（trafficLightPosition 近似垂直居中）；
@@ -1404,6 +1437,10 @@ function createMainWindow() {
   tabbarView = createTabbarView();
   mainWindow.contentView.addChildView(tabbarView);
   syncTabBounds();
+  // 背景验证默认不显示窗口：实测「不显示」既不会触发系统前台切换（无抢焦点、无遮挡），
+  // 又不影响页面渲染（rAF/过渡/DPR 与屏内一致），是零干扰的最优解。
+  // 'inactive' 档位才真正显示，且用 showInactive 保证不成为 key window。
+  if (e2eBackgroundMode === 'inactive') mainWindow.showInactive();
 }
 
 /**
@@ -1934,7 +1971,7 @@ async function bootstrap() {
   await migrateLegacyUserData();
 
   // macOS Dock 图标与 Web favicon 共用同一份浅色资产，避免开发运行与打包应用出现品牌分裂。
-  if (process.platform === 'darwin' && app.dock) {
+  if (process.platform === 'darwin' && app.dock && !e2eBackgroundWindow) {
     app.dock.setIcon(path.join(__dirname, '../public/assets/git-lens-icon-light.png'));
   }
 

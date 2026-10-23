@@ -30,6 +30,8 @@ test('桌面启动器环境构造：E2E 钩子、服务配置与 git 隔离全�
   assert.equal(env.GIT_LENS_E2E_TOKEN_FILE, path.join(qaRoot, 'artifacts', 'token.txt'));
   assert.equal(env.GIT_LENS_TEST_MODE, '1');
   assert.equal(env.GIT_LENS_TEST_RUN_ID, 'qa-run-7');
+  // 背景验证：默认隐藏窗口运行（既不抢焦点也不遮挡桌面）
+  assert.equal(env.GIT_LENS_E2E_BACKGROUND, 'hidden');
 
   // 契约 §5：desktop 服务读取 <userData>/git-lens-config；web 语义目录仅留档
   assert.equal(env.GIT_LENS_CONFIG_DIR, path.join(qaRoot, 'config'));
