@@ -235,6 +235,13 @@ pnpm exec install-electron
 node --test
 ```
 
+桌面自动化默认以隐藏窗口在后台运行，不抢占焦点。系统全屏等会切换 macOS Space、占满屏幕的侵入式用例默认跳过，只在发版前等关键阶段显式开启：
+
+```bash
+GIT_LENS_E2E_INTRUSIVE=1 node --test test/tab-reorder.test.mjs
+GIT_LENS_E2E_INTRUSIVE=1 node electron/checks/smoke.mjs
+```
+
 集成验证脚本需要先启动隔离服务，并将测试配置目录指向同一份 `GIT_LENS_CONFIG_DIR`。具体命令和 fixture 构建方式见：
 
 - [本地 MR 与 Branch Diff 验证说明](./docs/local-mr-branch-diff.md)
