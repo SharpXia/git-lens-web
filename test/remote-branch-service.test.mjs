@@ -33,6 +33,7 @@ import {
   deleteRemoteBranch,
   deleteLocalBranch
 } from '../src/remote-branch-service.js';
+import { getBranches } from '../src/git-inspector.js';
 
 const execGit = promisify(execFile);
 const GIT_ENV = {
@@ -254,6 +255,25 @@ test('合并远端分支：无交集改动时干净合并生成双亲合并提�
   const parents = (await git(repo, 'log', '-1', '--format=%P')).split(/\s+/);
   assert.deepEqual(parents, [headBefore, remoteSha]);
   assert.equal(await git(repo, 'status', '--porcelain'), '');
+  // 合并信息必须使用短名：完整引用会永久写进提交历史
+  assert.equal(
+    await git(repo, 'log', '-1', '--format=%s'),
+    "Merge remote-tracking branch 'origin/feature/remote-only'"
+  );
+});
+
+test('本地分支非快进合并：提交信息使用短分支名', async (t) => {
+  const { repo } = await makeFixture(t);
+  await git(repo, 'checkout', '-q', '-b', 'side-local', 'origin/main');
+  await fs.writeFile(path.join(repo, 'side-local.txt'), '独立提交\n');
+  await git(repo, 'add', '.');
+  await git(repo, 'commit', '-m', 'side-local: 独立提交');
+  await git(repo, 'checkout', '-q', 'main');
+
+  const result = await mergeRef({ repoPath: repo, worktreePath: repo, ref: 'side-local', refType: 'local' });
+  assert.equal(result.status, 'merged');
+  assert.equal(result.fastForward, false);
+  assert.equal(await git(repo, 'log', '-1', '--format=%s'), "Merge branch 'side-local'");
 });
 
 test('合并远端分支：可快进时直接快进并返回 merged 状态', async (t) => {
@@ -370,6 +390,9 @@ test('完成合并生成双亲合并提交；冲突未清时拒绝；放弃合�
   assert.equal(parents[1], sourceSha);
   assert.equal(await git(repo, 'status', '--porcelain'), '');
   assert.equal(await getMergeState(repo).then(s => s.inMerge), false);
+  // 正文不能残留 MERGE_MSG 的 "# Conflicts:" 注释块
+  const commitBody = await git(repo, 'log', '-1', '--format=%B');
+  assert.ok(!commitBody.includes('# Conflicts'), `合并提交正文不应包含冲突注释：${commitBody}`);
 
   // 无进行中合并时完成/放弃均 409
   await assert.rejects(commitMerge(repo), err => err.statusCode === 409);
@@ -548,4 +571,214 @@ test('删除本地分支：安全删除放行，未合入/被检出/主分支均
     deleteLocalBranch({ repoPath: repo, branch: 'no/such' }),
     err => err.statusCode === 404
   );
+});
+
+/**
+ * 构造「一侧删除、另一侧修改」的合并冲突仓库。
+ * @param {object} t - 测试上下文（用于清理临时目录）
+ * @param {{oursDeletes: boolean}} options - true 为 DU（当前分支删除），false 为 UD（合并来源删除）
+ * @returns {Promise<string>} 处于冲突现场的工作区路径
+ */
+async function makeDeleteConflictRepo(t, { oursDeletes }) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'git-lens-delete-conflict-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const repo = path.join(root, 'repo');
+  await fs.mkdir(repo);
+  await git(repo, 'init', '-q', '-b', 'main');
+  await fs.writeFile(path.join(repo, 'target.txt'), 'base\n');
+  await git(repo, 'add', '-A');
+  await git(repo, 'commit', '-qm', 'base');
+
+  await git(repo, 'checkout', '-qb', 'work');
+  if (oursDeletes) await git(repo, 'rm', '-q', 'target.txt');
+  else await fs.writeFile(path.join(repo, 'target.txt'), 'work\n');
+  await git(repo, 'commit', '-qam', 'work-side');
+
+  await git(repo, 'checkout', '-q', 'main');
+  if (oursDeletes) await fs.writeFile(path.join(repo, 'target.txt'), 'main\n');
+  else await git(repo, 'rm', '-q', 'target.txt');
+  await git(repo, 'commit', '-qam', 'main-side');
+
+  await git(repo, 'checkout', '-q', 'work');
+  // 合并必然冲突：保留现场供 resolveConflictFile 处理
+  await gitFail(repo, 'merge', 'main');
+  return repo;
+}
+
+test('删除型冲突：采用删除侧等价于删除文件，显式 delete 亦可用', async (t) => {
+  // DU（当前分支删除）：采用 ours 必须删除，而不是 checkout 失败 409
+  const duRepo = await makeDeleteConflictRepo(t, { oursDeletes: true });
+  const du = await resolveConflictFile({ worktreePath: duRepo, filePath: 'target.txt', resolution: 'ours' });
+  assert.equal(du.deleted, true);
+  assert.equal(du.remaining, 0);
+  await assert.rejects(fs.access(path.join(duRepo, 'target.txt')));
+
+  // 同一冲突类型采用有内容的一侧（theirs）仍应恢复文件
+  const duKeepRepo = await makeDeleteConflictRepo(t, { oursDeletes: true });
+  const duKeep = await resolveConflictFile({ worktreePath: duKeepRepo, filePath: 'target.txt', resolution: 'theirs' });
+  assert.equal(duKeep.deleted, false);
+  assert.equal(await fs.readFile(path.join(duKeepRepo, 'target.txt'), 'utf-8'), 'main\n');
+
+  // UD（合并来源删除）：采用 theirs 等价于删除
+  const udRepo = await makeDeleteConflictRepo(t, { oursDeletes: false });
+  const ud = await resolveConflictFile({ worktreePath: udRepo, filePath: 'target.txt', resolution: 'theirs' });
+  assert.equal(ud.deleted, true);
+  await assert.rejects(fs.access(path.join(udRepo, 'target.txt')));
+
+  // 显式 delete 对任意冲突类型都可用
+  const delRepo = await makeDeleteConflictRepo(t, { oursDeletes: true });
+  const del = await resolveConflictFile({ worktreePath: delRepo, filePath: 'target.txt', resolution: 'delete' });
+  assert.equal(del.deleted, true);
+  assert.equal(del.remaining, 0);
+});
+
+test('分支名包含 | 时本地/远端清单按 NUL 分隔正确解析', async (t) => {
+  const { repo } = await makeFixture(t);
+  await git(repo, 'branch', 'feat|pipe');
+  await git(repo, 'update-ref', 'refs/remotes/origin/feat|pipe', 'HEAD');
+
+  const local = await listLocalBranches(repo);
+  const localPipe = local.branches.find(b => b.name === 'feat|pipe');
+  assert.ok(localPipe, '本地清单应保留完整的 feat|pipe');
+  assert.ok(/^[0-9a-f]{40}$/.test(localPipe.sha), 'SHA 不应被名称中的 | 挤到别的字段');
+  assert.ok(localPipe.subject.includes('local:'), '提交标题应完整解析');
+
+  const remote = await listRemoteBranches(repo);
+  const remotePipe = remote.branches.find(b => b.name === 'origin/feat|pipe');
+  assert.ok(remotePipe, '远端清单应保留完整的 origin/feat|pipe');
+  assert.equal(remotePipe.remote, 'origin');
+  assert.equal(remotePipe.branch, 'feat|pipe');
+});
+
+test('detached 主工作区只有 main-feature 时，主干判定与删除保护均生效', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'git-lens-detached-main-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const repo = path.join(root, 'repo');
+  await fs.mkdir(repo);
+  await git(repo, 'init', '-q', '-b', 'main-feature');
+  await fs.writeFile(path.join(repo, 'a.txt'), 'x\n');
+  await git(repo, 'add', '-A');
+  await git(repo, 'commit', '-qm', 'init');
+  // detached HEAD 且无 origin/HEAD：只能从本地分支清单判断主干
+  await git(repo, 'checkout', '-q', '--detach', 'HEAD');
+
+  const { mainBranch, branches } = await listLocalBranches(repo);
+  assert.equal(mainBranch, 'main-feature');
+  assert.equal(branches.find(b => b.name === 'main-feature')?.isMain, true);
+  await assert.rejects(
+    deleteLocalBranch({ repoPath: repo, branch: 'main-feature' }),
+    err => err.statusCode === 409 && /主分支/.test(err.message)
+  );
+});
+
+test('检出远端分支校验引用格式：提交表达式被 400 拒绝', async (t) => {
+  const { repo } = await makeFixture(t);
+  await assert.rejects(
+    checkoutBranch({ repoPath: repo, worktreePath: repo, refType: 'remote', ref: 'origin/main~1' }),
+    err => err.statusCode === 400 && /远端分支名/.test(err.message)
+  );
+});
+
+test('合并来源同名歧义：默认 409，refType 明确后按指定类型解析', async (t) => {
+  const { repo } = await makeFixture(t);
+  // 本地分支名恰好叫 origin/main，与远端跟踪引用同名
+  await git(repo, 'checkout', '-qb', 'side');
+  await fs.writeFile(path.join(repo, 'side.txt'), 'side\n');
+  await git(repo, 'add', '.');
+  await git(repo, 'commit', '-m', 'side: 独立提交');
+  await git(repo, 'checkout', '-q', 'main');
+  await git(repo, 'branch', 'origin/main', 'side');
+
+  await assert.rejects(
+    mergeRef({ repoPath: repo, worktreePath: repo, ref: 'origin/main' }),
+    err => err.statusCode === 409 && /同时匹配/.test(err.message)
+  );
+  // 远端 origin/main 是当前 main 的祖先：明确按远端解析后应提示无需合并
+  await assert.rejects(
+    mergeRef({ repoPath: repo, worktreePath: repo, ref: 'origin/main', refType: 'remote' }),
+    err => err.statusCode === 409 && /已包含/.test(err.message)
+  );
+  // 本地 origin/main 指向 side：按本地解析可干净快进
+  const merged = await mergeRef({ repoPath: repo, worktreePath: repo, ref: 'origin/main', refType: 'local' });
+  assert.equal(merged.status, 'merged');
+});
+
+
+test('删除冲突文件使用字面 pathspec：文件名中的通配符不影响其它未合并文件', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'git-lens-pathspec-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const repo = path.join(root, 'repo');
+  await fs.mkdir(repo);
+  await git(repo, 'init', '-q', '-b', 'main');
+  await fs.writeFile(path.join(repo, 'a*.txt'), 'base-star\n');
+  await fs.writeFile(path.join(repo, 'ab.txt'), 'base-ab\n');
+  await git(repo, 'add', '-A');
+  await git(repo, 'commit', '-qm', 'base');
+
+  await git(repo, 'checkout', '-qb', 'work');
+  await git(repo, 'rm', '-q', 'a*.txt');
+  await git(repo, 'commit', '-qm', 'work: 删除带星号文件');
+
+  await git(repo, 'checkout', '-q', 'main');
+  await fs.writeFile(path.join(repo, 'a*.txt'), 'main-star\n');
+  await fs.writeFile(path.join(repo, 'ab.txt'), 'main-ab\n');
+  await git(repo, 'commit', '-qam', 'main: 修改两个文件');
+
+  await git(repo, 'checkout', '-q', 'work');
+  await gitFail(repo, 'merge', 'main');
+
+  // a*.txt 是删除型冲突（DU）；若按通配模式处理会连带删掉 ab.txt
+  const resolved = await resolveConflictFile({
+    worktreePath: repo, filePath: 'a*.txt', resolution: 'ours'
+  });
+  assert.equal(resolved.deleted, true);
+  await assert.rejects(fs.access(path.join(repo, 'a*.txt')));
+  assert.equal(await fs.readFile(path.join(repo, 'ab.txt'), 'utf-8'), 'main-ab\n');
+  // ab.txt 仍是未合并状态，没有被误标为已解决
+  const remaining = await git(repo, 'diff', '--name-only', '--diff-filter=U');
+  assert.equal(remaining, 'ab.txt');
+});
+
+test('getBranches 分支清单同样支持包含 | 的分支名', async (t) => {
+  const { repo } = await makeFixture(t);
+  await git(repo, 'branch', 'feat|pipe');
+
+  const { branches } = await getBranches(repo);
+  const pipe = branches.find(b => b.name === 'feat|pipe');
+  assert.ok(pipe, 'getBranches 应保留完整的 feat|pipe');
+  assert.ok(pipe.subject.includes('local:'), '提交标题不应被 | 截断');
+  assert.ok(pipe.committerTs > 0, '提交时间应解析为有效时间戳');
+});
+
+
+test('以空白字符开头的冲突路径不被 trim 截断，可正常解决', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'git-lens-space-path-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const repo = path.join(root, 'repo');
+  await fs.mkdir(repo);
+  const weirdPath = ' lead.txt';
+  await git(repo, 'init', '-q', '-b', 'main');
+  await fs.writeFile(path.join(repo, weirdPath), 'base\n');
+  await git(repo, 'add', '-A');
+  await git(repo, 'commit', '-qm', 'base');
+
+  await git(repo, 'checkout', '-qb', 'work');
+  await fs.writeFile(path.join(repo, weirdPath), 'work\n');
+  await git(repo, 'commit', '-qam', 'work');
+  await git(repo, 'checkout', '-q', 'main');
+  await fs.writeFile(path.join(repo, weirdPath), 'main\n');
+  await git(repo, 'commit', '-qam', 'main');
+  await git(repo, 'checkout', '-q', 'work');
+  await gitFail(repo, 'merge', 'main');
+
+  const state = await getMergeState(repo);
+  assert.deepEqual(state.conflictFiles.map(f => f.path), [weirdPath]);
+  assert.equal(state.conflictFiles[0].code, 'UU');
+  assert.equal(state.conflictFiles[0].oursDeleted, false);
+  assert.equal(state.conflictFiles[0].theirsDeleted, false);
+
+  const resolved = await resolveConflictFile({ worktreePath: repo, filePath: weirdPath, resolution: 'ours' });
+  assert.equal(resolved.deleted, false);
+  assert.equal(resolved.remaining, 0);
+  assert.equal(await fs.readFile(path.join(repo, weirdPath), 'utf-8'), 'work\n');
 });

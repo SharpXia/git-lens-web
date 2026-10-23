@@ -256,10 +256,10 @@ export async function getWorktrees(repoPath) {
       wt.existsOnDisk = true;
       wt.mtime = stat.mtime;
 
-      // 提取最后提交信息
-      const log = await runGit(wt.path, ['log', '-1', '--format=%cr|%an|%s']);
+      // 提取最后提交信息；用 NUL 分隔，作者名/标题里的 | 不会截断字段
+      const log = await runGit(wt.path, ['log', '-1', '--format=%cr%x00%an%x00%s']);
       if (log) {
-        const [relativeTime, author, subject] = log.split('|');
+        const [relativeTime, author, subject] = log.split('\0');
         wt.lastCommit = { relativeTime, author, subject };
       }
 
@@ -329,9 +329,20 @@ export async function detectMainBranch(repoPath, worktrees = null) {
     const symref = await runGit(repoPath, ['symbolic-ref', 'refs/remotes/origin/HEAD']);
     mainBranch = symref.split('/').pop() || 'main';
   } catch {
-    const branches = await runGit(repoPath, ['branch', '--list']);
+    // 主工作区处于 detached HEAD 且没有 origin/HEAD 时才走这里。
+    // 必须按完整分支名精确匹配：旧实现用 branch --list 的文本做 includes，
+    // 仅存在 main-feature 时会被误判成 main，导致该分支逃过主分支删除保护。
+    const branches = (await runGit(repoPath, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']))
+      .split('\n').map(name => name.trim()).filter(Boolean);
     if (branches.includes('main')) mainBranch = 'main';
     else if (branches.includes('master')) mainBranch = 'master';
+    else if (branches.length === 1) {
+      // 远端已有 main/master 时，本地唯一分支只是 feature，不能当作主干
+      const remoteTrunk = (await runGit(repoPath, ['for-each-ref', '--format=%(refname:short)', 'refs/remotes']))
+        .split('\n').map(name => name.trim()).filter(Boolean)
+        .some(name => /^[^/]+\/(main|master)$/.test(name));
+      if (!remoteTrunk) mainBranch = branches[0];
+    }
   }
   return mainBranch;
 }
@@ -730,13 +741,15 @@ export async function getBranches(repoPath) {
 
   const activeWorktreeBranches = new Set(worktrees.map(w => w.branch).filter(Boolean));
 
-  const format = '%(refname:short)|%(authordate:relative)|%(authorname)|%(subject)|%(committerdate:iso8601)';
+  // 字段用 NUL 分隔：Git 允许分支名包含 '|'，用 '|' 作分隔符会把名称截断。
+  // 每条记录以 NUL 结尾，git 追加的换行构成 "\0\n" 记录边界，可安全切分。
+  const format = '%(refname:short)%00%(authordate:relative)%00%(authorname)%00%(subject)%00%(committerdate:iso8601)%00';
   const rawBranches = await runGit(repoPath, ['for-each-ref', '--format=' + format, 'refs/heads/']);
 
   const branchRecords = [];
-  for (const line of rawBranches.split('\n')) {
+  for (const line of rawBranches.split('\0\n')) {
     if (!line.trim()) continue;
-    const [name, relativeTime, author, subject, isoDate] = line.split('|');
+    const [name, relativeTime, author, subject, isoDate] = line.split('\0');
 
     const isMain = name === mainBranch || name === 'master' || name === 'dev';
     // committerTs 供传递吸收判定做载体时间剪枝（载体 tip 必然不早于被载体）
@@ -2485,11 +2498,11 @@ export async function getStashList(worktreePath) {
     throw Object.assign(new Error('指定的 worktree 路径不存在'), { statusCode: 404 });
   }
   // %gd=stash@{n} 引用名, %h=短哈希, %cr=相对时间, %gs=stash 备注（含自定 message）
-  const output = await runGit(worktreePath, ['stash', 'list', '--format=%gd|%h|%cr|%gs']);
+  const output = await runGit(worktreePath, ['stash', 'list', '--format=%gd%x00%h%x00%cr%x00%gs']);
   if (!output) return [];
   return output.split('\n').filter(Boolean).map(line => {
-    const [ref = '', shortHash = '', relativeTime = '', ...rest] = line.split('|');
-    return { ref, shortHash, relativeTime, subject: rest.join('|') };
+    const [ref = '', shortHash = '', relativeTime = '', subject = ''] = line.split('\0');
+    return { ref, shortHash, relativeTime, subject };
   });
 }
 

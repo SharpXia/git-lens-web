@@ -284,3 +284,42 @@ test('Worktree 重命名：主工作区拒绝移动目录', async (t) => {
   assert.equal(res.status, 409);
   assert.ok(/主工作区/.test(res.body.error));
 });
+
+test('Worktree 别名接口缺少 worktreePath 时返回 400 而非 500', async (t) => {
+  const { request } = await startServer(t);
+  const { repo } = await makeFixture(t);
+
+  const meta = await request('POST', '/api/worktree-meta', { repoPath: repo, name: '缺路径' });
+  assert.equal(meta.status, 400);
+  assert.ok(/worktreePath/.test(meta.body.error));
+
+  const rename = await request('POST', '/api/worktree-rename', { repoPath: repo, name: '缺路径' });
+  assert.equal(rename.status, 400);
+  assert.ok(/worktreePath/.test(rename.body.error));
+});
+
+test('移除 Worktree 后清除别名元数据，同路径重建不继承旧名称', async (t) => {
+  const { request, configDir } = await startServer(t);
+  const { root, repo } = await makeFixture(t);
+  const wtPath = path.join(root, 'wt-reuse');
+  await request('POST', '/api/create-worktree', {
+    repoPath: repo, worktreePath: wtPath, branchMode: 'new', branchName: 'feature/reuse'
+  });
+  await request('POST', '/api/worktree-meta', { repoPath: repo, worktreePath: wtPath, name: '旧别名' });
+  const aliasKey = await fs.realpath(wtPath);
+
+  const removed = await request('POST', '/api/remove-worktree', { repoPath: repo, worktreePath: wtPath, force: true });
+  assert.equal(removed.status, 200);
+  assert.equal(removed.body.removed, true);
+
+  const storedAfterRemove = JSON.parse(await fs.readFile(path.join(configDir, 'worktree-meta.json'), 'utf-8'));
+  assert.equal(storedAfterRemove.worktrees[aliasKey], undefined, '移除后别名条目应被清理');
+
+  // 同一路径重新创建：旧别名不能借尸还魂
+  const recreated = await request('POST', '/api/create-worktree', {
+    repoPath: repo, worktreePath: wtPath, branchMode: 'new', branchName: 'feature/reuse-2'
+  });
+  assert.equal(recreated.status, 200);
+  const meta = await request('GET', '/api/worktree-meta?path=' + encodeURIComponent(repo));
+  assert.equal(meta.body.meta[await fs.realpath(wtPath)], undefined);
+});

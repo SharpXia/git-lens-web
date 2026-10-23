@@ -160,7 +160,11 @@ test('合并冲突 API 链路：merge-ref → merge-state → conflict-file → 
   const merged = await request('POST', '/api/merge-ref', { repoPath: repo, worktree: repo, ref: 'origin/feature/remote-only' });
   assert.equal(merged.status, 200);
   assert.equal(merged.body.status, 'conflict');
-  assert.ok(merged.body.conflictFiles.some(f => f.path === 'shared.txt' && f.code === 'UU'));
+  const sharedConflict = merged.body.conflictFiles.find(f => f.path === 'shared.txt');
+  assert.equal(sharedConflict?.code, 'UU');
+  // UI 依据这两个标记决定「采用」是否会落成删除
+  assert.equal(sharedConflict?.oursDeleted, false);
+  assert.equal(sharedConflict?.theirsDeleted, false);
   assert.equal(merged.body.oursLabel, 'main');
 
   // merge-state 恢复面板状态
@@ -298,4 +302,29 @@ test('分支管理新增路由：local-branches 清单、delete-remote-branch �
   assert.equal(delMain.status, 409);
   const delInvalid = await request('POST', '/api/delete-local-branch', { repoPath: repo, branch: '-evil' });
   assert.equal(delInvalid.status, 400);
+});
+
+test('POST /api/merge-ref 透传 refType 并校验取值', async (t) => {
+  const { request } = await startServer(t);
+  const { repo } = await makeFixture(t);
+
+  const invalid = await request('POST', '/api/merge-ref', {
+    repoPath: repo, worktree: repo, ref: 'origin/main', refType: 'bogus'
+  });
+  assert.equal(invalid.status, 400);
+  assert.ok(/refType/.test(invalid.body.error));
+
+  // 正向透传：本地分支与远端跟踪引用同名时，不指定类型应 409，指定 remote 后按远端解析
+  await git(repo, 'branch', 'origin/main');
+  const ambiguous = await request('POST', '/api/merge-ref', {
+    repoPath: repo, worktree: repo, ref: 'origin/main'
+  });
+  assert.equal(ambiguous.status, 409);
+  assert.ok(/同时匹配/.test(ambiguous.body.error));
+
+  const asRemote = await request('POST', '/api/merge-ref', {
+    repoPath: repo, worktree: repo, ref: 'origin/main', refType: 'remote'
+  });
+  assert.equal(asRemote.status, 409);
+  assert.ok(/已包含/.test(asRemote.body.error));
 });

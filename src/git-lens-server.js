@@ -163,8 +163,9 @@ async function getComparablePath(targetPath) {
  * @param {boolean} force - 是否强制移除
  * @param {string|null} branchName - 绑定分支名
  * @param {boolean} shouldDeleteBranch - 是否连带删除绑定分支
+ * @param {((realPath: string) => Promise<void>)|null} [onRemoved] - 移除成功后的清理回调（按移除前的 realpath 键）
  */
-async function removeWorktreeWithBranch(repoPath, worktreePath, force, branchName, shouldDeleteBranch) {
+async function removeWorktreeWithBranch(repoPath, worktreePath, force, branchName, shouldDeleteBranch, onRemoved = null) {
   if (shouldDeleteBranch) {
     if (!branchName) throw new Error('缺少待删除的绑定分支');
     const worktrees = await getWorktrees(repoPath);
@@ -181,7 +182,16 @@ async function removeWorktreeWithBranch(repoPath, worktreePath, force, branchNam
     }
   }
 
+  // 目录移除后无法再 realpath，别名键必须在移除前取好
+  const aliasKey = await getComparablePath(worktreePath);
   const result = await removeWorktree(repoPath, worktreePath, force);
+  if (result.removed && onRemoved) {
+    try {
+      await onRemoved(aliasKey);
+    } catch {
+      // Worktree 已移除且无法回滚，别名清理失败不改变移除结论
+    }
+  }
   let branchDeleted = false;
   let branchDeleteError = null;
   if (shouldDeleteBranch && result.removed) {
@@ -480,6 +490,24 @@ export function createGitLensServer(options) {
     } catch (err) {
       await fs.rm(tmp, { force: true }).catch(() => {});
       throw err;
+    }
+  }
+
+  /**
+   * 按 realpath 键清除 worktree 别名元数据。
+   * 与 setWorktreeName 的区别：移除 worktree 后目录已不存在，无法重新 realpath，
+   * 因此由调用方传入移除前取得的键。
+   * @param {string} key - worktree 的 realpath
+   */
+  async function clearWorktreeNameByKey(key) {
+    try {
+      const meta = await readWorktreeMeta();
+      if (!meta[key]) return;
+      delete meta[key];
+      await writeWorktreeMeta(meta);
+    } catch (err) {
+      // 别名清理发生在 worktree 移除之后，失败不能回滚；至少留下可定位的告警
+      log('warn', `清理 Worktree 别名失败（${key}）：${err.message}`);
     }
   }
 
@@ -848,7 +876,9 @@ export function createGitLensServer(options) {
         if (!repoPath || !worktreePath) throw new Error('Missing repoPath or worktreePath');
         let result;
         try {
-          result = await removeWorktreeWithBranch(repoPath, worktreePath, force, branchName, shouldDeleteBranch);
+          result = await removeWorktreeWithBranch(
+            repoPath, worktreePath, force, branchName, shouldDeleteBranch, clearWorktreeNameByKey
+          );
         } catch (err) {
           return sendJson(res, 400, { ok: false, error: err.message });
         }
@@ -890,7 +920,8 @@ export function createGitLensServer(options) {
               continue;
             }
             const result = await removeWorktreeWithBranch(
-              repoPath, candidate.path, false, candidate.branch, Boolean(deleteBoundBranches)
+              repoPath, candidate.path, false, candidate.branch, Boolean(deleteBoundBranches),
+              clearWorktreeNameByKey
             );
             results.push({ path: worktreePath, ...result });
           } catch (err) {
@@ -1259,9 +1290,9 @@ export function createGitLensServer(options) {
       // 13.4 合并远端/本地分支到目标工作区。干净合并直接完成（status: merged），
       // 冲突时保持 merge 现场并返回冲突清单（status: conflict），由 13.5-13.8 处理
       if (pathname === '/api/merge-ref' && req.method === 'POST') {
-        const { repoPath, worktree, ref } = await readJson();
+        const { repoPath, worktree, ref, refType } = await readJson();
         try {
-          const result = await mergeRef({ repoPath, worktreePath: worktree, ref });
+          const result = await mergeRef({ repoPath, worktreePath: worktree, ref, refType });
           return sendJson(res, 200, result);
         } catch (err) {
           const status = err.statusCode || 500;
@@ -1425,6 +1456,10 @@ export function createGitLensServer(options) {
         if (!repoPath || !(await isGitRepo(repoPath))) {
           return sendJson(res, 400, { ok: false, error: '仓库路径无效' });
         }
+        // 缺少路径时 realpath/path.resolve 会抛 TypeError 变成 500，先按参数错误拦截
+        if (typeof worktreePath !== 'string' || worktreePath.trim() === '') {
+          return sendJson(res, 400, { ok: false, error: 'worktreePath 必须为非空字符串' });
+        }
         // 目标必须是本仓库的在册 worktree，防止借元数据接口给任意路径写文件。
         // realpath 归一后比对（/tmp 与 /private/tmp 这类符号链接别名视为同一路径）
         const worktrees = await getWorktrees(repoPath);
@@ -1456,6 +1491,10 @@ export function createGitLensServer(options) {
         const { repoPath, worktreePath, name } = await readJson();
         if (!repoPath || !(await isGitRepo(repoPath))) {
           return sendJson(res, 400, { ok: false, error: '仓库路径无效' });
+        }
+        // 缺少路径时 realpath/path.resolve 会抛 TypeError 变成 500，先按参数错误拦截
+        if (typeof worktreePath !== 'string' || worktreePath.trim() === '') {
+          return sendJson(res, 400, { ok: false, error: 'worktreePath 必须为非空字符串' });
         }
         let alias = '';
         try {

@@ -4967,26 +4967,44 @@
       document.getElementById('mergeCommitBtn').disabled = conflicts.length > 0;
 
       const list = document.getElementById('remoteConflictList');
-      list.innerHTML = conflicts.map(f => `
+      list.innerHTML = conflicts.map(f => {
+        // 该侧缺少 stage 时「采用」的语义是删除（服务端按 stage 判定，UI 不自行猜冲突码），
+        // 文案必须点明，避免用户以为会恢复内容
+        const code = String(f.code || 'UU');
+        const oursLabel = f.oursDeleted ? '采用当前分支（删除文件）' : '采用当前分支';
+        const theirsLabel = f.theirsDeleted ? '采用来源分支（删除文件）' : '采用来源分支';
+        return `
         <div class="conflict-item" data-conflict-path="${escapeHtml(f.path)}">
           <div class="conflict-item-main">
             <div class="conflict-item-path">${escapeHtml(f.path)}</div>
-            <div class="item-tags"><span class="badge badge-warning">${escapeHtml(f.code)} · ${escapeHtml(f.label)}</span></div>
+            <div class="item-tags"><span class="badge badge-warning">${escapeHtml(code)} · ${escapeHtml(f.label)}</span></div>
           </div>
           <div class="conflict-item-actions">
-            <button class="btn-outline" type="button" data-cf-action="ours" title="采用当前分支（ours）版本解决该冲突">采用当前分支</button>
-            <button class="btn-outline" type="button" data-cf-action="theirs" title="采用合并来源（theirs）版本解决该冲突">采用来源分支</button>
+            <button class="btn-outline" type="button" data-cf-action="ours" title="采用当前分支（ours）版本；该侧已删除文件时执行删除">${oursLabel}</button>
+            <button class="btn-outline" type="button" data-cf-action="theirs" title="采用合并来源（theirs）版本；该侧已删除文件时执行删除">${theirsLabel}</button>
+            <button class="btn-danger" type="button" data-cf-action="delete" title="删除该文件并标记冲突已解决">删除文件</button>
             <button class="btn-primary" type="button" data-cf-action="edit" title="打开编辑器自定义修改冲突区域">编辑</button>
           </div>
         </div>
-      `).join('');
+      `;
+      }).join('');
 
       list.querySelectorAll('[data-cf-action]').forEach(btn => {
         btn.addEventListener('click', () => {
           const row = btn.closest('[data-conflict-path]');
           const filePath = row.dataset.conflictPath;
-          if (btn.dataset.cfAction === 'edit') openConflictDrawer(filePath);
-          else resolveConflictFileAction(filePath, btn.dataset.cfAction);
+          const action = btn.dataset.cfAction;
+          if (action === 'edit') {
+            openConflictDrawer(filePath);
+            return;
+          }
+          // 删除按钮，以及「采用」的是已删除该文件的一侧，都会落成删除，统一二次确认
+          const conflict = (remoteState.mergeState?.conflictFiles || []).find(item => item.path === filePath);
+          const willDelete = action === 'delete'
+            || (action === 'ours' && conflict?.oursDeleted)
+            || (action === 'theirs' && conflict?.theirsDeleted);
+          if (willDelete && !window.confirm(`确定删除冲突文件「${filePath}」并标记为已解决吗？`)) return;
+          resolveConflictFileAction(filePath, action);
         });
       });
     }
@@ -5003,7 +5021,11 @@
         });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || '处理冲突失败');
-        showToast(resolution === 'ours' ? `已采用当前分支版本：${filePath}` : `已采用来源分支版本：${filePath}`);
+        if (data.deleted) {
+          showToast(`已删除冲突文件：${filePath}`);
+        } else {
+          showToast(resolution === 'ours' ? `已采用当前分支版本：${filePath}` : `已采用来源分支版本：${filePath}`);
+        }
         refreshMergeState();
       } catch (err) {
         notifyRequestFailure(err, '处理冲突失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
@@ -5028,7 +5050,7 @@
         const res = await fetch('/api/merge-ref', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ repoPath: currentRepo, worktree, ref: branch.name })
+          body: JSON.stringify({ repoPath: currentRepo, worktree, ref: branch.name, refType: 'remote' })
         });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || '合并失败');
@@ -5739,7 +5761,7 @@
       if (data.isBinary) {
         textarea.value = '';
         textarea.disabled = true;
-        document.getElementById('conflictDrawerHint').textContent = '该文件是二进制文件，不支持文本编辑，请在冲突清单中使用「采用当前分支 / 采用来源分支」。';
+        document.getElementById('conflictDrawerHint').textContent = '该文件是二进制文件，不支持文本编辑，请在冲突清单中使用「采用当前分支 / 采用来源分支 / 删除文件」。';
         document.getElementById('conflictHunkTools').innerHTML = '';
         document.getElementById('conflictSaveBtn').disabled = true;
       } else {

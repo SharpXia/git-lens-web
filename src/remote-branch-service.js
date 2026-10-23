@@ -73,6 +73,20 @@ async function runGit(cwd, args, options = {}) {
 }
 
 /**
+ * 执行 git 命令并返回未经 trim 的 stdout，供 -z 输出使用。
+ * -z 输出以 NUL 分隔，首条记录可能以空白字符开头（空白开头的文件名合法），
+ * trim 会截断路径，导致冲突清单与索引 stage 对不上。
+ * @param {string} cwd - git 命令工作目录
+ * @param {string[]} args - git 参数数组
+ * @param {object} [options] - 额外 execFile 选项（timeout/env 等）
+ * @returns {Promise<string>}
+ */
+async function runGitRaw(cwd, args, options = {}) {
+  const { stdout } = await exec(gitExecutable, args, { cwd, maxBuffer: 20 * 1024 * 1024, ...options });
+  return stdout || '';
+}
+
+/**
  * 执行 git 命令但把失败视为普通结果（不抛错），适合探测类命令：
  * rev-parse 验证不存在的引用、merge 冲突、ls-remote 网络失败等，退出码非 0 属正常分支。
  * @param {string} cwd - git 命令工作目录
@@ -339,6 +353,67 @@ const UNMERGED_CODE_LABELS = {
 };
 
 /**
+ * 读取全部未合并路径 → 存在的 stage 集合。
+ * 与 resolveConflictFile 使用同一份索引事实，避免 UI 依据 porcelain 码猜删除侧。
+ * @param {string} wtPath - 工作区路径
+ * @returns {Promise<Map<string, Set<number>>>} 路径 → stage 集合
+ */
+async function readUnmergedStageMap(wtPath) {
+  const output = await runGitRaw(wtPath, ['ls-files', '-u', '-z']);
+  const stageMap = new Map();
+  for (const record of output.split('\0').filter(Boolean)) {
+    const tabIndex = record.indexOf('\t');
+    if (tabIndex < 0) continue;
+    const stage = Number(record.slice(0, tabIndex).split(' ')[2]);
+    const filePath = record.slice(tabIndex + 1);
+    if (!stageMap.has(filePath)) stageMap.set(filePath, new Set());
+    stageMap.get(filePath).add(stage);
+  }
+  return stageMap;
+}
+
+/**
+ * 缺少当前分支侧（stage 2）的未合并码，仅在拿不到 stage 集合时兜底使用。
+ * 注意 UA 的第二位是 A（对方新增），不能只按字母 D 判断。
+ */
+const OURS_STAGE_MISSING_CODES = new Set(['DU', 'DD', 'UA']);
+/** 缺少合并来源侧（stage 3）的未合并码 */
+const THEIRS_STAGE_MISSING_CODES = new Set(['UD', 'DD', 'AU']);
+
+/**
+ * 构造冲突文件条目，附带两侧是否已被删除，供 UI 决定按钮语义与二次确认。
+ * 是否删除以索引 stage 为准（缺少 stage 2 = 当前分支侧已删除），
+ * 不用 porcelain 码推断：UA/AU 的第二位不是 D，按字母猜会漏判。
+ * stage 集合缺失时回退到码表，避免把「未知」当成「两侧都已删除」。
+ * @param {string} filePath - 工作区相对路径
+ * @param {string} [code] - porcelain 未合并码
+ * @param {Set<number>} [stages] - 该路径存在的索引 stage 集合
+ * @returns {{path: string, code: string, label: string, oursDeleted: boolean, theirsDeleted: boolean}}
+ */
+function buildConflictFileEntry(filePath, code, stages = null) {
+  const normalized = code || 'UU';
+  const hasStages = stages instanceof Set;
+  return {
+    path: filePath,
+    code: normalized,
+    label: UNMERGED_CODE_LABELS[normalized] || '冲突',
+    oursDeleted: hasStages ? !stages.has(2) : OURS_STAGE_MISSING_CODES.has(normalized),
+    theirsDeleted: hasStages ? !stages.has(3) : THEIRS_STAGE_MISSING_CODES.has(normalized)
+  };
+}
+
+/**
+ * 生成字面 pathspec，避免文件名里的 * ? [ 等字符被 git 当通配符。
+ * 冲突文件路径来自 git 输出，属于字面路径，删除/检出时必须按字面匹配，
+ * 否则 'a*.txt' 可能连带改动同一模式命中的其它未合并文件。
+ * @param {string} filePath - 工作区相对路径
+ * @returns {string} git 字面 pathspec
+ */
+function literalPathspec(filePath) {
+  return `:(literal)${filePath}`;
+}
+
+/**
  * 读取本仓库最近一次成功 fetch 的时间（FETCH_HEAD 的修改时间）。
  * 从未 fetch 过（clone 后未拉取、无远端等）返回 null，供「合并前久未刷新提醒」使用。
  * rev-parse --git-path 自动把 worktree 路径归位到共享 .git 目录，FETCH_HEAD 为仓库级文件。
@@ -391,22 +466,24 @@ async function resolveProtectedRemoteBranches(normalizedRepo, remote) {
 export async function listRemoteBranches(repoPath) {
   const normalizedRepo = await resolveRepoPath(repoPath);
 
-  // refs/remotes 全量清单；跳过 origin/HEAD 这类符号别名与裸 remote 根引用
-  const refFormat = '%(refname)|%(objectname)|%(committerdate:iso-strict)|%(authorname)|%(contents:subject)';
+  // refs/remotes 全量清单；跳过 origin/HEAD 这类符号别名与裸 remote 根引用。
+  // 字段用 NUL 分隔：Git 允许分支名/作者名包含 '|'，文本分隔会把名称与 SHA 拆错位。
+  // 每条记录以 NUL 结尾，git 追加换行构成 "\0\n" 边界，可安全切分。
+  const refFormat = '%(refname)%00%(objectname)%00%(committerdate:iso-strict)%00%(authorname)%00%(contents:subject)%00';
   const refOutput = await runGit(normalizedRepo, ['for-each-ref', 'refs/remotes', `--format=${refFormat}`, '--sort=-committerdate']);
-  const rawRefs = refOutput.split('\n').filter(Boolean)
-    .map(line => {
-      const [refname = '', objectname = '', committerdate = '', authorname = '', ...subjectRest] = line.split('|');
-      return { refname, objectname, committerdate, authorname, subject: subjectRest.join('|') };
+  const rawRefs = refOutput.split('\0\n').filter(Boolean)
+    .map(record => {
+      const [refname = '', objectname = '', committerdate = '', authorname = '', subject = ''] = record.split('\0');
+      return { refname, objectname, committerdate, authorname, subject };
     })
     .filter(ref => /^refs\/remotes\/[^/]+\/.+/.test(ref.refname) && !/\/HEAD$/.test(ref.refname));
 
   // 本地分支头 SHA 清单，用于计算同名分支的领先/落后
-  const localOutput = await runGit(normalizedRepo, ['for-each-ref', 'refs/heads', '--format=%(refname:short)|%(objectname)']);
+  const localOutput = await runGit(normalizedRepo, ['for-each-ref', 'refs/heads', '--format=%(refname:short)%00%(objectname)%00']);
   const localHeads = new Map(
-    localOutput.split('\n').filter(Boolean).map(line => {
-      const idx = line.indexOf('|');
-      return [line.slice(0, idx), line.slice(idx + 1)];
+    localOutput.split('\0\n').filter(Boolean).map(record => {
+      const [name = '', sha = ''] = record.split('\0');
+      return [name, sha];
     })
   );
 
@@ -532,14 +609,14 @@ export async function deleteRemoteBranch({ repoPath, ref }) {
 export async function listLocalBranches(repoPath) {
   const normalizedRepo = await resolveRepoPath(repoPath);
 
-  // upstream:short 为空时该字段输出空串，split 后保持空串由调用方归一为 null
-  const refFormat = '%(refname:short)|%(objectname)|%(committerdate:iso-strict)|%(authorname)|%(contents:subject)|%(upstream:short)';
+  // upstream:short 为空时该字段输出空串，调用方归一为 null。
+  // 字段用 NUL 分隔以兼容包含 '|' 的合法分支名（记录边界为 "\0\n"）
+  const refFormat = '%(refname:short)%00%(objectname)%00%(committerdate:iso-strict)%00%(authorname)%00%(contents:subject)%00%(upstream:short)%00';
   const refOutput = await runGit(normalizedRepo, ['for-each-ref', 'refs/heads', `--format=${refFormat}`, '--sort=-committerdate']);
-  const rawRefs = refOutput.split('\n').filter(Boolean)
-    .map(line => {
-      const [name = '', objectname = '', committerdate = '', authorname = '', ...rest] = line.split('|');
-      const upstream = rest.pop() || '';
-      return { name, sha: objectname, committerdate, authorname, subject: rest.join('|'), upstream };
+  const rawRefs = refOutput.split('\0\n').filter(Boolean)
+    .map(record => {
+      const [name = '', objectname = '', committerdate = '', authorname = '', subject = '', upstream = ''] = record.split('\0');
+      return { name, sha: objectname, committerdate, authorname, subject, upstream };
     });
 
   const mainBranch = await detectMainBranch(normalizedRepo);
@@ -769,6 +846,9 @@ export async function checkoutBranch({ repoPath, worktreePath, refType, ref, loc
   if (!remoteBranch) {
     throw httpError('ref 必须是「远端/分支」形式的远端分支名', 400);
   }
+  // 远端分支名同样要过格式校验：否则 origin/main~1 这类提交表达式可能被
+  // rev-parse 当引用解析，进而以错误起点创建本地分支
+  await validateRefFormat(remoteBranch, '远端分支名', normalizedRepo);
   const remotesOutput = await runGit(normalizedRepo, ['remote']);
   if (!remotesOutput.split('\n').filter(Boolean).includes(remote)) {
     throw httpError(`未找到名为「${remote}」的远端`, 404);
@@ -808,14 +888,19 @@ export async function checkoutBranch({ repoPath, worktreePath, refType, ref, loc
  * @param {string} params.repoPath - 仓库路径
  * @param {string} params.worktreePath - 目标工作区路径
  * @param {string} params.ref - 合并来源：「远端/分支」形式或本地分支名
+ * @param {'local'|'remote'} [params.refType] - 来源类型；省略时仅在唯一命中时自动判定
  * @returns {Promise<object>} { ok, status: 'merged'|'conflict', head?, fastForward?, conflictFiles?, oursLabel?, theirsLabel? }
  */
-export async function mergeRef({ repoPath, worktreePath, ref }) {
+export async function mergeRef({ repoPath, worktreePath, ref, refType }) {
   const normalizedRepo = await resolveRepoPath(repoPath);
   const { worktreePath: wtPath } = await resolveWorktree(normalizedRepo, worktreePath);
   if (typeof ref !== 'string' || ref.trim() === '' || ref.startsWith('-')) {
     throw httpError('ref 参数不合法', 400);
   }
+  if (refType !== undefined && refType !== null && !['local', 'remote'].includes(refType)) {
+    throw httpError('refType 只允许 local / remote', 400);
+  }
+  await validateRefFormat(ref, '合并来源', normalizedRepo);
 
   // 工作区干净 + 无中间状态（与 MR 合并前置语义一致）
   const statusResult = await tryGit(wtPath, ['status', '--porcelain']);
@@ -827,21 +912,32 @@ export async function mergeRef({ repoPath, worktreePath, ref }) {
     throw httpError(`目标工作区处于 ${inProgress} 中间状态，请先完成或中止后再合并`, 409);
   }
 
-  // ref 可为本地分支或远端跟踪分支，先解析为完整引用并验证存在
+  // ref 可为本地分支或远端跟踪分支。两者可能同名（本地分支恰好叫 origin/foo），
+  // 不能默认偏向远端：refType 显式指定类型，未指定时仅在唯一命中时放行，
+  // 同时命中则 409 要求调用方明确来源。
   const remotesList = (await runGit(normalizedRepo, ['remote'])).split('\n').filter(Boolean);
-  let fullRef = null;
-  if (ref.indexOf('/') > 0) {
+  const localExists = refType === 'remote'
+    ? false
+    : (await tryGit(normalizedRepo, ['show-ref', '--verify', '--quiet', `refs/heads/${ref}`])).ok;
+  let remoteExists = false;
+  if (refType !== 'local' && ref.indexOf('/') > 0) {
     const remote = ref.slice(0, ref.indexOf('/'));
     if (remotesList.includes(remote)) {
-      fullRef = `refs/remotes/${ref}`;
+      remoteExists = (await tryGit(normalizedRepo, ['show-ref', '--verify', '--quiet', `refs/remotes/${ref}`])).ok;
     }
   }
-  if (!fullRef) {
-    fullRef = `refs/heads/${ref}`;
+  if (localExists && remoteExists) {
+    throw httpError(`「${ref}」同时匹配本地分支与远端分支，无法确定合并来源；请指定 refType 为 local 或 remote`, 409);
   }
-  const refSha = (await tryGit(normalizedRepo, ['rev-parse', '--verify', `${fullRef}^{commit}`])).stdout.trim();
+  const fullRef = localExists
+    ? `refs/heads/${ref}`
+    : remoteExists ? `refs/remotes/${ref}` : null;
+  const refSha = fullRef
+    ? (await tryGit(normalizedRepo, ['rev-parse', '--verify', `${fullRef}^{commit}`])).stdout.trim()
+    : '';
   if (!refSha) {
-    const hint = ref.indexOf('/') > 0 ? '，请先刷新远端（fetch）后重试' : '';
+    // 明确按本地解析时不要提示 fetch，否则会把排查方向引向远端
+    const hint = refType !== 'local' && ref.indexOf('/') > 0 ? '，请先刷新远端（fetch）后重试' : '';
     throw httpError(`合并来源「${ref}」不存在${hint}`, 404);
   }
 
@@ -853,7 +949,13 @@ export async function mergeRef({ repoPath, worktreePath, ref }) {
   }
   const fastForward = (await tryGit(wtPath, ['merge-base', '--is-ancestor', headSha, refSha])).ok;
 
-  const mergeResult = await tryGit(wtPath, ['merge', '--no-edit', ref]);
+  // 使用解析后的完整引用合并，避免 git 再次按同名规则自行挑选来源。
+  // 但完整引用会被 git 原样写进合并信息（refs/heads/... / refs/remotes/...），
+  // 因此显式给出与原生短名一致的文案，避免永久污染提交历史
+  const mergeMessage = remoteExists
+    ? `Merge remote-tracking branch '${ref}'`
+    : `Merge branch '${ref}'`;
+  const mergeResult = await tryGit(wtPath, ['merge', '--no-edit', '-m', mergeMessage, fullRef]);
   if (mergeResult.ok) {
     const newHead = await runGit(wtPath, ['rev-parse', 'HEAD']);
     return { ok: true, status: 'merged', head: newHead, fastForward };
@@ -866,13 +968,11 @@ export async function mergeRef({ repoPath, worktreePath, ref }) {
     throw httpError(`合并失败（现场未受影响）：${summarizeGitFailure(mergeResult.stderr || mergeResult.stdout)}`, 409);
   }
 
-  const unmergedOutput = await runGit(wtPath, ['diff', '--name-only', '--diff-filter=U', '-z']);
+  const unmergedOutput = await runGitRaw(wtPath, ['diff', '--name-only', '--diff-filter=U', '-z']);
   const statusMap = parseStatusPorcelainZ((await tryGit(wtPath, ['status', '--porcelain', '-z'])).stdout);
-  const conflictFiles = parseUnmergedPaths(unmergedOutput).map(filePath => ({
-    path: filePath,
-    code: statusMap.get(filePath) || 'UU',
-    label: UNMERGED_CODE_LABELS[statusMap.get(filePath)] || '冲突'
-  }));
+  const stageMap = await readUnmergedStageMap(wtPath);
+  const conflictFiles = parseUnmergedPaths(unmergedOutput)
+    .map(filePath => buildConflictFileEntry(filePath, statusMap.get(filePath), stageMap.get(filePath)));
   const oursLabel = (await tryGit(wtPath, ['symbolic-ref', '--short', 'HEAD'])).stdout.trim() || '当前分支';
   // theirsLabel 直接使用本次合并的请求引用：同一提交可能同时被本地分支与远端分支
   // 指向（如检出重命名后），name-rev 解析出的名称不唯一且未必是用户合并的对象
@@ -884,7 +984,8 @@ export async function mergeRef({ repoPath, worktreePath, ref }) {
  * @param {string} worktreePath - 工作区路径
  * @returns {Promise<object>} {
  *   worktreePath, inProgress: 'merge'|'cherry-pick'|'revert'|'rebase'|null,
- *   inMerge: boolean, oursLabel, theirsLabel, conflictFiles: [{path, code, label}]
+ *   inMerge: boolean, oursLabel, theirsLabel,
+ *   conflictFiles: [{path, code, label, oursDeleted, theirsDeleted}]
  * }
  */
 export async function getMergeState(worktreePath) {
@@ -917,13 +1018,11 @@ export async function getMergeState(worktreePath) {
 
   result.oursLabel = (await tryGit(worktreePath, ['symbolic-ref', '--short', 'HEAD'])).stdout.trim() || '当前分支';
   result.theirsLabel = await resolveMergeTheirsLabel(worktreePath);
-  const unmergedOutput = await runGit(worktreePath, ['diff', '--name-only', '--diff-filter=U', '-z']);
+  const unmergedOutput = await runGitRaw(worktreePath, ['diff', '--name-only', '--diff-filter=U', '-z']);
   const statusMap = parseStatusPorcelainZ((await tryGit(worktreePath, ['status', '--porcelain', '-z'])).stdout);
-  result.conflictFiles = parseUnmergedPaths(unmergedOutput).map(filePath => ({
-    path: filePath,
-    code: statusMap.get(filePath) || 'UU',
-    label: UNMERGED_CODE_LABELS[statusMap.get(filePath)] || '冲突'
-  }));
+  const stageMap = await readUnmergedStageMap(worktreePath);
+  result.conflictFiles = parseUnmergedPaths(unmergedOutput)
+    .map(filePath => buildConflictFileEntry(filePath, statusMap.get(filePath), stageMap.get(filePath)));
   return result;
 }
 
@@ -952,7 +1051,7 @@ export async function getConflictFile({ worktreePath, filePath }) {
   const absolutePath = await resolveConflictFilePath(wtReal, filePath);
 
   // 只允许读取当前真正处于未合并状态的文件，避免该接口变成任意版本内容读取器
-  const unmergedOutput = await runGit(wtReal, ['diff', '--name-only', '--diff-filter=U', '-z']);
+  const unmergedOutput = await runGitRaw(wtReal, ['diff', '--name-only', '--diff-filter=U', '-z']);
   if (!parseUnmergedPaths(unmergedOutput).includes(filePath)) {
     throw httpError('该文件不在当前冲突清单中', 404);
   }
@@ -985,18 +1084,67 @@ export async function getConflictFile({ worktreePath, filePath }) {
 }
 
 /**
- * 处理单个冲突文件并标记已解决（git add）。
+ * 读取未合并路径在索引中的 stage 集合（1=base、2=ours、3=theirs）。
+ * 删除型冲突（DU/UD/AU/UA/DD）会缺少某一侧甚至两侧的 stage，
+ * 调用方据此决定是取版本还是执行删除，不能一律 git checkout。
+ * @param {string} wtReal - 工作区 realpath
+ * @param {string} filePath - 工作区相对路径
+ * @returns {Promise<Set<number>>} 存在的 stage 编号集合
+ */
+async function readConflictStages(wtReal, filePath) {
+  const output = await runGitRaw(wtReal, ['ls-files', '-u', '-z', '--', literalPathspec(filePath)]);
+  const stages = new Set();
+  for (const record of output.split('\0').filter(Boolean)) {
+    // 记录格式：<mode> <sha> <stage>\t<path>
+    const tabIndex = record.indexOf('\t');
+    const meta = tabIndex >= 0 ? record.slice(0, tabIndex) : record;
+    const stage = Number(meta.split(' ')[2]);
+    if (stage >= 1 && stage <= 3) stages.add(stage);
+  }
+  return stages;
+}
+
+/**
+ * 以「删除文件」的方式解决冲突：清除工作区文件并移除全部未合并索引项。
+ * 删除侧没有对应 stage，git checkout --ours/--theirs 必然失败，只能走这里。
+ * @param {string} wtReal - 工作区 realpath
+ * @param {string} absolutePath - 冲突文件绝对路径
+ * @param {string} filePath - 工作区相对路径
+ */
+async function deleteConflictPath(wtReal, absolutePath, filePath) {
+  try {
+    await fs.rm(absolutePath, { force: true });
+  } catch (err) {
+    throw httpError(`删除冲突文件失败：${err.message}`, 409);
+  }
+  // 字面 pathspec：文件名中的 * ? [ 不能被当成通配模式，否则会连带删除其它未合并文件
+  const rmResult = await tryGit(wtReal, ['rm', '-f', '--', literalPathspec(filePath)]);
+  if (rmResult.ok) return;
+  // 极端情况下索引项已不在（例如被外部工具提前处理），兜底清理并再次确保文件已删除
+  const cachedResult = await tryGit(wtReal, ['rm', '--cached', '--', literalPathspec(filePath)]);
+  if (!cachedResult.ok) {
+    throw httpError(`标记删除失败：${summarizeGitFailure(cachedResult.stderr)}`, 409);
+  }
+  await fs.rm(absolutePath, { force: true });
+}
+
+/**
+ * 处理单个冲突文件并标记已解决（git add / git rm）。
  *
  * resolution 语义：
  * - 'ours'：采用当前分支版本（索引 stage 2 → git checkout --ours -- path + add）；
+ *   若当前分支已删除该文件（无 stage 2），等价于删除文件；
  * - 'theirs'：采用合并来源版本（stage 3 → git checkout --theirs -- path + add）；
- * - 'content'：写入用户编辑后的完整文件内容（须不带冲突标记由用户自行保证）+ add。
+ *   若合并来源已删除该文件（无 stage 3），等价于删除文件；
+ * - 'delete'：显式删除文件并移除未合并索引（适用于任意冲突类型）；
+ * - 'content'：写入用户编辑后的完整文件内容（须不带冲突标记由用户自行保证）+ add；
+ *   空字符串表示「写入空文件」，删除请使用 delete。
  * @param {object} params
  * @param {string} params.worktreePath - 工作区路径
  * @param {string} params.filePath - 未合并文件的工作区相对路径
- * @param {'ours'|'theirs'|'content'} params.resolution - 解决方式
+ * @param {'ours'|'theirs'|'delete'|'content'} params.resolution - 解决方式
  * @param {string} [params.content] - resolution 为 content 时的完整文件内容
- * @returns {Promise<object>} { ok, path, resolution, remaining }
+ * @returns {Promise<object>} { ok, path, resolution, deleted, remaining }
  */
 export async function resolveConflictFile({ worktreePath, filePath, resolution, content }) {
   if (typeof worktreePath !== 'string' || worktreePath.trim() === '' || !path.isAbsolute(worktreePath)) {
@@ -1011,29 +1159,43 @@ export async function resolveConflictFile({ worktreePath, filePath, resolution, 
   const wtReal = await toRealPathSafe(worktreePath);
   const absolutePath = await resolveConflictFilePath(wtReal, filePath);
 
-  if (!['ours', 'theirs', 'content'].includes(resolution)) {
-    throw httpError('resolution 只允许 ours / theirs / content', 400);
+  if (!['ours', 'theirs', 'delete', 'content'].includes(resolution)) {
+    throw httpError('resolution 只允许 ours / theirs / delete / content', 400);
   }
 
   // 每次处理都实时核对未合并清单：文件可能已被用户在别处解决，避免误覆盖
-  const unmergedOutput = await runGit(wtReal, ['diff', '--name-only', '--diff-filter=U', '-z']);
+  const unmergedOutput = await runGitRaw(wtReal, ['diff', '--name-only', '--diff-filter=U', '-z']);
   if (!parseUnmergedPaths(unmergedOutput).includes(filePath)) {
     throw httpError('该文件不在当前冲突清单中（可能已被处理）', 404);
   }
 
+  let deleted = false;
   if (resolution === 'ours' || resolution === 'theirs') {
-    const side = resolution === 'ours' ? '--ours' : '--theirs';
-    const checkoutResult = await tryGit(wtReal, ['checkout', side, '--', filePath]);
-    if (!checkoutResult.ok) {
-      throw httpError(
-        `无法采用${resolution === 'ours' ? '当前分支' : '合并来源'}版本：${summarizeGitFailure(checkoutResult.stderr)}（该冲突类型可能缺少对应一侧的版本，请改用「自定义编辑」处理）`,
-        409
-      );
+    const stage = resolution === 'ours' ? 2 : 3;
+    const sideLabel = resolution === 'ours' ? '当前分支' : '合并来源';
+    // 该侧已删除文件时没有对应 stage：采用它的语义就是「删除」，而不是 409
+    const stages = await readConflictStages(wtReal, filePath);
+    // 空集合说明索引里已没有未合并项（并发被解决）：不能把它当成「两侧都删除」误删文件
+    if (stages.size === 0) {
+      throw httpError('该文件的冲突状态已变化（可能已被处理），请刷新冲突清单后重试', 409);
     }
-    const addResult = await tryGit(wtReal, ['add', '--', filePath]);
-    if (!addResult.ok) {
-      throw httpError(`标记已解决失败：${summarizeGitFailure(addResult.stderr)}`, 409);
+    if (!stages.has(stage)) {
+      await deleteConflictPath(wtReal, absolutePath, filePath);
+      deleted = true;
+    } else {
+      const side = resolution === 'ours' ? '--ours' : '--theirs';
+      const checkoutResult = await tryGit(wtReal, ['checkout', side, '--', literalPathspec(filePath)]);
+      if (!checkoutResult.ok) {
+        throw httpError(`无法采用${sideLabel}版本：${summarizeGitFailure(checkoutResult.stderr)}`, 409);
+      }
+      const addResult = await tryGit(wtReal, ['add', '--', literalPathspec(filePath)]);
+      if (!addResult.ok) {
+        throw httpError(`标记已解决失败：${summarizeGitFailure(addResult.stderr)}`, 409);
+      }
     }
+  } else if (resolution === 'delete') {
+    await deleteConflictPath(wtReal, absolutePath, filePath);
+    deleted = true;
   } else {
     if (typeof content !== 'string') {
       throw httpError('content 必须为字符串（编辑后的完整文件内容）', 400);
@@ -1044,14 +1206,14 @@ export async function resolveConflictFile({ worktreePath, filePath, resolution, 
     } catch (err) {
       throw httpError(`写入冲突文件失败：${err.message}`, 409);
     }
-    const addResult = await tryGit(wtReal, ['add', '--', filePath]);
+    const addResult = await tryGit(wtReal, ['add', '--', literalPathspec(filePath)]);
     if (!addResult.ok) {
       throw httpError(`标记已解决失败：${summarizeGitFailure(addResult.stderr)}`, 409);
     }
   }
 
-  const remainingOutput = await runGit(wtReal, ['diff', '--name-only', '--diff-filter=U', '-z']);
-  return { ok: true, path: filePath, resolution, remaining: parseUnmergedPaths(remainingOutput).length };
+  const remainingOutput = await runGitRaw(wtReal, ['diff', '--name-only', '--diff-filter=U', '-z']);
+  return { ok: true, path: filePath, resolution, deleted, remaining: parseUnmergedPaths(remainingOutput).length };
 }
 
 /**
@@ -1068,12 +1230,14 @@ export async function commitMerge(worktreePath) {
   if (!mergeHead.ok || !mergeHead.stdout.trim()) {
     throw httpError('当前没有进行中的合并', 409);
   }
-  const unmergedOutput = await runGit(worktreePath, ['diff', '--name-only', '--diff-filter=U', '-z']);
+  const unmergedOutput = await runGitRaw(worktreePath, ['diff', '--name-only', '--diff-filter=U', '-z']);
   const remaining = parseUnmergedPaths(unmergedOutput);
   if (remaining.length > 0) {
     throw httpError(`仍有 ${remaining.length} 个冲突文件未处理，不能完成合并`, 409);
   }
-  const commitResult = await tryGit(worktreePath, ['commit', '--no-edit']);
+  // --cleanup=strip 去掉 MERGE_MSG 里的 "# Conflicts:" 注释块；
+  // 非编辑态默认只做 whitespace 清理，注释会被原样写进合并提交正文
+  const commitResult = await tryGit(worktreePath, ['commit', '--no-edit', '--cleanup=strip']);
   if (!commitResult.ok) {
     throw httpError(`提交合并失败：${summarizeGitFailure(commitResult.stderr || commitResult.stdout)}`, 409);
   }
