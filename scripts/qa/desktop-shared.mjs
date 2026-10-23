@@ -50,6 +50,17 @@ export const READY_TIMEOUT_MS = 30000;
 export const HTTP_TIMEOUT_MS = 10000;
 
 /**
+ * 侵入式桌面用例开关：系统全屏等会切换 macOS Space、遮挡整块屏幕的用例，
+ * 即使窗口按背景验证模式隐藏也会抢占用户桌面，因此移出常规回归，默认跳过。
+ * 仅在发版前等关键阶段显式设置 GIT_LENS_E2E_INTRUSIVE=1 时执行。
+ * @param {NodeJS.ProcessEnv} [env] - 读取的环境变量，默认 process.env（参数化便于单测）
+ * @returns {boolean} 是否允许执行侵入式用例
+ */
+export function intrusiveChecksEnabled(env = process.env) {
+  return env.GIT_LENS_E2E_INTRUSIVE === '1';
+}
+
+/**
  * 弹框免疫第一层（新文档桩）的注入源：把 alert/confirm/prompt 替换为无副作用
  * 桩（confirm 返回 false、prompt 返回 null，与用户取消语义一致），让
  * addScriptToEvaluateOnNewDocument 之后加载的每个新文档从源头不产生真实弹框。

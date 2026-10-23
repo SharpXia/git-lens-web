@@ -7,8 +7,13 @@ import { buildFixtures, createQaRoot, makeRunId } from '../scripts/qa/fixtures.m
 import {
   startDesktopApp, openDesktopChannel, readReadyFile, validateReady,
   pollUntil, pollUntilAsync, writeServiceScanConfig, closeAndVerify,
-  buildDesktopEnv,
+  buildDesktopEnv, intrusiveChecksEnabled,
 } from '../scripts/qa/desktop-shared.mjs';
+
+// 系统全屏会切换 macOS Space 并占满屏幕，打断用户正常使用；默认跳过，
+// 关键阶段用 GIT_LENS_E2E_INTRUSIVE=1 显式开启
+const INTRUSIVE = intrusiveChecksEnabled();
+const INTRUSIVE_SKIP_REASON = '侵入式全屏用例默认跳过，设置 GIT_LENS_E2E_INTRUSIVE=1 后执行';
 
 test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与重启恢复', { timeout: 120000 }, async (t) => {
   const runId = makeRunId();
@@ -272,7 +277,8 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
       await expectOrder([b, c, a], b);
     });
 
-    await check('全屏排序只处理指针，不启动原生拖放；退出全屏恢复标题栏拖动区', async () => {
+    await check('全屏排序只处理指针，不启动原生拖放；退出全屏恢复标题栏拖动区', async (ctx) => {
+      if (!INTRUSIVE) return ctx.skip(INTRUSIVE_SKIP_REASON);
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setFullScreen(true));
       try {
         await pollUntilAsync(() => bar.evaluate(() => document.body.classList.contains('fullscreen')), 15000);
@@ -306,7 +312,7 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
       assert.equal(await bar.evaluate(() => getComputedStyle(document.getElementById('bar')).webkitAppRegion), 'drag');
     });
 
-    await check('窗口态保留原生按钮区，全屏标签贴左并可通过系统菜单退出', async () => {
+    await check('窗口态保留原生按钮区，全屏标签贴左并可通过系统菜单退出', async (ctx) => {
       if (process.platform !== 'darwin') return;
       async function chromeBounds() {
         return app.evaluate(({ BrowserWindow }) => {
@@ -318,6 +324,8 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
       const normal = await chromeBounds();
       assert.equal(normal.fullscreen, false);
       assert.ok(normal.bar.x >= normal.buttons.x + 56, '网页视图不能覆盖原生按钮的命中区域');
+      // 窗口态断言不侵入，始终执行；之后的全屏往返仅在显式开启时执行
+      if (!INTRUSIVE) return ctx.skip(INTRUSIVE_SKIP_REASON);
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setFullScreen(true));
       try {
         await pollUntilAsync(() => bar.evaluate(() => document.body.classList.contains('fullscreen')), 15000);
