@@ -1,13 +1,17 @@
-# 🔍 Git Lens Web
+# Git Lens
 
 **看清本地 Git 仓库的 Worktree、分支和代码差异。**
 
-Git Lens Web 是一个运行在浏览器里的本地 Git 工作台：扫描你指定的 Workspace，集中查看仓库状态、Worktree、分支、提交和 Diff，再决定是否清理或执行本地 Git 操作。
+[![Release](https://img.shields.io/github/v/release/SharpXia/git-lens-web)](https://github.com/SharpXia/git-lens-web/releases)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS-black?logo=apple&logoColor=white)](https://github.com/SharpXia/git-lens-web/releases)
 
-[快速开始](#快速开始) · [功能概览](#功能概览) · [界面预览](#界面预览) · [使用指南](#使用指南) · [配置与数据](#配置与数据) · [项目结构](#项目结构)
+Git Lens 是一个 Electron 桌面应用：扫描你指定的 Workspace，集中查看仓库状态、Worktree、分支、提交和 Diff，再决定是否清理或执行本地 Git 操作。项目早期以浏览器页面形态交付，自 v1.0.0 起以桌面应用为主要形态发布，仓库名 `git-lens-web` 沿用至今。
+
+[下载安装](#下载安装) · [功能概览](#功能概览) · [界面预览](#界面预览) · [分支安全判定](#分支安全判定) · [架构](#架构) · [使用指南](#使用指南) · [Roadmap](#roadmap)
 
 > [!NOTE]
-> 文档中的动图由当前版本在临时虚构仓库中实际运行生成。动图里的仓库名、路径、提交、分支和用户均为演示数据，不对应任何真实项目。
+> 文档中的截图与动图由当前版本在临时虚构仓库中实际运行生成。图片里的仓库名、路径、提交、分支和用户均为演示数据，不对应任何真实项目。
 
 ## 为什么使用它
 
@@ -18,7 +22,50 @@ Git Lens Web 是一个运行在浏览器里的本地 Git 工作台：扫描你�
 - 对比两个分支前，常常需要先创建 Worktree；
 - 清理 Worktree、分支或未提交修改时，需要在多个 Git 命令之间切换。
 
-Git Lens Web 把这些信息放进一个本地页面，先展示事实和 Diff，再提供有确认步骤的清理、Stash、Cherry-pick、Revert 和本地 MR 操作。
+Git Lens 把这些信息放进一个本地桌面窗口，先展示事实和 Diff，再提供有确认步骤的清理、Stash、Cherry-pick、Revert 和本地 MR 操作。
+
+## 下载安装
+
+### 安装包
+
+1. 前往 [Releases](https://github.com/SharpXia/git-lens-web/releases) 下载最新版本；
+2. 按芯片选择安装包：
+   - Apple Silicon：`git-lens-web-<版本>-mac-arm64.dmg`
+   - Intel：`git-lens-web-<版本>-mac-x64.dmg`
+3. 打开 dmg，将应用拖入「应用程序」。
+
+安装包已完成 Developer ID 签名并通过 Apple 公证，可直接打开。
+
+### 校验下载文件
+
+每个 Release 附带 `SHA256SUMS.txt`。下载后与本机计算的哈希比对：
+
+```bash
+shasum -a 256 git-lens-web-1.1.4-mac-arm64.dmg
+```
+
+输出与 `SHA256SUMS.txt` 中对应行一致即可。
+
+### 自动更新
+
+应用内置更新检查：发布新版本后，应用内会收到提示并完成更新，无需重新下载安装包。
+
+### 平台支持
+
+当前提供 macOS 安装包（Apple Silicon / Intel）。Windows 与 Linux 打包在计划中，见 [Roadmap](#roadmap)。
+
+### 从源码运行
+
+环境要求：`git` 可以在终端直接调用；Node.js 版本满足 `^20.19.0 || >=22.12.0`。
+
+```bash
+git clone https://github.com/SharpXia/git-lens-web
+cd git-lens-web
+npm ci
+npx electron electron/main.js
+```
+
+仓库同时保留浏览器形态的本地服务入口：`npm start` 后访问 [http://127.0.0.1:9527](http://127.0.0.1:9527)，服务只监听本机回环地址。
 
 ## 功能概览
 
@@ -28,75 +75,95 @@ Git Lens Web 把这些信息放进一个本地页面，先展示事实和 Diff�
 | 📊 仓库总览 | 展示 Worktree、分支、失联引用和可清理项；支持仓库搜索、收藏和星标筛选。 |
 | 🌳 Worktree 管理 | 区分主工作区和派生 Worktree，显示目录状态、未提交文件、领先提交和绑定分支；支持移除 Worktree、Prune 无效引用和批量清理。 |
 | 🌿 分支透视 | 展示主分支、Worktree 占用、已合入、内容已被吸收和过期分支；支持普通删除或强制删除。 |
-| ⚡ Branch Diff | Base 和 Target 可分别选择 Worktree 或本地分支，支持 Worktree ↔ Worktree、分支 ↔ 分支以及混合比较。 |
+| ⚡ Branch Diff | Base 和 Target 可分别选择 Worktree 或本地分支，支持 Worktree ↔ Worktree、分支 ↔ 分支以及混合比较；支持 `⌘F` 源码查找（跨文件、折叠文件与长行定位）；变更文件按源码、文档、资源分类，再按后缀与 Added → Modified → Deleted → Untracked 排序。 |
 | 🧹 未提交自审 | 选择同一个 Worktree 时进入自审模式，查看未提交和未跟踪文件；支持 Stash、Pop、Drop 和丢弃全部修改。 |
 | 🔀 本地 MR | 对两个本地分支创建 Merge Request，经过通过、要求修改或拒绝后再执行 `git merge --no-ff`；冲突会自动中止并保留 MR。 |
 | 📋 提交记录 | 查看分支相对主干的领先/落后，按作者、关键词和日期过滤，按日期分组浏览，并展开提交详情和单提交 Diff。 |
 | 🍒 提交操作 | 对当前分支执行 Cherry-pick 或 Revert；冲突、空提交和不合法目标会返回中文错误，并自动恢复现场。 |
-| 🏷️ 浏览器标签识别 | 标签标题包含当前仓库和功能页；同名仓库会补充上级目录；favicon 使用统一的 Git Lens 浅色 App icon。 |
+| 🗂 多标签工作区 | 每个仓库一个标签；标签支持拖拽排序与插入位置提示，`⌘1`–`⌘9` / `⌘0` 按位置切换，标签顺序在重启后保持。 |
 
 ## 界面预览
 
-### 一段动图看完整流程
-
-下面的动图来自一组虚构 fixture，依次展示仓库总览、Branch Diff、未提交自审和本地 MR。它是当前页面的实际渲染结果，用来快速了解主要操作路径。
+下面的动图来自一组虚构 fixture，依次展示仓库总览、Branch Diff、提交记录、未提交自审和本地 MR。它是当前版本桌面窗口的实际渲染结果，用来快速了解主要操作路径。
 
 <p align="center">
-  <img src="./docs/images/readme-workflow.gif" alt="Git Lens Web 从总览到 Diff 和本地 MR 的实际界面流程" width="760">
+  <img src="./docs/images/readme-workflow.gif" alt="Git Lens 桌面版从仓库总览到 Branch Diff、提交记录、未提交自审和本地 MR 的实际界面流程" width="760">
 </p>
 
-## 快速开始
+仓库总览：左侧是 Worktree 状态（未提交修改、领先提交、内容已与主干同步），右侧是分支判定结果（已合入主干 / 内容已含入主干 / 冗余分支）。
 
-### 环境要求
+<p align="center">
+  <img src="./docs/images/desktop-overview.png" alt="仓库总览：Worktree 管理与本地分支透视" width="760">
+</p>
 
-- 已安装 Git，并且 `git` 可以在终端直接调用；
-- 已安装 npm；
-- Node.js 版本满足 `^20.19.0 || >=22.12.0`；
-- 当前机器可以访问本机浏览器。
+Branch Diff：基准与对比可分别选择 Worktree 或分支，变更文件分类展示，逐文件展开代码差异。
 
-### 启动服务
+<p align="center">
+  <img src="./docs/images/desktop-diff.png" alt="Branch Diff：主工作区与功能分支的全量对比" width="760">
+</p>
 
-```bash
-git clone YOUR_REPOSITORY_URL
-cd git-lens-web
-npm ci
-npm start
+本地 MR：审阅通过后才能合并，冲突会自动中止并保留 MR 记录。
+
+<p align="center">
+  <img src="./docs/images/desktop-mr.png" alt="本地 Merge Request 详情：审阅状态与领先提交" width="760">
+</p>
+
+## 分支安全判定
+
+删除分支前最关键的问题是：这个分支的改动是否已经以某种形式进入主干。仅凭 ahead/behind 计数会误判——被 merge、被 Cherry-pick 吸收或被 squash 压缩的分支，在提交计数上都是「领先」的。
+
+Git Lens 在 `src/git-inspector.js` 中按四层递进判定，逐层收窄：
+
+```text
+分支相对 main 领先 N 个提交
+        │
+        ▼
+① merge-base --is-ancestor ── 分支已是 main 的祖先 ────────────────→ 已合入主干
+        │ 否
+        ▼
+② tree hash 比对 ── 分支末端树与 main 完全一致 ────────────────────→ 内容已吸收
+        │ 否
+        ▼
+③ 补丁等价（git cherry）── 分支全部提交的补丁都已在 main ──────────→ 内容已吸收
+        │            （覆盖 Cherry-pick / Revert 场景）
+        ▼
+④ merge-tree 模拟三方合并 ── 模拟合并无冲突且结果树与 main 一致 ────→ 内容已吸收
+                     （覆盖 squash 与协调分支场景）
+        │ 否
+        ▼
+保持「领先 N」判定，不给出可安全删除的结论
 ```
 
-启动后打开 [http://127.0.0.1:9527](http://127.0.0.1:9527)。
+四层中任意一层命中即认为分支内容已进入主干，分支面板会给出对应的判定徽章与清理建议。判定思路的完整推导见博文：<https://xxdupup.top/posts/branch-safety-beyond-ahead-behind/>
 
-如果端口已占用，可以换一个端口：
+## 架构
 
-```bash
-PORT=8080 npm start
+```text
+┌────────────────────────────────────────────────────┐
+│ Electron 主进程                                     │
+│   窗口与融合标题栏 · 标签条 · 更新检查                │
+│   内置本地服务子进程（127.0.0.1 随机端口 + 会话凭据）  │
+└──────────────────────┬─────────────────────────────┘
+                       │ 每个仓库标签一个 WebContentsView
+┌──────────────────────▼─────────────────────────────┐
+│ 渲染层（原生 HTML / CSS / JavaScript）               │
+│   仓库总览 · Branch Diff · 本地 MR · 提交记录         │
+└──────────────────────┬─────────────────────────────┘
+                       │ HTTP（仅环回 + 会话凭据）
+┌──────────────────────▼─────────────────────────────┐
+│ Git Lens 服务（Express）                             │
+│   仓库发现 · 状态分析 · Diff · MR 状态机              │
+│   经 git CLI 读取和修改本地仓库                       │
+└────────────────────────────────────────────────────┘
 ```
 
-Windows PowerShell：
-
-```powershell
-$env:PORT=8080
-npm start
-```
-
-服务只监听本机 `127.0.0.1`。不要直接双击打开 `public/index.html`，页面需要通过本地服务访问 Git API 和系统目录选择器。
-
-### 隔离开发或测试实例
-
-测试实例必须使用独立端口和独立配置目录，避免覆盖日常使用的配置：
-
-```bash
-PORT=9528 \\
-GIT_LENS_CONFIG_DIR=/tmp/git-lens-web-dev-9528 \\
-node src/server.js
-```
-
-浏览器打开 [http://127.0.0.1:9528](http://127.0.0.1:9528)。
+本地服务由应用统一启动和退出，只监听 `127.0.0.1`，API 请求需携带主进程注入的会话凭据。仓库内容不经过任何远程服务，全部操作都发生在本机。
 
 ## 使用指南
 
 ### 1. 配置扫描目录
 
-首次打开页面时，点击「扫描目录」，使用系统目录选择器或手动输入添加一个或多个 Workspace。
+首次打开应用时，点击「扫描目录」，使用系统目录选择器或手动输入添加一个或多个 Workspace。
 
 每个扫描目录按以下规则处理：
 
@@ -112,8 +179,9 @@ node src/server.js
 - 按仓库名或路径模糊搜索；
 - 将常用仓库加入星标；
 - 只看星标仓库；
-- 使用方向键和 Enter 选择；
-- 在 URL 和当前浏览器标签页中恢复仓库、功能页和 Diff 状态。
+- 使用方向键和 Enter 选择。
+
+重新打开应用后，各标签会恢复上次的仓库与页面状态。
 
 ### 3. 查看仓库状态
 
@@ -125,7 +193,7 @@ node src/server.js
 - 分支是否已经合入、被内容吸收或长期未活动；
 - 是否存在失联 Worktree 引用和可安全清理项。
 
-领先徽章会结合祖先关系、树一致、补丁等价和 `merge-tree` 判定，避免把已经通过 Cherry-pick、Revert 或 squash 吸收的内容继续当成独有改动。
+领先徽章会结合祖先关系、树一致、补丁等价和 `merge-tree` 判定，避免把已经通过 Cherry-pick、Revert 或 squash 吸收的内容继续当成独有改动。判定细节见[分支安全判定](#分支安全判定)。
 
 ### 4. 审查 Diff
 
@@ -136,7 +204,8 @@ node src/server.js
 - **仅已提交**：只比较引用中的已提交内容；
 - **同一 Worktree**：自动进入未提交自审模式；
 - **分支 ↔ 分支**：不读取任何 Worktree 的脏数据；
-- **图片和二进制文件**：按文件类型展示，不把二进制内容当作普通文本 Diff。
+- **图片和二进制文件**：按文件类型展示，不把二进制内容当作普通文本 Diff；
+- **源码查找**：`⌘F` 在差异中定位内容，支持跨文件、折叠文件与长行。
 
 ### 5. 使用本地 MR
 
@@ -194,33 +263,32 @@ GIT_LENS_CONFIG_DIR=/tmp/git-lens-web-dev-9528
 
 本地 MR 的记录也保存于配置目录下，按仓库路径归一化后分开存储。应用不会把仓库内容上传到远程服务。
 
-## 浏览器标签识别
+## Roadmap
 
-每个浏览器标签会根据当前状态更新：
+- Windows 安装包与自动更新适配；
+- Linux 打包。
 
-- 标题格式：`仓库名 · 功能页 | Git Lens`；
-- 同名仓库标题补充扫描分组，例如 `workspace/atlas-notes`；
-- favicon 使用统一的 Git Lens 浅色 App icon；
-- 切换仓库、切换 Overview/Diff/MR、刷新或通过 URL 恢复时都会同步更新。
-
-因此同时打开多个项目时，可以通过标签文字和颜色快速定位，而不必逐个点开确认。
+以上为方向性计划，暂无时间表。
 
 ## 项目结构
 
 ```text
-public/index.html       浏览器界面、样式与交互
-src/server.js           本地 HTTP 服务、仓库发现与 API 路由
-src/git-inspector.js    Git 状态分析、Diff、提交和清理操作
+electron/main.js        Electron 主进程：窗口、标签条、内置服务与更新检查
+electron/…              标签条页面、窗口 chrome、服务配置与用户数据迁移等支撑模块
+public/index.html       渲染层界面、样式与交互
+src/server.js           服务入口（浏览器形态）
+src/git-lens-server.js  本地 HTTP 服务、仓库发现与 API 路由
+src/git-inspector.js    Git 状态分析、分支判定、Diff、提交和清理操作
 src/merge-request-service.js
                         本地 MR 状态机和 Git 合并流程
 src/merge-request-store.js
                         本地 MR 持久化
-scripts/                fixture 构建与 HTTP 验证脚本
+scripts/qa/             桌面与浏览器形态的隔离 E2E 测试
 test/                   Git 状态、Diff、MR、Stash 和清理测试
-docs/images/            README 界面流程动图
+docs/images/            README 界面截图与流程动图
 ```
 
-当前前端使用原生 HTML、CSS 和 JavaScript，服务通过 `npm start` 直接运行，无需先生成前端构建产物。Node 服务通过 Git CLI 读取和修改本地仓库。
+渲染层使用原生 HTML、CSS 和 JavaScript，无需前端构建产物；服务通过 git CLI 读取和修改本地仓库。
 
 ## 验证
 
@@ -230,13 +298,17 @@ docs/images/            README 界面流程动图
 # 首次运行时安装图片预览回归测试使用的浏览器
 npx playwright install chromium
 node --test
+
+# 桌面端隔离 E2E（qa-root、配置与用户数据全部独立）
+npm run test:desktop:isolated
+npm run test:desktop:full
 ```
 
 集成验证脚本需要先启动隔离服务，并将测试配置目录指向同一份 `GIT_LENS_CONFIG_DIR`。具体命令和 fixture 构建方式见：
 
 - [本地 MR 与 Branch Diff 验证说明](./docs/local-mr-branch-diff.md)
-- [Worktree 提交记录入口方案](./docs/proposals/worktree-commits-entry.md)
+- [Worktree 提交记录入口方案](./docs/design-worktree-commit-history-entry.md)
 
 ## 许可证
 
-本项目使用仓库中的 [LICENSE](./LICENSE)。
+本项目以 [Apache License 2.0](./LICENSE) 发布。
