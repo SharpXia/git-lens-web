@@ -35,6 +35,9 @@ function assertTabId(value) {
 /** 更新进度的合法阶段（download 阶段必带 0-100 的 percent） */
 const UPDATE_PHASES = ['download', 'verify', 'ready'];
 
+/** 全屏态窗口控制红绿灯支持的合法动作 */
+const WINDOW_CONTROL_ACTIONS = ['close', 'minimize', 'leave-fullscreen'];
+
 const gitLensTabbar = {
   /**
    * 订阅标签集合变化（含当前激活态）。
@@ -152,6 +155,18 @@ const gitLensTabbar = {
   setDragging(dragging) {
     if (typeof dragging !== 'boolean') throw new TypeError('标签拖动状态必须是布尔值');
     ipcRenderer.send('git-lens-tabbar:drag-state', dragging);
+  },
+
+  /**
+   * 请求执行窗口控制动作（macOS 全屏态常驻红绿灯：关闭窗口 / 最小化 / 退出全屏）。
+   * @param {'close'|'minimize'|'leave-fullscreen'} action - 窗口控制动作
+   * @returns {void} 经 IPC 通知主进程执行对应窗口操作
+   */
+  windowControl(action) {
+    if (!WINDOW_CONTROL_ACTIONS.includes(action)) {
+      throw new TypeError('gitLensTabbar.windowControl 的动作参数不合法');
+    }
+    ipcRenderer.send('git-lens-tabbar:window-control', action);
   },
 };
 

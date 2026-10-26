@@ -163,6 +163,8 @@ let mainWindow = null;
 let tabbarView = null;
 /** 拖动期间将标签条临时扩展为透明浮层，承载窗口内跟随鼠标的预览。 */
 let tabbarDragActive = false;
+/** 标签条当前全屏布局态（由 will-enter/enter 与 will-leave/leave 统一驱动，避免过渡期 resize 与全屏事件脱节抖动） */
+let tabbarFullscreen = false;
 /** 最近一次更新进度载荷（null=空闲）；标签条重建或晚就绪时经 did-finish-load 回发对齐 */
 let lastUpdateProgress = null;
 /** 内容标签集合：每个标签一个 WebContentsView（契约 §15） */
@@ -698,14 +700,14 @@ function isTabbarSender(sender) {
 }
 
 /**
- * 向标签条推送当前窗口全屏态（契约 §17.1.1：macOS 全屏时系统隐藏红绿灯，
- * 标签条需取消 78px 左侧安全区让标签吸附靠左，退出全屏恢复）。
+ * 向标签条推送当前窗口全屏态（契约 §17.1.1：macOS 全屏时系统收起原生红绿灯，
+ * 由标签条左侧渲染常驻红绿灯控件组，退出全屏切回窗口态原生红绿灯）。
  * 载荷固定为 `{ fullscreen: <Boolean> }`；标签条未就绪（加载中/已销毁）时
  * 静默跳过——其 did-finish-load 会同步一次当前全屏态，不会永久失步。
  */
 function pushTabbarFullscreen() {
   if (!isViewAlive(tabbarView) || !mainWindow || mainWindow.isDestroyed()) return;
-  tabbarView.webContents.send('git-lens-tabbar:fullscreen-changed', { fullscreen: mainWindow.isFullScreen() === true });
+  tabbarView.webContents.send('git-lens-tabbar:fullscreen-changed', { fullscreen: tabbarFullscreen });
 }
 
 /**
@@ -719,14 +721,22 @@ function pushTabbarUpdateProgress() {
 }
 
 /**
- * 同步视图边界；macOS 窗口态让出按钮区，全屏让出系统顶边并恢复标签贴左。
- * 透明网页同样拦截原生命中，因此保留区必须位于视图边界之外。
+ * 同步视图边界；macOS 窗口态在视图外让出原生按钮区，全屏态由标签条内嵌常驻红绿灯。
+ * macOS 进入/退出全屏的过渡动画起点会先触发 resize（此时 isFullScreen() 已翻转为目标值），
+ * 约 600ms 后动画结束才触发 enter/leave-full-screen；在 syncTabBounds 内先于 setBounds
+ * 同步推送全屏态，确保过渡首帧即完成红绿灯与视图边界切换，动画落地时零二次跳动。
  */
 function syncTabBounds() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
+  const fullscreen = mainWindow.isFullScreen() === true;
+  if (tabbarFullscreen !== fullscreen) {
+    tabbarFullscreen = fullscreen;
+    tabbarDragActive = false;
+    pushTabbarFullscreen();
+  }
   const { width, height } = mainWindow.getContentBounds();
-  const controlsWidth = process.platform === 'darwin' && !mainWindow.isFullScreen() ? MAC_WINDOW_CONTROLS_WIDTH_DIP : 0;
-  const topInset = process.platform === 'darwin' && mainWindow.isFullScreen() ? MAC_FULLSCREEN_TOP_INSET_DIP : 0;
+  const controlsWidth = process.platform === 'darwin' && !fullscreen ? MAC_WINDOW_CONTROLS_WIDTH_DIP : 0;
+  const topInset = process.platform === 'darwin' && fullscreen ? MAC_FULLSCREEN_TOP_INSET_DIP : 0;
   const contentTop = topInset + TABBAR_HEIGHT;
   const contentHeight = Math.max(0, height - contentTop);
   if (isViewAlive(tabbarView)) {
@@ -1390,7 +1400,7 @@ function createMainWindow() {
     // showInactive；focusable:false 保证窗口永远不会成为 key window
     show: !e2eBackgroundWindow,
     ...(e2eBackgroundWindow ? { focusable: false } : {}),
-    backgroundColor: '#0d1117',
+    backgroundColor: '#010409',
     // 契约 §17：窗口 chrome 融合——标签条兼任标题栏。darwin 用 hiddenInset 隐藏
     // 原生标题栏并把红绿灯压进 38px 标签条（trafficLightPosition 近似垂直居中）；
     // win/linux 用系统绘制的 titleBarOverlay（⚠️ 真机未验收，契约 §1 平台矩阵）。
@@ -1417,6 +1427,7 @@ function createMainWindow() {
     mainWindow = null;
     tabbarView = null;
     tabbarDragActive = false;
+    tabbarFullscreen = false;
     // 内容视图随窗口一起销毁；清空集合，避免二次启动/激活路径引用已销毁视图
     tabs.length = 0;
     activeTabId = null;
@@ -1426,7 +1437,7 @@ function createMainWindow() {
   for (const event of ['resize', 'maximize', 'unmaximize']) {
     mainWindow.on(event, syncTabBounds);
   }
-  // 全屏切换时结束拖动并同步原生保留区，窗口态让位红绿灯、全屏态恢复标签贴左。
+  // 全屏切换兜底同步：过渡起点已由 resize 内的 syncTabBounds 同步推送，这里在动画结束时做幂等对齐。
   for (const event of ['enter-full-screen', 'leave-full-screen']) {
     mainWindow.on(event, () => {
       setTabbarDragging(false);
@@ -1434,6 +1445,7 @@ function createMainWindow() {
       pushTabbarFullscreen();
     });
   }
+  tabbarFullscreen = mainWindow.isFullScreen() === true;
   tabbarView = createTabbarView();
   mainWindow.contentView.addChildView(tabbarView);
   syncTabBounds();
@@ -1939,6 +1951,25 @@ function registerIpc() {
   ipcMain.on('git-lens-tabbar:drag-state', (event, dragging) => {
     if (!isTabbarSender(event.sender) || typeof dragging !== 'boolean') return;
     setTabbarDragging(dragging);
+  });
+
+  ipcMain.on('git-lens-tabbar:window-control', (event, action) => {
+    if (!isTabbarSender(event.sender)) return;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (action === 'close') {
+      mainWindow.close();
+    } else if (action === 'minimize') {
+      if (mainWindow.isFullScreen()) {
+        mainWindow.once('leave-full-screen', () => {
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize();
+        });
+        mainWindow.setFullScreen(false);
+      } else {
+        mainWindow.minimize();
+      }
+    } else if (action === 'leave-fullscreen') {
+      if (mainWindow.isFullScreen()) mainWindow.setFullScreen(false);
+    }
   });
 }
 

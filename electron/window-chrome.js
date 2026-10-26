@@ -10,8 +10,8 @@
 export const TABBAR_HEIGHT_DIP = 38;
 /** 原生窗口按钮区必须在网页视图之外保留，网页内边距不会让鼠标穿透。 */
 export const MAC_WINDOW_CONTROLS_WIDTH_DIP = 78;
-/** 全屏时为系统菜单栏和原生标题栏保留顶边触发区域。 */
-export const MAC_FULLSCREEN_TOP_INSET_DIP = 4;
+/** 全屏时由标签栏左侧常驻红绿灯提供窗口控制，顶边保持 0 偏移以避免进出全屏时纵向跳动。 */
+export const MAC_FULLSCREEN_TOP_INSET_DIP = 0;
 
 /**
  * 按平台返回主窗口 chrome 融合选项（契约 §17），展开进 BrowserWindow 构造参数。

@@ -306,7 +306,7 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
       assert.equal(await bar.evaluate(() => getComputedStyle(document.getElementById('bar')).webkitAppRegion), 'drag');
     });
 
-    await check('窗口态保留原生按钮区，全屏标签贴左并可通过系统菜单退出', async () => {
+    await check('窗口态保留原生按钮区，全屏态保留常驻红绿灯并可点击退出全屏', async () => {
       if (process.platform !== 'darwin') return;
       async function chromeBounds() {
         return app.evaluate(({ BrowserWindow }) => {
@@ -318,21 +318,39 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
       const normal = await chromeBounds();
       assert.equal(normal.fullscreen, false);
       assert.ok(normal.bar.x >= normal.buttons.x + 56, '网页视图不能覆盖原生按钮的命中区域');
+      assert.equal(await bar.evaluate(() => getComputedStyle(document.getElementById('window-controls')).display), 'none');
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setFullScreen(true));
       try {
         await pollUntilAsync(() => bar.evaluate(() => document.body.classList.contains('fullscreen')), 15000);
         const full = await chromeBounds();
-        assert.equal(full.bar.x, 0, '全屏标签必须吸附靠左');
-        assert.equal(await bar.evaluate(() => getComputedStyle(document.getElementById('bar')).paddingLeft), '0px');
-        assert.ok(full.bar.y > 0, '全屏顶边由原生窗口持有，允许唤回系统标题栏和菜单栏');
-        assert.equal(await bar.evaluate(() => document.querySelector('[id="exit-fullscreen"]')), null);
-        await menu('toggle-fullscreen');
+        assert.equal(full.bar.x, 0, '全屏标签条视图从窗口左边缘开始以承载自绘红绿灯');
+        assert.equal(full.bar.y, 0, '全屏顶边保持 0 偏移，进出全屏无纵向跳动');
+        const controls = await bar.evaluate(() => {
+          const el = document.getElementById('window-controls');
+          const rect = el.getBoundingClientRect();
+          const firstTab = document.querySelector('.tab').getBoundingClientRect();
+          const actions = Array.from(el.querySelectorAll('[data-window-action]'), (btn) => btn.dataset.windowAction);
+          return {
+            display: getComputedStyle(el).display,
+            width: Math.round(rect.width),
+            firstTabLeft: Math.round(firstTab.left),
+            actions,
+          };
+        });
+        assert.deepEqual(controls, {
+          display: 'flex',
+          width: 78,
+          firstTabLeft: 78,
+          actions: ['close', 'minimize', 'leave-fullscreen'],
+        });
+        await bar.evaluate(() => document.querySelector('[data-window-action="leave-fullscreen"]').click());
         await pollUntilAsync(async () => !(await chromeBounds()).fullscreen, 15000);
         await pollUntilAsync(() => bar.evaluate(() => !document.body.classList.contains('fullscreen')), 15000);
         const restored = await chromeBounds();
         assert.equal(restored.bar.x, normal.bar.x);
         assert.equal(restored.bar.y, 0);
         assert.equal(restored.bar.height, 38);
+        assert.equal(await bar.evaluate(() => getComputedStyle(document.getElementById('window-controls')).display), 'none');
       } finally {
         await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setFullScreen(false));
       }

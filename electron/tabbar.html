@@ -27,9 +27,64 @@
   }
   /* 契约 §17：交互元素一律 no-drag（标签项、关闭 ×、新建 +），保证点击可达 */
   .tab, .tab-close, #new-tab { -webkit-app-region: no-drag; }
-  /* 原生红绿灯区由主进程在视图边界外保留，全屏时取消该区域以保持标签贴左。 */
+  #window-controls, .traffic-light { -webkit-app-region: no-drag; }
+  /* 窗口态原生红绿灯区由主进程在视图边界外保留（78px）；macOS 全屏态系统收起原生红绿灯，
+     由 #window-controls 在标签栏左侧原位（78px）渲染常驻红绿灯，保持左上角操作与标签对齐一致。 */
   /* 全屏标签栏贴着屏幕顶边，空白处也不能启动系统窗口拖动与桌面选择。 */
   body.fullscreen[data-platform="darwin"] #bar { -webkit-app-region: no-drag; }
+  #window-controls {
+    display: none;
+    flex: none;
+    box-sizing: border-box;
+    width: 78px;
+    padding-left: 12px;
+    align-items: center;
+    gap: 8px;
+  }
+  body.fullscreen[data-platform="darwin"] #window-controls {
+    display: flex;
+  }
+  .traffic-light {
+    position: relative;
+    width: 12px;
+    height: 12px;
+    padding: 0;
+    margin: 0;
+    border-radius: 50%;
+    border: 0.5px solid rgba(0, 0, 0, 0.22);
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    outline: none;
+  }
+  .traffic-light.close {
+    background: #ff5f57;
+    color: #4c0002;
+  }
+  .traffic-light.close:active { background: #bf4942; }
+  .traffic-light.minimize {
+    background: #febc2e;
+    color: #5c4002;
+  }
+  .traffic-light.minimize:active { background: #bf8e22; }
+  .traffic-light.fullscreen {
+    background: #28c840;
+    color: #004d0d;
+  }
+  .traffic-light.fullscreen:active { background: #1d9730; }
+  .traffic-light svg {
+    width: 8px;
+    height: 8px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.1s ease;
+  }
+  #window-controls:hover .traffic-light svg,
+  .traffic-light:focus-visible svg {
+    opacity: 1;
+  }
   /* 非 darwin（含 unknown 回落）：右侧为系统 overlay 窗口控制按钮留位（≥140px，
      契约 §17；win/linux 真机未验收） */
   body:not([data-platform="darwin"]) #bar { padding-right: 140px; }
@@ -167,6 +222,23 @@
 </head>
 <body>
 <div id="bar" role="tablist" aria-label="标签页">
+  <div id="window-controls" role="group" aria-label="窗口控制">
+    <button type="button" class="traffic-light close" data-window-action="close" title="关闭窗口" aria-label="关闭窗口">
+      <svg viewBox="0 0 8 8" aria-hidden="true">
+        <path d="M1.5 1.5L6.5 6.5M6.5 1.5L1.5 6.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <button type="button" class="traffic-light minimize" data-window-action="minimize" title="最小化" aria-label="最小化">
+      <svg viewBox="0 0 8 8" aria-hidden="true">
+        <path d="M1.25 4H6.75" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <button type="button" class="traffic-light fullscreen" data-window-action="leave-fullscreen" title="退出全屏 (⌃⌘F)" aria-label="退出全屏">
+      <svg viewBox="0 0 8 8" aria-hidden="true">
+        <path d="M1.2 4.6H3.4V6.8M6.8 3.4H4.6V1.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+  </div>
   <div id="tabs"></div>
   <div id="update-badge" role="status" aria-live="polite"></div>
   <button id="new-tab" type="button" title="新建标签页 (⌘T)" aria-label="新建标签页">+</button>
@@ -412,10 +484,17 @@
 
   window.gitLensTabbar.onTabsChanged(render);
   // 契约 §17.1.1：订阅窗口全屏态（主进程在进出全屏及本页加载完成时推送），
-  // 禁用全屏标签区的窗口拖动；贴左布局和原生顶边保留区由主进程同步。
+  // 禁用全屏标签区的窗口拖动，并在 macOS 全屏态下展示左上角常驻红绿灯。
   window.gitLensTabbar.onFullscreenChanged(function (fullscreen) {
     finishDrag();
     document.body.classList.toggle('fullscreen', Boolean(fullscreen));
+  });
+
+  var windowControlsEl = document.getElementById('window-controls');
+  windowControlsEl.addEventListener('click', function (event) {
+    var button = event.target.closest('[data-window-action]');
+    if (!button) return;
+    window.gitLensTabbar.windowControl(button.dataset.windowAction);
   });
 
   var updateTrack = document.getElementById('update-progress-track');
