@@ -15,12 +15,12 @@
 | G5 安装与升级（macOS） | ✅ 通过（含未验收项） | arm64 打包态实装 34/34 断言（asar/utilityProcess/preload/静态资源/Git 探测/退出协议）；x64 挂载+签名校验；见 §4 未验收清单 |
 | G6 合并验收 | ✅ 本报告 | 缺陷 P0/P1/P2 清零；P3 一项留观（DEF-003）；证据可复核（命令见 §5） |
 
-最终协调 HEAD 全量验收组合（2026-09-27 全部通过）：`node --test test/*.test.mjs` 108/108；`npm run test:isolated` 22/22；`node electron/checks/smoke.mjs` 22/22；`npm run test:desktop:isolated` 16 pass/0 fail/1 skip；`npm run test:desktop:full` 30 pass/0 fail/1 skip。
+最终协调 HEAD 全量验收组合（2026-09-27 全部通过）：`node --test test/*.test.mjs` 108/108；`pnpm run test:isolated` 22/22；`node electron/checks/smoke.mjs` 22/22；`pnpm run test:desktop:isolated` 16 pass/0 fail/1 skip；`pnpm run test:desktop:full` 30 pass/0 fail/1 skip。
 
 ## 2. 交付物
 
 - **桌面应用（Electron 44.4.5）**：`electron/` 主进程（单实例锁、utilityProcess 服务监督与崩溃恢复、凭据注入、导航/权限管控、原生菜单与目录选择、窗口状态持久化）、`preload.cjs`（契约 §6 受控 IPC）、E2E 钩子（契约 §13）。
-- **服务层**：`src/git-lens-server.js` 工厂（可注入配置/凭据/目录选择器/gitPath/静态根，CSP、访问边界、握手、diagnostics、静态资源路由）；`src/server.js` 薄 CLI（`npm start` 语义不变，浏览器模式保留）。
+- **服务层**：`src/git-lens-server.js` 工厂（可注入配置/凭据/目录选择器/gitPath/静态根，CSP、访问边界、握手、diagnostics、静态资源路由）；`src/server.js` 薄 CLI（`pnpm start` 语义不变，浏览器模式保留）。
 - **页面**：`public/` 外置 `app.js`/`app.css`（CSP 合规）、桌面适配（运行时信息、外链、服务状态遮罩）、Git 元数据转义加固（92 处内联事件迁移为监听器/委托）。
 - **QA 基建**：fail-closed 守卫模块与单测、fixture 生成器（含恶意元数据/特殊字符/写操作矩阵素材）、四个验收入口（`test:isolated` / `test:desktop:isolated` / `test:desktop:full` / 桌面壳 smoke）、视觉基线 12 张。
 - **打包**：`electron-builder.yml` + 产物 4 件（v1.0.0）：
@@ -56,11 +56,11 @@
 
 ```bash
 GIT_LENS_CONFIG_DIR=/tmp/glwt-verify/config node --test test/*.test.mjs   # 108 项
-npm run test:isolated                    # web 冒烟 22 项
+pnpm run test:isolated                    # web 冒烟 22 项
 node electron/checks/smoke.mjs           # 桌面壳 22 断言
-npm run test:desktop:isolated            # 桌面隔离 E2E
-npm run test:desktop:full                # 桌面全量功能矩阵（含 --strict-csp）
-npx electron-builder --mac               # 复现打包产物并比对 SHA-256
+pnpm run test:desktop:isolated            # 桌面隔离 E2E
+pnpm run test:desktop:full                # 桌面全量功能矩阵（含 --strict-csp）
+pnpm exec electron-builder --mac               # 复现打包产物并比对 SHA-256
 ```
 
 视觉基线与逐场景报告由各入口的 `--keep` 模式保留于 qa-root `artifacts/`。
@@ -70,6 +70,6 @@ npx electron-builder --mac               # 复现打包产物并比对 SHA-256
 - **范围**：契约 §15（WebContentsView 多 tab）——单窗口多标签、每标签独立应用视图与 sessionStorage、共享服务与凭据（defaultSession 过滤覆盖全部标签）、标签条 chrome UI（tabbar.html，主进程持有）、⌘T/⌘W/Ctrl±Tab、关闭最后一个标签等同退出；`public/**` 页面零改动。
 - **分支**：`codex/electron-multitab`（Shell 实现 70e500b/42364de/cc39aba）+ `codex/electron-qa`（E2E 迁移 CDP 通道 275448a/c4ae759），静态审核通过后 `--no-ff` 合入协调分支。
 - **静态审核结论**：契约逐条符合；tabbar 通道带 sender 校验；各视图同强度导航/新窗管控；恢复遮罩升级为逐标签注入；无注入面（动态文案全部 textContent/JSON 字面量化）。连带集成修正：electron-builder.yml 白名单补入 tabbar 两文件。
-- **验收结果（协调 HEAD）**：`node --test` 112/112；`npm run test:isolated` 22/22；`node electron/checks/smoke.mjs` **36/36**（原 22 + 多标签生命周期 14）；`npm run test:desktop:isolated` 16 pass/0 fail/1 skip；`npm run test:desktop:full` **36 pass/0 fail/1 skip**（新增 m1–m6：三标签同源、标题与激活态同步、sessionStorage 按标签隔离、中间标签关闭销毁与就近激活、全关退出协议、多标签 strict-CSP 零违规）。
+- **验收结果（协调 HEAD）**：`node --test` 112/112；`pnpm run test:isolated` 22/22；`node electron/checks/smoke.mjs` **36/36**（原 22 + 多标签生命周期 14）；`pnpm run test:desktop:isolated` 16 pass/0 fail/1 skip；`pnpm run test:desktop:full` **36 pass/0 fail/1 skip**（新增 m1–m6：三标签同源、标题与激活态同步、sessionStorage 按标签隔离、中间标签关闭销毁与就近激活、全关退出协议、多标签 strict-CSP 零违规）。
 - **契约第一次修订**：§15 E2E 通道改为页面级 CDP 直连（playwright 与 Electron 44 的 browser 级 CDP 会话挂起，`connectOverCDP` 不可用）；补充标签激活语义（关闭激活态标签时就近激活，关后台标签不改激活）。
 - **人工清单新增**：⌘T/⌘W/⇧⌘W/Ctrl±Tab 原生加速键实点；新建标签「新标签页」瞬态标题；打包态（dmg）下的标签条渲染需在下次构建时复验一次（白名单已修正，未重新出包）。

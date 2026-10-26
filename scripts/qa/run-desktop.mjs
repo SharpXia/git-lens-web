@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * run-desktop.mjs —— 桌面端隔离 E2E 快速冒烟入口（契约 §8.3/§13/§15，`npm run test:desktop:isolated`）
+ * run-desktop.mjs —— 桌面端隔离 E2E 快速冒烟入口（契约 §8.3/§13/§15，`pnpm run test:desktop:isolated`）
  *
  * 流程：mkdtemp qa-root → fixture → 预写扫描目录配置 → 注入 E2E 钩子环境启动应用
  * （含 --remote-debugging-port=0）→ 就绪文件取端口（禁止猜端口）→ CDP 通道读取调试
@@ -11,11 +11,11 @@
  * 页面通道：多标签架构（§15）下 BrowserWindow 是空壳，应用页经
  * desktop-shared 的页面级 CDP 会话驱动；`_electron` 句柄仅用于 app 级操作。
  *
- * G4 功能矩阵全量场景见 run-desktop-full.mjs（`npm run test:desktop:full`），
+ * G4 功能矩阵全量场景见 run-desktop-full.mjs（`pnpm run test:desktop:full`），
  * 两者共享 scripts/qa/desktop-shared.mjs 基建。
  *
  * 用法：
- *   npm run test:desktop:isolated          # 常规入口
+ *   pnpm run test:desktop:isolated          # 常规入口
  *   node scripts/qa/run-desktop.mjs --keep       # 成功时也保留 qa-root（调试用）
  *   node scripts/qa/run-desktop.mjs --strict-csp # CSP 违规从「记录基线」切换为硬断言
  *

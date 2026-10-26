@@ -256,10 +256,10 @@ export async function getWorktrees(repoPath) {
       wt.existsOnDisk = true;
       wt.mtime = stat.mtime;
 
-      // 提取最后提交信息
-      const log = await runGit(wt.path, ['log', '-1', '--format=%cr|%an|%s']);
+      // 提取最后提交信息；用 NUL 分隔，作者名/标题里的 | 不会截断字段
+      const log = await runGit(wt.path, ['log', '-1', '--format=%cr%x00%an%x00%s']);
       if (log) {
-        const [relativeTime, author, subject] = log.split('|');
+        const [relativeTime, author, subject] = log.split('\0');
         wt.lastCommit = { relativeTime, author, subject };
       }
 
@@ -317,10 +317,10 @@ export async function getWorktrees(repoPath) {
 }
 
 /**
- * 获取当前主工作区对应的比较分支。
+ * 获取当前主工作区对应的比较分支。导出供远端分支管理域服务复用（远端分支相对主干的领先/落后统计）。
  * 同一仓库可能长期在版本分支开发，origin/HEAD 未必是当前要观察的主干。
  */
-async function detectMainBranch(repoPath, worktrees = null) {
+export async function detectMainBranch(repoPath, worktrees = null) {
   const mainWorktree = (worktrees || await getWorktrees(repoPath)).find(wt => wt.isMain && wt.branch);
   if (mainWorktree) return mainWorktree.branch;
 
@@ -329,9 +329,20 @@ async function detectMainBranch(repoPath, worktrees = null) {
     const symref = await runGit(repoPath, ['symbolic-ref', 'refs/remotes/origin/HEAD']);
     mainBranch = symref.split('/').pop() || 'main';
   } catch {
-    const branches = await runGit(repoPath, ['branch', '--list']);
+    // 主工作区处于 detached HEAD 且没有 origin/HEAD 时才走这里。
+    // 必须按完整分支名精确匹配：旧实现用 branch --list 的文本做 includes，
+    // 仅存在 main-feature 时会被误判成 main，导致该分支逃过主分支删除保护。
+    const branches = (await runGit(repoPath, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']))
+      .split('\n').map(name => name.trim()).filter(Boolean);
     if (branches.includes('main')) mainBranch = 'main';
     else if (branches.includes('master')) mainBranch = 'master';
+    else if (branches.length === 1) {
+      // 远端已有 main/master 时，本地唯一分支只是 feature，不能当作主干
+      const remoteTrunk = (await runGit(repoPath, ['for-each-ref', '--format=%(refname:short)', 'refs/remotes']))
+        .split('\n').map(name => name.trim()).filter(Boolean)
+        .some(name => /^[^/]+\/(main|master)$/.test(name));
+      if (!remoteTrunk) mainBranch = branches[0];
+    }
   }
   return mainBranch;
 }
@@ -730,13 +741,15 @@ export async function getBranches(repoPath) {
 
   const activeWorktreeBranches = new Set(worktrees.map(w => w.branch).filter(Boolean));
 
-  const format = '%(refname:short)|%(authordate:relative)|%(authorname)|%(subject)|%(committerdate:iso8601)';
+  // 字段用 NUL 分隔：Git 允许分支名包含 '|'，用 '|' 作分隔符会把名称截断。
+  // 每条记录以 NUL 结尾，git 追加的换行构成 "\0\n" 记录边界，可安全切分。
+  const format = '%(refname:short)%00%(authordate:relative)%00%(authorname)%00%(subject)%00%(committerdate:iso8601)%00';
   const rawBranches = await runGit(repoPath, ['for-each-ref', '--format=' + format, 'refs/heads/']);
 
   const branchRecords = [];
-  for (const line of rawBranches.split('\n')) {
+  for (const line of rawBranches.split('\0\n')) {
     if (!line.trim()) continue;
-    const [name, relativeTime, author, subject, isoDate] = line.split('|');
+    const [name, relativeTime, author, subject, isoDate] = line.split('\0');
 
     const isMain = name === mainBranch || name === 'master' || name === 'dev';
     // committerTs 供传递吸收判定做载体时间剪枝（载体 tip 必然不早于被载体）
@@ -892,6 +905,279 @@ export async function removeWorktree(repoPath, worktreePath, force = false) {
   await runGit(repoPath, args);
   const stillExists = await checkWorktreeExists(repoPath, worktreePath);
   return { removed: !stillExists, worktreePath };
+}
+
+/**
+ * 校验 worktree 别名：trim 后允许空（清空别名），否则 1-60 个可见字符且不含控制字符。
+ * @param {unknown} name - 待校验的别名
+ * @returns {string} 规整后的别名（空串表示清除）
+ */
+export function normalizeWorktreeName(name) {
+  if (name === undefined || name === null) return '';
+  if (typeof name !== 'string') {
+    throw Object.assign(new Error('工作区名称必须为字符串'), { statusCode: 400 });
+  }
+  const trimmed = name.trim();
+  if (!trimmed) return '';
+  if (/[\n\r\0]/.test(trimmed) || trimmed.length > 60) {
+    throw Object.assign(new Error('工作区名称需为 1-60 个字符且不含换行等控制字符'), { statusCode: 400 });
+  }
+  return trimmed;
+}
+
+/**
+ * 在指定目录基于指定分支创建新的 Worktree。
+ *
+ * branchMode 语义：
+ * - 'existing'：检出已有本地分支（git worktree add <path> <branch>）；该分支已被
+ *   其他 worktree 检出时 git 会拒绝，这里前置给出中文指引；
+ * - 'new'：以 startPoint（本地分支名或「远端/分支」，缺省 HEAD）为起点新建分支并检出
+ *   （git worktree add -b <branchName> <path> [<startPoint>]）；起点为远端跟踪分支时
+ *   git 默认建立 upstream。分支名已存在时新建模式拒绝。
+ *
+ * @param {object} params
+ * @param {string} params.repoPath - 仓库路径
+ * @param {string} params.worktreePath - 新 worktree 的绝对目录（须不存在或为空目录）
+ * @param {'existing'|'new'} params.branchMode - 分支来源模式
+ * @param {string} params.branchName - existing 为已有本地分支名；new 为新建分支名
+ * @param {string} [params.startPoint] - new 模式的起点引用（缺省 HEAD）
+ * @returns {Promise<{ok: boolean, path: string, branch: string, head: string}>}
+ */
+export async function createWorktree({ repoPath, worktreePath, branchMode, branchName, startPoint }) {
+  if (!repoPath || !path.isAbsolute(repoPath) || !(await isGitRepo(repoPath))) {
+    throw Object.assign(new Error('repoPath 必须为 Git 仓库的绝对路径'), { statusCode: 400 });
+  }
+  if (!worktreePath || !path.isAbsolute(worktreePath) || worktreePath === path.parse(worktreePath).root) {
+    throw Object.assign(new Error('worktree 目录必须为非根的绝对路径'), { statusCode: 400 });
+  }
+  if (branchMode !== 'existing' && branchMode !== 'new') {
+    throw Object.assign(new Error('branchMode 只允许 existing 或 new'), { statusCode: 400 });
+  }
+  if (typeof branchName !== 'string' || branchName.startsWith('-') || /[\s\0]/.test(branchName) || branchName.length > 250) {
+    throw Object.assign(new Error('分支名不合法'), { statusCode: 400 });
+  }
+  const refFormat = await runGitResult(repoPath, ['check-ref-format', '--branch', branchName]);
+  if (!refFormat.ok) {
+    throw Object.assign(new Error(`分支名「${branchName}」不是合法的分支名`), { statusCode: 400 });
+  }
+
+  // 目标目录：不存在，或存在且为空目录（git worktree add 本身允许空目录复用）
+  const pathStat = await fs.stat(worktreePath).then(s => s, () => null);
+  if (pathStat) {
+    if (!pathStat.isDirectory()) {
+      throw Object.assign(new Error('目标路径已存在且不是目录'), { statusCode: 409 });
+    }
+    const entries = await fs.readdir(worktreePath);
+    if (entries.length > 0) {
+      throw Object.assign(new Error('目标目录已存在且非空，请更换目录'), { statusCode: 409 });
+    }
+  }
+
+  const worktrees = await getWorktrees(repoPath);
+  if (branchMode === 'existing') {
+    const exists = await runGitResult(repoPath, ['show-ref', '--verify', '--quiet', `refs/heads/${branchName}`]);
+    if (!exists.ok) {
+      throw Object.assign(new Error(`本地分支「${branchName}」不存在；如需以远端分支为起点，请改用「新建分支」模式`), { statusCode: 404 });
+    }
+    const holder = worktrees.find(wt => wt.branch === branchName);
+    if (holder) {
+      throw Object.assign(new Error(`分支「${branchName}」已被工作区 ${holder.path} 检出，git 不允许两个工作区共享同一分支`), { statusCode: 409 });
+    }
+  } else {
+    // 新建分支名不得与既有分支冲突（-b 直接报错，这里前置给出可操作的指引）
+    const dup = await runGitResult(repoPath, ['show-ref', '--verify', '--quiet', `refs/heads/${branchName}`]);
+    if (dup.ok) {
+      throw Object.assign(new Error(`本地分支「${branchName}」已存在，无法新建同名分支；如需检出它请改用「已有分支」模式`), { statusCode: 409 });
+    }
+  }
+
+  const args = ['worktree', 'add'];
+  if (branchMode === 'new') args.push('-b', branchName);
+  args.push(worktreePath);
+  if (branchMode === 'existing') {
+    args.push(branchName);
+  } else if (typeof startPoint === 'string' && startPoint.trim() !== '') {
+    // 起点只接受可解析引用（本地分支 / 远端跟踪分支），拒绝选项注入
+    const ref = startPoint.trim();
+    if (ref.startsWith('-') || /[\s\0]/.test(ref) || ref.length > 250) {
+      throw Object.assign(new Error('起点引用不合法'), { statusCode: 400 });
+    }
+    const startOk = await runGitResult(repoPath, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+    if (!startOk.ok) {
+      throw Object.assign(new Error(`起点引用「${ref}」不可解析（可用本地分支或「远端/分支」）`), { statusCode: 404 });
+    }
+    args.push(ref);
+  }
+
+  try {
+    await runGit(repoPath, args);
+  } catch (err) {
+    throw Object.assign(new Error(`创建 Worktree 失败：${err.message}`), { statusCode: 409 });
+  }
+
+  // 检出后读取实际分支（new 模式下 -b 的分支即 branchName；upstream 由 git 按起点自动建立）
+  const branch = (await runGit(worktreePath, ['symbolic-ref', '--short', 'HEAD']).catch(() => '')) || branchName;
+  const head = await runGit(worktreePath, ['rev-parse', 'HEAD']);
+  return { ok: true, path: path.resolve(worktreePath), branch, head };
+}
+
+/**
+ * 对指定 Worktree 上锁 / 解锁（git worktree lock / unlock）。
+ * 上锁后的 worktree 会被 git 保护：`worktree remove`、`prune` 等破坏性操作拒绝生效。
+ * @param {object} params
+ * @param {string} params.repoPath - 仓库路径
+ * @param {string} params.worktreePath - 目标 worktree 绝对路径
+ * @param {boolean} params.lock - true 上锁，false 解锁
+ * @param {string} [params.reason] - 上锁原因（可选，git worktree lock --reason）
+ * @returns {Promise<{ok: boolean, worktreePath: string, locked: boolean}>}
+ */
+export async function setWorktreeLock({ repoPath, worktreePath, lock, reason }) {
+  if (!repoPath || !path.isAbsolute(repoPath) || !(await isGitRepo(repoPath))) {
+    throw Object.assign(new Error('repoPath 必须为 Git 仓库的绝对路径'), { statusCode: 400 });
+  }
+  if (!worktreePath || !path.isAbsolute(worktreePath)) {
+    throw Object.assign(new Error('worktree 路径必须为绝对路径'), { statusCode: 400 });
+  }
+  const worktrees = await getWorktrees(repoPath);
+  const targetReal = await toRealPathSafe(worktreePath);
+  const entries = await Promise.all(worktrees.map(async wt => ({ wt, realPath: await toRealPathSafe(wt.path) })));
+  const target = entries.find(entry => entry.realPath === targetReal)?.wt;
+  if (!target || target.existsOnDisk === false) {
+    throw Object.assign(new Error('指定的工作区不属于当前仓库或已失联'), { statusCode: 404 });
+  }
+  if (typeof lock !== 'boolean') {
+    throw Object.assign(new Error('lock 必须为布尔值'), { statusCode: 400 });
+  }
+  if (lock && target.isLocked) {
+    throw Object.assign(new Error('该工作区已处于上锁状态'), { statusCode: 409 });
+  }
+  if (!lock && !target.isLocked) {
+    throw Object.assign(new Error('该工作区当前未上锁'), { statusCode: 409 });
+  }
+
+  const args = lock ? ['worktree', 'lock'] : ['worktree', 'unlock'];
+  if (lock && typeof reason === 'string' && reason.trim()) {
+    const cleanReason = reason.trim();
+    if (/[\n\r\0]/.test(cleanReason) || cleanReason.length > 200) {
+      throw Object.assign(new Error('上锁原因需为 1-200 个字符且不含换行等控制字符'), { statusCode: 400 });
+    }
+    args.push('--reason', cleanReason);
+  }
+  args.push(target.path);
+  try {
+    await runGit(repoPath, args);
+  } catch (err) {
+    throw Object.assign(new Error(`${lock ? '上锁' : '解锁'}失败：${err.message}`), { statusCode: 409 });
+  }
+  return { ok: true, worktreePath: target.path, locked: lock };
+}
+
+/**
+ * 以别名同步重命名 Worktree 根目录（git worktree move）。
+ *
+ * 语义约束：
+ * - 主工作区目录承载共享 .git（全部衍生 worktree 的 .git 文件按绝对路径指向它），
+ *   重命名会破坏整个仓库链接，一律拒绝（上层可仅保留应用内别名）；
+ * - 目录名取别名的文件系统安全形式（路径分隔符/盘符冒号等替换为 '-'）；
+ * - 已加锁的工作区 git 拒绝 move，这里自动「解锁 → 移动 → 按原样重新上锁」
+ *   （原锁原因从 porcelain 解析后原样带回）。
+ * @param {object} params
+ * @param {string} params.repoPath - 仓库路径
+ * @param {string} params.worktreePath - 目标 worktree 当前路径
+ * @param {string} params.newName - 目标名称（别名，目录名取其安全形式）
+ * @returns {Promise<{ok: boolean, from: string, to: string, moved: boolean, locked: boolean}>}
+ */
+export async function renameWorktreeDirectory({ repoPath, worktreePath, newName }) {
+  if (!repoPath || !path.isAbsolute(repoPath) || !(await isGitRepo(repoPath))) {
+    throw Object.assign(new Error('repoPath 必须为 Git 仓库的绝对路径'), { statusCode: 400 });
+  }
+  if (!worktreePath || !path.isAbsolute(worktreePath)) {
+    throw Object.assign(new Error('worktree 路径必须为绝对路径'), { statusCode: 400 });
+  }
+  if (typeof newName !== 'string' || !newName.trim()) {
+    throw Object.assign(new Error('名称不能为空'), { statusCode: 400 });
+  }
+
+  const worktrees = await getWorktrees(repoPath);
+  const targetReal = await toRealPathSafe(worktreePath);
+  const entries = await Promise.all(worktrees.map(async wt => ({ wt, realPath: await toRealPathSafe(wt.path) })));
+  const target = entries.find(entry => entry.realPath === targetReal)?.wt;
+  if (!target || target.existsOnDisk === false) {
+    throw Object.assign(new Error('指定的工作区不属于当前仓库或已失联'), { statusCode: 404 });
+  }
+  if (target.isMain) {
+    throw Object.assign(
+      new Error('主工作区目录承载共享 .git，重命名会破坏全部衍生工作区；主工作区仅支持改应用内别名，不重命名目录'),
+      { statusCode: 409 }
+    );
+  }
+
+  // 目录名安全化：路径分隔符/盘符冒号/控制字符替换为 '-'，去首尾空白与点（Windows 兼容）
+  const baseName = newName.trim().replace(/[/\\:*?"<>|\0\r\n]/g, '-').replace(/^[.\s]+|[.\s]+$/g, '');
+  if (!baseName) {
+    throw Object.assign(new Error(`名称「${newName}」无法用作目录名`), { statusCode: 400 });
+  }
+  const fromPath = target.path;
+  const parentDir = path.dirname(fromPath);
+  const toPath = path.join(parentDir, baseName);
+  if (toPath === fromPath) {
+    return { ok: true, from: fromPath, to: toPath, moved: false, locked: Boolean(target.isLocked) };
+  }
+  const targetStat = await fs.stat(toPath).then(() => true, () => false);
+  if (targetStat) {
+    throw Object.assign(new Error(`目标目录「${toPath}」已存在，无法重命名`), { statusCode: 409 });
+  }
+
+  // 锁定原因从 porcelain 解析（isLocked 已知结论，这里取 --reason 以便移动后原样恢复）。
+  // 关闭 quotePath：中文等原因默认会被 C 风格转义加引号，原样带回会写入乱码
+  const porcelain = await runGit(repoPath, ['-c', 'core.quotePath=false', 'worktree', 'list', '--porcelain']);
+  let lockReason = null;
+  const lines = porcelain.split('\n');
+  for (let i = 0; i < lines.length; i += 1) {
+    if (lines[i].startsWith('worktree ') && path.resolve(lines[i].slice(9).trim()) === path.resolve(fromPath)) {
+      for (let j = i + 1; j < lines.length && !lines[j].startsWith('worktree '); j += 1) {
+        if (lines[j].startsWith('locked')) {
+          lockReason = lines[j].slice(6).trim() || null;
+        }
+      }
+      break;
+    }
+  }
+  const wasLocked = Boolean(target.isLocked);
+  let unlocked = false;
+  if (wasLocked) {
+    try {
+      await runGit(repoPath, ['worktree', 'unlock', fromPath]);
+      unlocked = true;
+    } catch (err) {
+      throw Object.assign(new Error(`重命名前自动解锁失败：${err.message}`), { statusCode: 409 });
+    }
+  }
+  try {
+    await runGit(repoPath, ['worktree', 'move', fromPath, toPath]);
+  } catch (err) {
+    // 移动失败必须恢复上锁状态，不留下静默解锁的工作区
+    if (unlocked) {
+      await runGit(repoPath, wasLocked && lockReason
+        ? ['worktree', 'lock', '--reason', lockReason, fromPath]
+        : ['worktree', 'lock', fromPath]).catch(() => {});
+    }
+    throw Object.assign(new Error(`重命名工作区目录失败：${err.message}`), { statusCode: 409 });
+  }
+  if (wasLocked) {
+    try {
+      await runGit(repoPath, lockReason
+        ? ['worktree', 'lock', '--reason', lockReason, toPath]
+        : ['worktree', 'lock', toPath]);
+    } catch (err) {
+      // 移动已完成，重新上锁失败只提示不回滚
+      throw Object.assign(
+        new Error(`目录已重命名为 ${toPath}，但恢复上锁失败，请手动执行 git worktree lock：${err.message}`),
+        { statusCode: 409 }
+      );
+    }
+  }
+  return { ok: true, from: fromPath, to: toPath, moved: true, locked: wasLocked };
 }
 
 /**
@@ -2212,11 +2498,11 @@ export async function getStashList(worktreePath) {
     throw Object.assign(new Error('指定的 worktree 路径不存在'), { statusCode: 404 });
   }
   // %gd=stash@{n} 引用名, %h=短哈希, %cr=相对时间, %gs=stash 备注（含自定 message）
-  const output = await runGit(worktreePath, ['stash', 'list', '--format=%gd|%h|%cr|%gs']);
+  const output = await runGit(worktreePath, ['stash', 'list', '--format=%gd%x00%h%x00%cr%x00%gs']);
   if (!output) return [];
   return output.split('\n').filter(Boolean).map(line => {
-    const [ref = '', shortHash = '', relativeTime = '', ...rest] = line.split('|');
-    return { ref, shortHash, relativeTime, subject: rest.join('|') };
+    const [ref = '', shortHash = '', relativeTime = '', subject = ''] = line.split('\0');
+    return { ref, shortHash, relativeTime, subject };
   });
 }
 

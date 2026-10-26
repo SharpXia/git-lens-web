@@ -43,7 +43,7 @@ export function createGitLensServer(options) { ... }
 
 ### 2.2 CLI 入口兼容
 
-`src/server.js` 改为薄 CLI：解析 `PORT`（默认 9527）、`GIT_LENS_CONFIG_DIR`（默认 `~/.config/git-lens-web`）、`GIT_LENS_GIT_PATH`，以 browser 模式调用工厂并监听。**`npm start` 对外语义不变**：默认 9527、真实配置目录、打印 `Git Lens Web running on http://127.0.0.1:9527`。禁止任何代码通过 `import` 现有 `server.js` 启动桌面服务。
+`src/server.js` 改为薄 CLI：解析 `PORT`（默认 9527）、`GIT_LENS_CONFIG_DIR`（默认 `~/.config/git-lens-web`）、`GIT_LENS_GIT_PATH`，以 browser 模式调用工厂并监听。**`pnpm start` 对外语义不变**：默认 9527、真实配置目录、打印 `Git Lens Web running on http://127.0.0.1:9527`。禁止任何代码通过 `import` 现有 `server.js` 启动桌面服务。
 
 **（第一次修订）端口回报格式**：`PORT=0` 时 CLI 必须在 ready 后立即向 stdout 打印同一格式行，携带实际分配端口：`Git Lens Web running on http://127.0.0.1:<实际端口>`。QA 启动器按该行（正则 `(?:127\.0\.0\.1|localhost):(\d+)`）解析端口，此格式为冻结接口。
 
@@ -144,9 +144,9 @@ window.gitLens = {
 
 ### 8.3 验收命令入口
 
-QA 提供单一入口（G0 起为 `npm run test:isolated`；G4 前扩展 `npm run test:desktop:isolated`）：自动建 qa-root、注入环境、启动服务/应用、执行测试、产出 `artifacts/report.json` 与截图。协调 Agent 只调用该入口或其明确定义的阶段参数。既有 `scripts/verify-mr-branch-diff.mjs` 已改造为 fail-closed 版本（强制握手、拒绝 9527、拒绝非环回、仅接受显式且与握手一致的 `--config-dir`、强制 `--run-id`）。
+QA 提供单一入口（G0 起为 `pnpm run test:isolated`；G4 前扩展 `pnpm run test:desktop:isolated`）：自动建 qa-root、注入环境、启动服务/应用、执行测试、产出 `artifacts/report.json` 与截图。协调 Agent 只调用该入口或其明确定义的阶段参数。既有 `scripts/verify-mr-branch-diff.mjs` 已改造为 fail-closed 版本（强制握手、拒绝 9527、拒绝非环回、仅接受显式且与握手一致的 `--config-dir`、强制 `--run-id`）。
 
-**（第一次修订）启动器增补 `--service-url <url>`**：测试专用显式服务地址覆盖，跳过 spawn。约束：地址在任何 qa-root 创建与请求发出前经 fail-closed 白名单校验（仅 `http://127.0.0.1:<port>` 字面形态、非 9527）；外部服务的生命周期管理（spawn/停止/端口释放验证）记 skip。仅供单测与协调 Agent 显式调用，`npm run test:isolated` 默认行为不变。
+**（第一次修订）启动器增补 `--service-url <url>`**：测试专用显式服务地址覆盖，跳过 spawn。约束：地址在任何 qa-root 创建与请求发出前经 fail-closed 白名单校验（仅 `http://127.0.0.1:<port>` 字面形态、非 9527）；外部服务的生命周期管理（spawn/停止/端口释放验证）记 skip。仅供单测与协调 Agent 显式调用，`pnpm run test:isolated` 默认行为不变。
 
 ## 9. 文件所有权与本地环境分配
 
@@ -177,7 +177,7 @@ QA 提供单一入口（G0 起为 `npm run test:isolated`；G4 前扩展 `npm ru
 ## 12. 附录：依赖锁定与已知环境坑
 
 - **Electron 44.4.5**（2026-09-27 锁定，latest stable；升级需协调 Agent 修订本条）；electron-builder 待 Release 开工时锁定。
-- 本机 npm 启用了 install-scripts 审批，`npm ci`/`npm install` 可能跳过 electron 的 postinstall 导致二进制缺失。各 worktree 安装依赖后必须验证：`ls node_modules/electron/dist/Electron.app`（macOS）；缺失时执行 `node node_modules/electron/install.js` 手动补齐，禁止提交 node_modules。
+- 项目使用 pnpm（`node-linker=hoisted`）。依赖构建脚本由 `pnpm-workspace.yaml` 的 `allowBuilds` 放行；Electron 44 起二进制改为按需下载，桌面测试提示缺失时执行 `pnpm exec install-electron` 补齐。禁止提交 node_modules。
 
 ## 13. Electron E2E 钩子契约（Shell 实现，QA 消费，G2 起）
 

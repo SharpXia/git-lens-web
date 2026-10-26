@@ -49,9 +49,9 @@
 
 - 后续开发与交付以 **Electron 本地 App** 为主，功能联调、界面检查、快捷键和回归验证均在真实 App 内完成。
 - **不再使用独立浏览器进行日常功能验证**，不得用浏览器验证结果代替 App 验证。新增或修改的界面回归用例默认使用 Electron 桌面测试通道。
-- **非必要不启动独立 Web 服务**，日常开发不运行 `npm start`、`node src/server.js` 或额外的前端开发服务器。只有用户明确要求 Web 场景，或必须排查桌面路径无法覆盖的独立接口问题时，才按需启动，并在结束后关闭。
+- **非必要不启动独立 Web 服务**，日常开发不运行 `pnpm start`、`node src/server.js` 或额外的前端开发服务器。只有用户明确要求 Web 场景，或必须排查桌面路径无法覆盖的独立接口问题时，才按需启动，并在结束后关闭。
 - App 自身管理的内置本地服务属于桌面运行依赖，由 App 统一启动和退出；不得为桌面联调再额外启动一份 Web 服务。
-- 自动验证优先使用 `npm run test:desktop:isolated`、`npm run test:desktop:full` 或对应功能的 Electron 测试；不依赖界面的单元测试可直接执行。
+- 自动验证优先使用 `pnpm run test:desktop:isolated`、`pnpm run test:desktop:full` 或对应功能的 Electron 测试；不依赖界面的单元测试可直接执行。
 
 ### 4.2 隔离日常实例与开发实例
 

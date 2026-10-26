@@ -4,14 +4,14 @@
 
 - 发布对象：`Git Lens` v1.0.1（appId `com.sharpxia.git-lens-web`）
 - 构建基线：协调分支 `codex/electron-release` @ `ec016d5`
-- 构建环境：macOS 26.4（darwin 25.4.0）arm64 · Node v24.21.0 · Electron 44.4.5 · electron-builder 26.15.3（版本已由 `ec016d5` 冻结进 package-lock.json）
+- 构建环境：macOS 26.4（darwin 25.4.0）arm64 · Node v24.21.0 · pnpm 11.7.0 · Electron 44.4.5 · electron-builder 26.15.3（版本冻结在 pnpm-lock.yaml）
 - 验证 fixture run-id：`release-install-1790531711408-vj3zzy`（34/34 断言通过）
 
 ## 1. 构建命令与复现
 
 ```bash
-npm ci                 # 注意契约 §12：npm 可能跳过 postinstall，需确认 node_modules/electron/dist/Electron.app 存在
-npx electron-builder --mac
+pnpm install --frozen-lockfile   # 项目使用 node-linker=hoisted，保证 electron-builder 能收集依赖
+pnpm exec electron-builder --mac
 ```
 
 - 产物输出到 `release/`（已在 .gitignore 忽略，不入库）。

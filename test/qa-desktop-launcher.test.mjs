@@ -7,7 +7,7 @@ import os from 'node:os';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-import { parseDesktopArgs, buildDesktopEnv, buildDesktopLaunchArgs, findElectronProcesses, scanOrphansWithStableWindow, ELECTRON_MAIN } from '../scripts/qa/desktop-shared.mjs';
+import { parseDesktopArgs, buildDesktopEnv, buildDesktopLaunchArgs, findElectronProcesses, scanOrphansWithStableWindow, intrusiveChecksEnabled, ELECTRON_MAIN } from '../scripts/qa/desktop-shared.mjs';
 
 const execFileAsync = promisify(execFile);
 const WORKTREE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -18,6 +18,13 @@ test('桌面启动器参数解析：识别 --keep/--strict-csp 并收集未知�
   assert.deepEqual(parseDesktopArgs(['--strict-csp', '--keep']), { keep: true, strictCsp: true, unknown: [] });
   const parsed = parseDesktopArgs(['--bogus']);
   assert.equal(parsed.unknown[0], '--bogus', '未知参数必须被收集而不是静默忽略');
+});
+
+test('侵入式桌面用例开关：默认关闭，仅 GIT_LENS_E2E_INTRUSIVE=1 时开启', () => {
+  assert.equal(intrusiveChecksEnabled({}), false, '常规回归不得执行全屏等抢占桌面的用例');
+  assert.equal(intrusiveChecksEnabled({ GIT_LENS_E2E_INTRUSIVE: '0' }), false);
+  assert.equal(intrusiveChecksEnabled({ GIT_LENS_E2E_INTRUSIVE: 'true' }), false, '只认精确的 1，避免误开');
+  assert.equal(intrusiveChecksEnabled({ GIT_LENS_E2E_INTRUSIVE: '1' }), true);
 });
 
 test('桌面启动器环境构造：E2E 钩子、服务配置与 git 隔离全部指向 qa-root', () => {

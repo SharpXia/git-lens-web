@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * run-desktop-full.mjs —— G4 功能与 UI 矩阵全量入口（契约 §8.3，`npm run test:desktop:full`）
+ * run-desktop-full.mjs —— G4 功能与 UI 矩阵全量入口（契约 §8.3，`pnpm run test:desktop:full`）
  *
  * 在快速冒烟（run-desktop.mjs）之外覆盖计划书 §7 的功能矩阵：
  *   1. Diff 与提交视图：diff-refs 三组合 × 三模式 API 矩阵；UI 三组合渲染与模式按钮
@@ -37,7 +37,7 @@
  * 页面级 CDP 会话驱动；`_electron` 句柄仅用于 app 级操作（主进程 evaluate、close）。
  *
  * 用法：
- *   npm run test:desktop:full
+ *   pnpm run test:desktop:full
  *   node scripts/qa/run-desktop-full.mjs --keep   # 成功时也保留 qa-root（供取视觉基线截图）
  *
  * 已知边界：原生目录选择对话框与焦点/菜单类断言留人工清单。
@@ -846,6 +846,247 @@ async function main() {
     const w8Ok = pruneRes.status === 200 && !wtListAfterPrune.includes('wt-lost') && !/prunable/.test(wtListAfterPrune);
     record('w8-prune-lost', 'prune 清理失联 worktree（porcelain 列表无失联项）', w8Ok ? 'pass' : 'fail',
       `HTTP=${pruneRes.status} 列表仍含失联=${wtListAfterPrune.includes('wt-lost')}`);
+
+    // ================= 5.5 W9 分支管理（本地 + 远端） =================
+    // 顺序依赖：R2 建远端分支 → R3 检出重命名后切回 main → R4 冲突合并全程 → R5 UI 面板基线
+    // → R6 删远端分支 → R7 本地分支删除三重保护。R4 会给 main 追加一笔合并提交，
+    // 必须放在所有依赖 main 历史的场景之后
+    const remoteBare = fixture.main.remote.bare;
+
+    // W9a 远端分支清单：裸远端的 main 与 feature/remote-only 均可见且带同步状态
+    const remoteList = await api(`/api/remote-branches?path=${encodeURIComponent(mainRepo)}`);
+    const remoteOnlyEntry = (remoteList.body?.branches || []).find((b) => b.name === 'origin/feature/remote-only');
+    const w9aOk = remoteList.status === 200 && remoteList.body?.ok === true
+      && remoteList.body?.mainBranch === 'main'
+      && Boolean(remoteOnlyEntry) && /^[0-9a-f]{40}$/.test(remoteOnlyEntry?.sha || '')
+      && (remoteList.body?.branches || []).some((b) => b.name === 'origin/main');
+    record('w9a-remote-branch-list', '远端分支清单返回 origin/main 与 origin/feature/remote-only（含 SHA 与主干）', w9aOk ? 'pass' : 'fail',
+      `HTTP=${remoteList.status} 分支数=${remoteList.body?.branches?.length ?? 'x'} remoteOnly=${Boolean(remoteOnlyEntry)}`);
+
+    // W9b 纯远端建分支：裸远端出现新分支、本地不落地分支、重复创建 409
+    const remoteCreate = await api('/api/create-remote-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, sourceRef: 'origin/feature/remote-only', newBranchName: 'feature/remote-copy' }
+    });
+    const bareCopySha = await gitSnap(qaRoot, remoteBare, 'rev-parse', 'refs/heads/feature/remote-copy').catch(() => '');
+    const noLocalCopy = (await gitSnap(qaRoot, mainRepo, 'branch', '--list', 'feature/remote-copy')) === '';
+    const remoteDup = await api('/api/create-remote-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, sourceRef: 'origin/feature/remote-only', newBranchName: 'feature/remote-copy' }
+    });
+    const w9bOk = remoteCreate.status === 200 && bareCopySha === remoteOnlyEntry?.sha && noLocalCopy && remoteDup.status === 409;
+    record('w9b-create-remote-branch', '基于远端分支创建远端分支：远端落地、本地零分支、重复创建 409', w9bOk ? 'pass' : 'fail',
+      `HTTP=${remoteCreate.status} 裸远端SHA一致=${bareCopySha === remoteOnlyEntry?.sha} 本地零分支=${noLocalCopy} 重复=${remoteDup.status}`);
+
+    // W9c 检出远端分支到主工作区并重命名（upstream 指向来源），随后切回 main
+    const checkoutRenamed = await api('/api/checkout-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, worktree: mainRepo, refType: 'remote', ref: 'origin/feature/remote-only', localName: 'feature/remote-renamed' }
+    });
+    const renamedHead = await gitSnap(qaRoot, mainRepo, 'rev-parse', 'feature/remote-renamed').catch(() => '');
+    const upstream = await gitSnap(qaRoot, mainRepo, 'rev-parse', '--abbrev-ref', 'feature/remote-renamed@{upstream}').catch(() => '');
+    const backToMain = await api('/api/checkout-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, worktree: mainRepo, refType: 'local', ref: 'main' }
+    });
+    const w9cOk = checkoutRenamed.status === 200 && checkoutRenamed.body?.branch === 'feature/remote-renamed'
+      && renamedHead === remoteOnlyEntry?.sha && upstream === 'origin/feature/remote-only'
+      && backToMain.status === 200;
+    record('w9c-checkout-rename', '检出远端分支重命名为本地跟踪分支并切回 main', w9cOk ? 'pass' : 'fail',
+      `HTTP=${checkoutRenamed.status} 分支=${checkoutRenamed.body?.branch ?? 'x'} upstream=${upstream} 切回=${backToMain.status}`);
+
+    // W9d 合并冲突全程：merge-ref 冲突 → merge-state → conflict-file 三方 → 自定义内容解决 → merge-commit 双亲
+    const mergeStart = await api('/api/merge-ref', { method: 'POST', body: { repoPath: mainRepo, worktree: mainRepo, ref: 'origin/feature/remote-only' } });
+    const conflictState = await api(`/api/merge-state?worktree=${encodeURIComponent(mainRepo)}`);
+    const conflictEntry = (conflictState.body?.conflictFiles || []).find((f) => f.path === 'notes.txt');
+    const conflictFileBody = await api(`/api/merge-conflict-file?worktree=${encodeURIComponent(mainRepo)}&filePath=${encodeURIComponent('notes.txt')}`);
+    const resolveCustom = await api('/api/merge-resolve', {
+      method: 'POST',
+      body: { worktree: mainRepo, filePath: 'notes.txt', resolution: 'content', content: 'remote 冲突素材：人工合并版本。\n' }
+    });
+    const mergeCommit = await api('/api/merge-commit', { method: 'POST', body: { worktree: mainRepo } });
+    const mergeParents = mergeCommit.status === 200 ? (await gitSnap(qaRoot, mainRepo, 'log', '-1', '--format=%P')).split(/\s+/) : [];
+    const notesAfterMerge = await gitSnap(qaRoot, mainRepo, 'show', 'HEAD:notes.txt').catch(() => '');
+    const w9dOk = mergeStart.status === 200 && mergeStart.body?.status === 'conflict'
+      && mergeStart.body?.oursLabel === 'main' && mergeStart.body?.theirsLabel === 'origin/feature/remote-only'
+      && Boolean(conflictEntry) && conflictEntry?.code === 'UU'
+      && (conflictFileBody.body?.ours || '').includes('本地版本') && (conflictFileBody.body?.theirs || '').includes('远端版本')
+      && resolveCustom.status === 200 && resolveCustom.body?.remaining === 0
+      && mergeCommit.status === 200 && mergeParents.length === 2
+      && notesAfterMerge === 'remote 冲突素材：人工合并版本。';
+    record('w9d-merge-conflict-resolve', '合并远端分支冲突全程：现场保持 → 三方内容 → 自定义解决 → 双亲合并提交', w9dOk ? 'pass' : 'fail',
+      `merge=${mergeStart.status}/${mergeStart.body?.status ?? 'x'} conflict=${Boolean(conflictEntry)} resolve=${resolveCustom.status}/${resolveCustom.body?.remaining ?? 'x'} commit=${mergeCommit.status} 父数=${mergeParents.length}`);
+
+    // W9e 放弃合并：合并未进主干第二条远端分支重造冲突后 abort，HEAD 与工作区均恢复
+    const mergeSecond = await api('/api/merge-ref', { method: 'POST', body: { repoPath: mainRepo, worktree: mainRepo, ref: 'origin/feature/remote-second' } });
+    const headBeforeAbort = await gitSnap(qaRoot, mainRepo, 'rev-parse', 'HEAD');
+    const abortRes = await api('/api/merge-abort', { method: 'POST', body: { worktree: mainRepo } });
+    const headAfterAbort = await gitSnap(qaRoot, mainRepo, 'rev-parse', 'HEAD');
+    const statusAfterAbort = await gitSnap(qaRoot, mainRepo, 'status', '--porcelain');
+    const w9eOk = mergeSecond.status === 200 && mergeSecond.body?.status === 'conflict'
+      && abortRes.status === 200 && headAfterAbort === headBeforeAbort && statusAfterAbort === '';
+    record('w9e-merge-abort', '放弃合并：第二条远端分支重造冲突后 abort，HEAD 与工作区恢复', w9eOk ? 'pass' : 'fail',
+      `merge=${mergeSecond.status}/${mergeSecond.body?.status ?? 'x'} abort=${abortRes.status} HEAD恢复=${headAfterAbort === headBeforeAbort} 现场干净=${statusAfterAbort === ''}`);
+
+    // W9f 分支管理 Tab UI：先切回主仓库（MR 截图场景会把页面停在 repo-mr，其无远端），
+    // 再切 Tab 断言左右两栏列表渲染、目标工作区就绪、无进行中合并面板隐藏。
+    // 左栏本地分支的 rev-list 计算比远端清单慢，轮询必须等两栏都出列表，避免快照竞态
+    await waitInspect(mainRepo);
+    await page.evaluate(() => { window.switchTab('remote'); });
+    await pollPage(page, () => {
+      const remote = document.getElementById('remoteBranchList');
+      const local = document.getElementById('localBranchList');
+      return Boolean(remote) && remote.querySelectorAll('.list-item').length > 0
+        && Boolean(local) && local.querySelectorAll('.list-item').length > 0;
+    }, null, 20000);
+    const remoteUi = await page.evaluate(() => ({
+      tabActive: document.getElementById('tabRemote')?.className.includes('active'),
+      viewVisible: document.getElementById('viewRemote')?.style.display !== 'none',
+      rows: document.querySelectorAll('#remoteBranchList .list-item').length,
+      localRows: document.querySelectorAll('#localBranchList .list-item').length,
+      countText: document.getElementById('remoteBranchCount')?.textContent,
+      targetOptions: document.querySelectorAll('#remoteWorktreeSelect option').length,
+      hasCopyBranch: [...document.querySelectorAll('#remoteBranchList .item-name')].some((el) => el.textContent.includes('origin/feature/remote-copy')),
+      mergePanelHidden: document.getElementById('remoteMergePanel')?.style.display === 'none'
+    }));
+    const w9fOk = remoteUi.tabActive && remoteUi.viewVisible && remoteUi.rows >= 3
+      && remoteUi.localRows >= 2
+      && remoteUi.targetOptions >= 1 && remoteUi.hasCopyBranch && remoteUi.mergePanelHidden;
+    record('w9f-remote-tab-ui', '分支管理 Tab 渲染：左栏本地分支 + 右栏远端分支、目标工作区就绪、合并面板隐藏', w9fOk ? 'pass' : 'fail',
+      JSON.stringify(remoteUi));
+    await captureBaseline(page, qaRoot, 'w', 'remote-tab', () => {
+      const view = document.getElementById('viewRemote');
+      return Boolean(view) && view.style.display !== 'none'
+        && document.querySelectorAll('#remoteBranchList .list-item').length > 0
+        && document.querySelectorAll('#localBranchList .list-item').length > 0;
+    });
+
+    // W9g 删除远端分支：W9b 创建的 feature/remote-copy 删除后远端消失，保护分支 origin/main 409
+    const remoteDelete = await api('/api/delete-remote-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, ref: 'origin/feature/remote-copy' }
+    });
+    const bareCopyAfterDelete = await gitSnap(qaRoot, remoteBare, 'rev-parse', 'refs/heads/feature/remote-copy').catch(() => '');
+    const protectedDelete = await api('/api/delete-remote-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, ref: 'origin/main' }
+    });
+    const w9gOk = remoteDelete.status === 200 && bareCopyAfterDelete === '' && protectedDelete.status === 409;
+    record('w9g-delete-remote-branch', '删除远端分支：远端落地消失，保护分支（远端默认分支）拒绝 409', w9gOk ? 'pass' : 'fail',
+      `删除=${remoteDelete.status} 裸远端已无=${bareCopyAfterDelete === ''} 保护分支=${protectedDelete.status}`);
+
+    // W9h 本地分支管理：清单绑定/合入状态 + 三重保护（被检出 409 → 未合入 409 → 强删 200 → 主分支 409）+ 安全删除。
+    // fixture 的 repo-main 本地已有 feature/remote-second（远端同名分支的源头），
+    // 检出必须用独立命名的临时本地分支，否则同名 409、切回 main 也会 409
+    const localList = await api(`/api/local-branches?path=${encodeURIComponent(mainRepo)}`);
+    const mainLocal = (localList.body?.branches || []).find((b) => b.name === 'main');
+    // 以未进主干的第二条远端分支为起点建独立命名本地分支，并检出到主工作区
+    const checkoutTmpUnmerged = await api('/api/checkout-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, worktree: mainRepo, refType: 'remote', ref: 'origin/feature/remote-second', localName: 'feature/qa-tmp-unmerged' }
+    });
+    const delWhileHeld = await api('/api/delete-local-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, branch: 'feature/qa-tmp-unmerged' }
+    });
+    const backToMainAgain = await api('/api/checkout-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, worktree: mainRepo, refType: 'local', ref: 'main' }
+    });
+    const delUnmergedPlain = await api('/api/delete-local-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, branch: 'feature/qa-tmp-unmerged' }
+    });
+    const delUnmergedForce = await api('/api/delete-local-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, branch: 'feature/qa-tmp-unmerged', force: true }
+    });
+    const delMainBranch = await api('/api/delete-local-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, branch: 'main' }
+    });
+    // W9d 已把 origin/feature/remote-only 合入 main，W9c 建的本地重命名分支已合入 → 安全删除放行
+    const delRenamedMerged = await api('/api/delete-local-branch', {
+      method: 'POST',
+      body: { repoPath: mainRepo, branch: 'feature/remote-renamed' }
+    });
+    const w9hOk = localList.status === 200 && mainLocal?.isMain === true && mainLocal?.worktree?.isMain === true
+      && checkoutTmpUnmerged.status === 200 && delWhileHeld.status === 409
+      && backToMainAgain.status === 200 && delUnmergedPlain.status === 409 && delUnmergedForce.status === 200
+      && delMainBranch.status === 409 && delRenamedMerged.status === 200;
+    record('w9h-local-branches', '本地分支管理：清单检出绑定 + 被检出/未合入/主分支三重保护与安全删除', w9hOk ? 'pass' : 'fail',
+      `清单=${localList.status} main绑定=${mainLocal?.worktree?.isMain ?? 'x'} 检出临时=${checkoutTmpUnmerged.status} 被检出=${delWhileHeld.status} 切回=${backToMainAgain.status} 未合入=${delUnmergedPlain.status} 强删=${delUnmergedForce.status} 主分支=${delMainBranch.status} 安全删除=${delRenamedMerged.status}`);
+
+    // 回到总览，避免影响后续崩溃恢复场景的会话状态语义
+    await page.evaluate(() => { window.switchTab('overview'); });
+
+    // ================= 5.6 W10 Worktree 管理扩展（创建/上锁/别名） =================
+    // 顺序依赖：在 W9 之后执行；结束前移除新建 worktree，避免影响后续场景的仓库发现
+    const createdWtPath = path.join(qaRoot, 'repos', 'wt-created');
+
+    // W10a 创建 Worktree：以远端分支为起点新建分支 + 别名，inspect 注入别名、upstream 建立
+    const createWt = await api('/api/create-worktree', {
+      method: 'POST',
+      body: {
+        repoPath: mainRepo, worktreePath: createdWtPath, branchMode: 'new',
+        branchName: 'feature/wt-created', startPoint: 'origin/feature/remote-only', name: '别名工作区'
+      }
+    });
+    const createdUpstream = await gitSnap(qaRoot, mainRepo, 'rev-parse', '--abbrev-ref', 'feature/wt-created@{upstream}').catch(() => '');
+    const inspectAfterCreate = await api(`/api/inspect?path=${encodeURIComponent(mainRepo)}`);
+    const createdEntry = (inspectAfterCreate.body?.worktrees || []).find((w) => w.branch === 'feature/wt-created');
+    const w10aOk = createWt.status === 200 && createWt.body?.branch === 'feature/wt-created'
+      && createWt.body?.name === '别名工作区' && createdUpstream === 'origin/feature/remote-only'
+      && createdEntry?.name === '别名工作区';
+    record('w10a-create-worktree', '创建 Worktree：远端起点新建分支 + upstream + 别名注入 inspect', w10aOk ? 'pass' : 'fail',
+      `HTTP=${createWt.status} 分支=${createWt.body?.branch ?? 'x'} upstream=${createdUpstream} 别名=${createdEntry?.name ?? 'x'}`);
+
+    // W10b 总览 UI 渲染别名（别名作为主标签、目录名进徽标区）。
+    // selectRepo 对相同仓库是 no-op，必须显式 inspectRepo 重拉，否则列表仍是创建前的旧数据
+    await page.evaluate((p) => { window.selectRepo(p); window.inspectRepo(p); }, mainRepo);
+    const uiHasAlias = await pollPage(page, () => {
+      const text = document.getElementById('wtList')?.textContent || '';
+      return text.includes('别名工作区') && text.includes('wt-created');
+    }, null, 20000);
+    record('w10b-worktree-alias-ui', '总览 Worktree 列表渲染别名与目录名', uiHasAlias ? 'pass' : 'fail',
+      `列表含别名=${Boolean(uiHasAlias)}`);
+
+    // W10c 上锁/解锁与重命名：porcelain 联动 + 「别名同步重命名目录」全链路。
+    // porcelain 按 worktree 分段后只看 wt-created 段，避免主仓库段的 locked 词样干扰
+    const lockCreated = await api('/api/worktree-lock', { method: 'POST', body: { repoPath: mainRepo, worktreePath: createdWtPath, lock: true } });
+    const porcelainWhileLocked = await gitSnap(qaRoot, mainRepo, 'worktree', 'list', '--porcelain');
+    const unlockCreated = await api('/api/worktree-lock', { method: 'POST', body: { repoPath: mainRepo, worktreePath: createdWtPath, lock: false } });
+    const porcelainAfterUnlock = await gitSnap(qaRoot, mainRepo, 'worktree', 'list', '--porcelain');
+    const segmentOf = (porcelain) => porcelain
+      .split(/\n(?=worktree )/).find((seg) => seg.includes('wt-created')) || '';
+    // 别名编辑走重命名端点：目录随名称移动（git worktree move），别名元数据随路径迁移
+    const renameRes = await api('/api/worktree-rename', {
+      method: 'POST',
+      body: { repoPath: mainRepo, worktreePath: createdWtPath, name: '改名后的工作区' }
+    });
+    const renamedPath = renameRes.body?.worktreePath || '';
+    const oldDirGone = !(await fs.stat(createdWtPath).then(() => true).catch(() => false));
+    const newDirExists = Boolean(renamedPath) && await fs.stat(renamedPath).then(() => true, () => false);
+    const porcelainAfterRename = await gitSnap(qaRoot, mainRepo, 'worktree', 'list', '--porcelain');
+    const inspectAfterRename = await api(`/api/inspect?path=${encodeURIComponent(mainRepo)}`);
+    const renamedEntry = (inspectAfterRename.body?.worktrees || []).find((w) => w.branch === 'feature/wt-created');
+    const metaAfterRename = await api(`/api/worktree-meta?path=${encodeURIComponent(mainRepo)}`);
+    const w10cOk = lockCreated.status === 200 && segmentOf(porcelainWhileLocked).includes('locked')
+      && unlockCreated.status === 200 && !segmentOf(porcelainAfterUnlock).includes('locked')
+      && renameRes.status === 200 && renameRes.body?.moved === true
+      && oldDirGone && newDirExists && segmentOf(porcelainAfterRename).includes(renamedPath)
+      && renamedEntry?.path === renamedPath && renamedEntry?.name === '改名后的工作区'
+      && metaAfterRename.body?.meta?.[renamedPath]?.name === '改名后的工作区';
+    record('w10c-lock-rename', 'Worktree 上锁/解锁（porcelain 联动）与别名重命名（目录移动+元数据迁移）', w10cOk ? 'pass' : 'fail',
+      `lock=${lockCreated.status} 锁标记=${segmentOf(porcelainWhileLocked).includes('locked')} unlock=${unlockCreated.status} rename=${renameRes.status}/${renameRes.body?.moved ?? 'x'} 旧目录删=${oldDirGone} inspect新路径=${renamedEntry?.path === renamedPath} 新别名=${renamedEntry?.name ?? 'x'}`);
+
+    // W10d 清理：移除测试 worktree（重命名后的新路径，此时已解锁，常规移除即可）
+    const removeCreated = renamedPath
+      ? await api('/api/remove-worktree', { method: 'POST', body: { repoPath: mainRepo, worktreePath: renamedPath } })
+      : { status: 0 };
+    const createdGone = !renamedPath || !(await fs.stat(renamedPath).then(() => true).catch(() => false));
+    record('w10d-cleanup', '清理：移除本轮创建并已重命名的 Worktree', removeCreated.status === 200 && createdGone ? 'pass' : 'fail',
+      `HTTP=${removeCreated.status} 目录删除=${createdGone}`);
 
     // ================= 6. 崩溃恢复（含恢复页截图 + 选中仓库恢复） =================
     // 先把选中仓库设为主仓库；selectRepo 对相同仓库是 no-op，先切走再切回

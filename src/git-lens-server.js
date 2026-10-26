@@ -17,6 +17,10 @@ import {
   pullWorktree,
   checkBranchExists,
   checkWorktreeExists,
+  createWorktree,
+  setWorktreeLock,
+  renameWorktreeDirectory,
+  normalizeWorktreeName,
   getWorktreeDiff,
   getUncommittedDiff,
   getFileContentBuffer,
@@ -41,6 +45,22 @@ import {
   mergeRequestAction,
   configureGitPath as configureMrGitPath
 } from './merge-request-service.js';
+import {
+  listRemoteBranches,
+  createRemoteBranch,
+  checkoutBranch,
+  mergeRef,
+  getMergeState,
+  getConflictFile,
+  resolveConflictFile,
+  commitMerge,
+  abortMerge,
+  fetchRemotes,
+  listLocalBranches,
+  deleteRemoteBranch,
+  deleteLocalBranch,
+  configureGitPath as configureRemoteBranchGitPath
+} from './remote-branch-service.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -143,8 +163,9 @@ async function getComparablePath(targetPath) {
  * @param {boolean} force - 是否强制移除
  * @param {string|null} branchName - 绑定分支名
  * @param {boolean} shouldDeleteBranch - 是否连带删除绑定分支
+ * @param {((realPath: string) => Promise<void>)|null} [onRemoved] - 移除成功后的清理回调（按移除前的 realpath 键）
  */
-async function removeWorktreeWithBranch(repoPath, worktreePath, force, branchName, shouldDeleteBranch) {
+async function removeWorktreeWithBranch(repoPath, worktreePath, force, branchName, shouldDeleteBranch, onRemoved = null) {
   if (shouldDeleteBranch) {
     if (!branchName) throw new Error('缺少待删除的绑定分支');
     const worktrees = await getWorktrees(repoPath);
@@ -161,7 +182,16 @@ async function removeWorktreeWithBranch(repoPath, worktreePath, force, branchNam
     }
   }
 
+  // 目录移除后无法再 realpath，别名键必须在移除前取好
+  const aliasKey = await getComparablePath(worktreePath);
   const result = await removeWorktree(repoPath, worktreePath, force);
+  if (result.removed && onRemoved) {
+    try {
+      await onRemoved(aliasKey);
+    } catch {
+      // Worktree 已移除且无法回滚，别名清理失败不改变移除结论
+    }
+  }
   let branchDeleted = false;
   let branchDeleteError = null;
   if (shouldDeleteBranch && result.removed) {
@@ -294,6 +324,7 @@ export function createGitLensServer(options) {
   if (options.gitPath) {
     configureInspectorGitPath(options.gitPath);
     configureMrGitPath(options.gitPath);
+    configureRemoteBranchGitPath(options.gitPath);
   }
 
   const log = (level, message) => {
@@ -344,6 +375,9 @@ export function createGitLensServer(options) {
   // 路径在工厂内按本实例 configDir 解析（configDir 为工厂级常量、模块级无缓存），
   // 因此 web 与桌面共享同一 configDir 时星标自动互通，隔离目录互不可见。
   const starsFilePath = path.join(configDir, 'stars.json');
+
+  // worktree 别名元数据：与星标同目录落位，键为 worktree realpath，跨会话保留
+  const worktreeMetaFilePath = path.join(configDir, 'worktree-meta.json');
 
   /**
    * 读取星标列表。文件不存在按空列表处理（首次使用）；JSON 损坏或结构异常
@@ -416,6 +450,81 @@ export function createGitLensServer(options) {
       }
     }
     return repos;
+  }
+
+  /**
+   * 读取 worktree 别名元数据（<configDir>/worktree-meta.json）。
+   * 文件不存在或结构异常时按空映射处理（记 warn 日志），键为 worktree realpath。
+   * @returns {Promise<Object<string, {name: string}>>} realpath → 元数据映射
+   */
+  async function readWorktreeMeta() {
+    try {
+      const raw = await fs.readFile(worktreeMetaFilePath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed.worktrees !== 'object' || parsed.worktrees === null) return {};
+      const result = {};
+      for (const [key, value] of Object.entries(parsed.worktrees)) {
+        if (typeof key === 'string' && value && typeof value === 'object' && typeof value.name === 'string') {
+          result[key] = { name: value.name };
+        }
+      }
+      return result;
+    } catch (err) {
+      if (err.code !== 'ENOENT') {
+        log('warn', `worktree-meta.json 读取失败，已按空映射处理：${err.message}`);
+      }
+      return {};
+    }
+  }
+
+  /**
+   * 原子写入 worktree 别名元数据（临时文件 + rename，与 stars.json 同一模式）。
+   * @param {Object<string, {name: string}>} meta - realpath → 元数据映射
+   */
+  async function writeWorktreeMeta(meta) {
+    await fs.mkdir(configDir, { recursive: true });
+    const tmp = `${worktreeMetaFilePath}.tmp-${process.pid}-${crypto.randomUUID()}`;
+    try {
+      await fs.writeFile(tmp, JSON.stringify({ version: 1, worktrees: meta }, null, 2) + '\n', 'utf-8');
+      await fs.rename(tmp, worktreeMetaFilePath);
+    } catch (err) {
+      await fs.rm(tmp, { force: true }).catch(() => {});
+      throw err;
+    }
+  }
+
+  /**
+   * 按 realpath 键清除 worktree 别名元数据。
+   * 与 setWorktreeName 的区别：移除 worktree 后目录已不存在，无法重新 realpath，
+   * 因此由调用方传入移除前取得的键。
+   * @param {string} key - worktree 的 realpath
+   */
+  async function clearWorktreeNameByKey(key) {
+    try {
+      const meta = await readWorktreeMeta();
+      if (!meta[key]) return;
+      delete meta[key];
+      await writeWorktreeMeta(meta);
+    } catch (err) {
+      // 别名清理发生在 worktree 移除之后，失败不能回滚；至少留下可定位的告警
+      log('warn', `清理 Worktree 别名失败（${key}）：${err.message}`);
+    }
+  }
+
+  /**
+   * 设置单个 worktree 的别名；空名清除该条目，其余条目保持不变。
+   * @param {string} worktreePath - worktree 路径（realpath 归一后作为键）
+   * @param {string} name - 规整后的别名（空串表示清除）
+   */
+  async function setWorktreeName(worktreePath, name) {
+    const key = await fs.realpath(worktreePath).catch(() => path.resolve(worktreePath));
+    const meta = await readWorktreeMeta();
+    if (name) {
+      meta[key] = { name };
+    } else {
+      delete meta[key];
+    }
+    await writeWorktreeMeta(meta);
   }
 
   /**
@@ -651,6 +760,15 @@ export function createGitLensServer(options) {
           getBranches(repoPath)
         ]);
 
+        // 工作区别名注入（worktree-meta.json 以 realpath 为键，逐个归一后匹配）
+        const worktreeMetaMap = await readWorktreeMeta();
+        if (Object.keys(worktreeMetaMap).length > 0) {
+          await Promise.all(worktrees.map(async (wt) => {
+            const real = await fs.realpath(wt.path).catch(() => path.resolve(wt.path));
+            if (worktreeMetaMap[real]) wt.name = worktreeMetaMap[real].name;
+          }));
+        }
+
         // 传递吸收判定收尾：worktree 自身的四方判定没有全局分支视图。
         // 先同步分支侧结论（含历史整合推断覆盖的场景），再对 worktree 直接探测载体——
         // squash/PR 合并后的开发分支在分支面板常已显示合入，worktree 面板却仍显示领先
@@ -758,7 +876,9 @@ export function createGitLensServer(options) {
         if (!repoPath || !worktreePath) throw new Error('Missing repoPath or worktreePath');
         let result;
         try {
-          result = await removeWorktreeWithBranch(repoPath, worktreePath, force, branchName, shouldDeleteBranch);
+          result = await removeWorktreeWithBranch(
+            repoPath, worktreePath, force, branchName, shouldDeleteBranch, clearWorktreeNameByKey
+          );
         } catch (err) {
           return sendJson(res, 400, { ok: false, error: err.message });
         }
@@ -800,7 +920,8 @@ export function createGitLensServer(options) {
               continue;
             }
             const result = await removeWorktreeWithBranch(
-              repoPath, candidate.path, false, candidate.branch, Boolean(deleteBoundBranches)
+              repoPath, candidate.path, false, candidate.branch, Boolean(deleteBoundBranches),
+              clearWorktreeNameByKey
             );
             results.push({ path: worktreePath, ...result });
           } catch (err) {
@@ -1111,6 +1232,297 @@ export function createGitLensServer(options) {
         try {
           const result = await pullWorktree(worktree);
           return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13. API: 分支管理域（契约外新增功能，校验链收敛在 remote-branch-service 内）。
+      // 列表：远端分支 + 相对主干的领先/落后 + 本地同名分支同步状态
+      if (pathname === '/api/remote-branches' && req.method === 'GET') {
+        try {
+          const result = await listRemoteBranches(parsed.query.path);
+          return sendJson(res, 200, { ok: true, ...result });
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.1 刷新远端（fetch --prune --all）。git 层失败（网络/凭据/超时）不抛错，
+      // 按既有 pull 口径返回 200 + ok:false 与原始输出
+      if (pathname === '/api/fetch-remotes' && req.method === 'POST') {
+        const { repoPath } = await readJson();
+        try {
+          const result = await fetchRemotes(repoPath);
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.2 基于现有远端分支创建新远端分支（纯远端操作，不落地本地分支）
+      if (pathname === '/api/create-remote-branch' && req.method === 'POST') {
+        const { repoPath, sourceRef, newBranchName } = await readJson();
+        try {
+          const result = await createRemoteBranch({ repoPath, sourceRef, newBranchName });
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.3 工作区分支切换 / 检出远端分支（可指定新本地分支名）
+      if (pathname === '/api/checkout-branch' && req.method === 'POST') {
+        const { repoPath, worktree, refType, ref, localName } = await readJson();
+        try {
+          const result = await checkoutBranch({ repoPath, worktreePath: worktree, refType, ref, localName });
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.4 合并远端/本地分支到目标工作区。干净合并直接完成（status: merged），
+      // 冲突时保持 merge 现场并返回冲突清单（status: conflict），由 13.5-13.8 处理
+      if (pathname === '/api/merge-ref' && req.method === 'POST') {
+        const { repoPath, worktree, ref, refType } = await readJson();
+        try {
+          const result = await mergeRef({ repoPath, worktreePath: worktree, ref, refType });
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.5 读取工作区合并进行状态（冲突文件清单 + 双方分支标签），供 UI 恢复冲突面板
+      if (pathname === '/api/merge-state' && req.method === 'GET') {
+        try {
+          const result = await getMergeState(parsed.query.worktree);
+          return sendJson(res, 200, { ok: true, ...result });
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.6 读取单个冲突文件的三方内容（工作区当前 / ours / theirs / base）
+      if (pathname === '/api/merge-conflict-file' && req.method === 'GET') {
+        try {
+          const result = await getConflictFile({
+            worktreePath: parsed.query.worktree,
+            filePath: parsed.query.filePath
+          });
+          return sendJson(res, 200, { ok: true, ...result });
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.7 处理单个冲突文件：采用当前分支 / 采用合并来源 / 写入自定义编辑内容，处理后 git add
+      if (pathname === '/api/merge-resolve' && req.method === 'POST') {
+        const { worktree, filePath, resolution, content } = await readJson();
+        try {
+          const result = await resolveConflictFile({ worktreePath: worktree, filePath, resolution, content });
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.8 完成合并（冲突全部处理后生成 merge commit）
+      if (pathname === '/api/merge-commit' && req.method === 'POST') {
+        const { worktree } = await readJson();
+        try {
+          const result = await commitMerge(worktree);
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.9 放弃合并（git merge --abort 恢复现场）
+      if (pathname === '/api/merge-abort' && req.method === 'POST') {
+        const { worktree } = await readJson();
+        try {
+          const result = await abortMerge(worktree);
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.10 本地分支清单（检出绑定 + 相对主干合入状态），供分支管理 Tab 左栏使用
+      if (pathname === '/api/local-branches' && req.method === 'GET') {
+        try {
+          const result = await listLocalBranches(parsed.query.path);
+          return sendJson(res, 200, { ok: true, ...result });
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.11 删除远端分支（保护分支即远端默认分支不可删）
+      if (pathname === '/api/delete-remote-branch' && req.method === 'POST') {
+        const { repoPath, ref } = await readJson();
+        try {
+          const result = await deleteRemoteBranch({ repoPath, ref });
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 13.12 删除本地分支（主分支/被检出/未合入三重保护；force 为强删二次确认）
+      if (pathname === '/api/delete-local-branch' && req.method === 'POST') {
+        const { repoPath, branch, force } = await readJson();
+        try {
+          const result = await deleteLocalBranch({ repoPath, branch, force: force === true });
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 14.1 创建 Worktree：指定目录 + 分支（检出已有分支，或以起点引用新建分支），可同时登记别名
+      if (pathname === '/api/create-worktree' && req.method === 'POST') {
+        const { repoPath, worktreePath, branchMode, branchName, startPoint, name } = await readJson();
+        let alias = '';
+        try {
+          alias = normalizeWorktreeName(name);
+        } catch (err) {
+          return sendJson(res, err.statusCode || 400, { ok: false, error: err.message });
+        }
+        try {
+          const result = await createWorktree({ repoPath, worktreePath, branchMode, branchName, startPoint });
+          if (alias) {
+            // 别名登记失败不影响创建结果，但要把失败原因带回给用户
+            try {
+              await setWorktreeName(result.path, alias);
+              result.name = alias;
+            } catch (metaErr) {
+              result.nameError = `工作区已创建，但别名保存失败：${metaErr.message}`;
+            }
+          }
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 14.2 Worktree 上锁 / 解锁（git worktree lock / unlock）
+      if (pathname === '/api/worktree-lock' && req.method === 'POST') {
+        const { repoPath, worktreePath, lock, reason } = await readJson();
+        try {
+          const result = await setWorktreeLock({ repoPath, worktreePath, lock, reason });
+          return sendJson(res, 200, result);
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 14.3 Worktree 别名读取（仅返回属于该仓库各 worktree 的条目）与设置（空名清除）
+      if (pathname === '/api/worktree-meta' && req.method === 'GET') {
+        const repoPath = parsed.query.path;
+        if (!repoPath || !(await isGitRepo(repoPath))) {
+          return sendJson(res, 400, { ok: false, error: '仓库路径无效' });
+        }
+        const allMeta = await readWorktreeMeta();
+        const worktrees = await getWorktrees(repoPath);
+        const meta = {};
+        await Promise.all(worktrees.map(async (wt) => {
+          const real = await fs.realpath(wt.path).catch(() => path.resolve(wt.path));
+          if (allMeta[real]) meta[real] = allMeta[real];
+        }));
+        return sendJson(res, 200, { ok: true, meta });
+      }
+
+      if (pathname === '/api/worktree-meta' && req.method === 'POST') {
+        const { repoPath, worktreePath, name } = await readJson();
+        if (!repoPath || !(await isGitRepo(repoPath))) {
+          return sendJson(res, 400, { ok: false, error: '仓库路径无效' });
+        }
+        // 缺少路径时 realpath/path.resolve 会抛 TypeError 变成 500，先按参数错误拦截
+        if (typeof worktreePath !== 'string' || worktreePath.trim() === '') {
+          return sendJson(res, 400, { ok: false, error: 'worktreePath 必须为非空字符串' });
+        }
+        // 目标必须是本仓库的在册 worktree，防止借元数据接口给任意路径写文件。
+        // realpath 归一后比对（/tmp 与 /private/tmp 这类符号链接别名视为同一路径）
+        const worktrees = await getWorktrees(repoPath);
+        const targetReal = await fs.realpath(worktreePath).catch(() => path.resolve(worktreePath));
+        const registered = await Promise.all(
+          worktrees.map(async (wt) => fs.realpath(wt.path).catch(() => path.resolve(wt.path)))
+        ).then(realPaths => realPaths.includes(targetReal));
+        if (!registered) {
+          return sendJson(res, 404, { ok: false, error: '指定的工作区不属于当前仓库或已失联' });
+        }
+        let alias = '';
+        try {
+          alias = normalizeWorktreeName(name);
+        } catch (err) {
+          return sendJson(res, err.statusCode || 400, { ok: false, error: err.message });
+        }
+        try {
+          await setWorktreeName(worktreePath, alias);
+          return sendJson(res, 200, { ok: true, worktreePath, name: alias });
+        } catch (err) {
+          const status = err.statusCode || 500;
+          return sendJson(res, status, { ok: false, error: err.message });
+        }
+      }
+
+      // 14.4 以别名同步重命名 Worktree 根目录（git worktree move）并迁移别名元数据。
+      // 主工作区目录承载共享 .git，仅支持改别名、不重命名目录（服务返回 moved:false 语义由 409 明示）
+      if (pathname === '/api/worktree-rename' && req.method === 'POST') {
+        const { repoPath, worktreePath, name } = await readJson();
+        if (!repoPath || !(await isGitRepo(repoPath))) {
+          return sendJson(res, 400, { ok: false, error: '仓库路径无效' });
+        }
+        // 缺少路径时 realpath/path.resolve 会抛 TypeError 变成 500，先按参数错误拦截
+        if (typeof worktreePath !== 'string' || worktreePath.trim() === '') {
+          return sendJson(res, 400, { ok: false, error: 'worktreePath 必须为非空字符串' });
+        }
+        let alias = '';
+        try {
+          alias = normalizeWorktreeName(name);
+          if (!alias) throw httpError('名称不能为空', 400);
+        } catch (err) {
+          return sendJson(res, err.statusCode || 400, { ok: false, error: err.message });
+        }
+        // 别名元数据以 realpath 为键，迁移前先取旧键
+        const worktreesBefore = await getWorktrees(repoPath);
+        const oldReal = await fs.realpath(worktreePath).catch(() => path.resolve(worktreePath));
+        const isRegistered = await Promise.all(
+          worktreesBefore.map(async (wt) => fs.realpath(wt.path).catch(() => path.resolve(wt.path)))
+        ).then(realPaths => realPaths.includes(oldReal));
+        if (!isRegistered) {
+          return sendJson(res, 404, { ok: false, error: '指定的工作区不属于当前仓库或已失联' });
+        }
+        try {
+          const result = await renameWorktreeDirectory({ repoPath, worktreePath: oldReal, newName: alias });
+          // 别名随目录迁移：旧键清除、新键写入
+          const meta = await readWorktreeMeta();
+          if (meta[oldReal]) {
+            delete meta[oldReal];
+            await writeWorktreeMeta(meta);
+          }
+          const newReal = await fs.realpath(result.to).catch(() => result.to);
+          await setWorktreeName(newReal, alias);
+          return sendJson(res, 200, { ok: true, worktreePath: newReal, name: alias, moved: result.moved, from: result.from });
         } catch (err) {
           const status = err.statusCode || 500;
           return sendJson(res, status, { ok: false, error: err.message });

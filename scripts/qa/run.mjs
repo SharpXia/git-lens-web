@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * run.mjs —— QA 隔离测试单一入口（契约 §8.3，`npm run test:isolated`）
+ * run.mjs —— QA 隔离测试单一入口（契约 §8.3，`pnpm run test:isolated`）
  *
  * 流程：
  *   1. mkdtemp 建本轮 qa-root（契约 §8.1 布局）并生成全部 Git fixture；
@@ -14,7 +14,7 @@
  * 服务进程退出后验证端口已释放；9527 与真实配置目录在任何分支下都不会被触碰。
  *
  * 用法：
- *   npm run test:isolated            # 常规入口
+ *   pnpm run test:isolated            # 常规入口
  *   node scripts/qa/run.mjs --keep   # 成功时也保留 qa-root（调试用）
  *   node scripts/qa/run.mjs --service-url http://127.0.0.1:9530
  *                                    # 测试专用：跳过 spawn，对显式地址执行握手与冒烟。
@@ -511,7 +511,7 @@ async function main() {
         outcome = 'runtime-contract-not-ready';
         guidance = [
           'Runtime 契约未就绪，正向用例跳过：服务未按契约从 stdout 报告实际监听端口（PORT=0 时必须回填真实端口），',
-          '或尚未实现 /api/test-handshake（契约 §2/§3）。请合入 codex/electron-runtime 的 G1 交付后重试：npm run test:isolated。',
+          '或尚未实现 /api/test-handshake（契约 §2/§3）。请合入 codex/electron-runtime 的 G1 交付后重试：pnpm run test:isolated。',
           `守卫负向用例不依赖服务，可直接运行: node --test test/qa-guard.test.mjs test/verify-guard.test.mjs`
         ].join('\n  ');
         for (const check of smokeChecks({ baseUrl: '', fixture, qaRoot })) {
@@ -537,7 +537,7 @@ async function main() {
         record('handshake', '测试握手 /api/test-handshake', 'skip', err.message);
         guidance = [
           `Runtime 契约未就绪，正向用例跳过：${err.message}`,
-          '请合入 codex/electron-runtime 的 G1 交付（服务工厂 + 测试握手，契约 §2/§3）后重试: npm run test:isolated。',
+          '请合入 codex/electron-runtime 的 G1 交付（服务工厂 + 测试握手，契约 §2/§3）后重试: pnpm run test:isolated。',
           '守卫负向用例不依赖服务，可直接运行: node --test test/qa-guard.test.mjs test/verify-guard.test.mjs'
         ].join('\n  ');
         for (const check of smokeChecks({ baseUrl, fixture, qaRoot })) {

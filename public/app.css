@@ -64,6 +64,12 @@
       color: var(--success);
       border-color: rgba(63, 185, 80, 0.3);
     }
+    /* 中性徽标：表达常态信息（如远端分支「未检出」），避免红色稀释真异常的警示力 */
+    .badge-muted {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-muted);
+      border-color: var(--border);
+    }
     .diff-sync-action {
       cursor: pointer;
       font: inherit;
@@ -155,6 +161,12 @@
       color: #fff;
     }
     button.btn-primary:hover { background: #2ea043; }
+    /* 主按钮禁用态需足够醒目：全局 0.55 透明度在绿色底上区分度不足，用户会误以为可点 */
+    button.btn-primary:disabled {
+      opacity: 0.35;
+      filter: grayscale(0.6);
+      background: #238636;
+    }
     button.btn-outline {
       background: transparent;
       border: 1px solid var(--border);
@@ -1909,3 +1921,341 @@
     }
 
   
+
+    /* ===== 远端分支管理 Tab ===== */
+    .remote-toolbar {
+      display: flex;
+      align-items: flex-end;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .remote-target-info {
+      flex: 1;
+      min-width: 220px;
+      font-size: 13px;
+      color: var(--text-muted);
+      padding-bottom: 4px;
+    }
+    .remote-target-info strong { color: var(--text-bright); font-weight: 600; }
+    .remote-list-tip {
+      font-size: 12px;
+      color: var(--text-muted);
+      padding: 10px 16px 0;
+    }
+    .remote-modal-source {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 13px;
+      color: var(--text-bright);
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 6px;
+      padding: 6px 10px;
+      word-break: break-all;
+    }
+    .remote-modal-hint {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* 合并进行中面板：冲突清单与快捷处理。
+       处于合并冲突 = 阻塞态，用红色系与列表里「落后主干」等橙色徽标拉开层级 */
+    .remote-merge-panel {
+      margin-bottom: 16px;
+      border-color: rgba(248, 81, 73, 0.55);
+    }
+    .remote-merge-panel .panel-header {
+      background: rgba(248, 81, 73, 0.07);
+      border-bottom-color: rgba(248, 81, 73, 0.25);
+    }
+    .remote-merge-panel .panel-header h2 { color: var(--danger); }
+    .merge-commit-hint {
+      font-size: 12px;
+      color: var(--danger);
+      white-space: nowrap;
+      align-self: center;
+    }
+    .remote-merge-labels {
+      font-size: 12px;
+      font-weight: 400;
+      color: var(--text-muted);
+    }
+    .remote-merge-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .remote-merge-summary {
+      font-size: 13px;
+      color: var(--text);
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .remote-merge-summary.done { color: var(--success); }
+    .conflict-item {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+    .conflict-item:last-child { border-bottom: none; }
+    .conflict-item-main { flex: 1; min-width: 0; }
+    .conflict-item-path {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 13px;
+      color: var(--text-bright);
+      word-break: break-all;
+    }
+    .conflict-item-actions {
+      display: flex;
+      align-items: center;
+      flex-shrink: 0;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .conflict-item-actions .btn-outline,
+    .conflict-item-actions .btn-danger,
+    .conflict-item-actions .btn-primary {
+      font-size: 12px;
+      padding: 4px 10px;
+      white-space: nowrap;
+    }
+
+    /* 冲突文件编辑抽屉（复用 commits-drawer 容器，仅补充内部布局） */
+    .conflict-drawer-hint {
+      padding: 10px 20px 0;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .conflict-hunk-tools {
+      padding: 10px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 45%;
+      overflow: auto;
+    }
+    .conflict-hunk-card {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      font-size: 12px;
+    }
+    .conflict-hunk-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      background: var(--card-alt);
+      color: var(--text-muted);
+    }
+    .conflict-hunk-actions { display: flex; gap: 6px; }
+    .conflict-hunk-actions button {
+      font-size: 11px;
+      padding: 2px 8px;
+      white-space: nowrap;
+    }
+    .conflict-side {
+      padding: 4px 10px;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .conflict-side-ours { background: var(--diff-add-bg); color: var(--diff-add-text); }
+    .conflict-side-theirs { background: var(--diff-hunk-bg); color: var(--diff-hunk-text); }
+    .conflict-side-base { background: rgba(255, 255, 255, 0.04); color: var(--text-muted); }
+    .conflict-side-label {
+      display: inline-block;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 10px;
+      padding: 0 6px;
+      margin-right: 6px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-muted);
+      vertical-align: 1px;
+    }
+    .conflict-drawer-body {
+      flex: 1;
+      min-height: 0;
+      padding: 0 20px 12px;
+      display: flex;
+    }
+    /* 编辑区与高亮层同度量叠放：字体/行高/padding/边框逐项对齐，textarea 背景透明，
+       高亮层 overflow:hidden 并跟随 textarea 滚动偏移，保证逐行对位 */
+    .conflict-editor-wrap {
+      position: relative;
+      flex: 1;
+      min-width: 0;
+    }
+    .conflict-editor-highlight {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      pointer-events: none;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      padding: 10px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.3);
+      white-space: pre;
+      color: transparent;
+    }
+    .conflict-editor-highlight .cel-line { min-height: 1.6em; }
+    /* 冲突标记行用醒目红条；ours/theirs/base 内容行只铺淡色底，避免大面积染色 */
+    .conflict-editor-highlight .cel-marker {
+      background: rgba(248, 81, 73, 0.28);
+      box-shadow: inset 3px 0 0 var(--danger);
+    }
+    .conflict-editor-highlight .cel-ours { background: rgba(63, 185, 80, 0.08); }
+    .conflict-editor-highlight .cel-theirs { background: rgba(88, 166, 255, 0.08); }
+    .conflict-editor-highlight .cel-base { background: rgba(255, 255, 255, 0.04); }
+    .conflict-editor-textarea {
+      position: relative;
+      /* wrap 不是 flex 容器，flex:1 不撑高；必须显式铺满与高亮层同框对位 */
+      height: 100%;
+      width: 100%;
+      resize: none;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      color: var(--text-bright);
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      white-space: pre;
+      overflow: auto;
+      caret-color: var(--accent);
+    }
+    .conflict-editor-textarea:focus { outline: 1px solid var(--accent); }
+    .conflict-drawer-footer {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 20px;
+      border-top: 1px solid var(--border);
+    }
+    .conflict-drawer-footer .mr-detail-error {
+      flex: 1;
+      margin: 0;
+    }
+    .remote-filter-input {
+      width: 200px;
+      font-size: 12px;
+      padding: 4px 10px;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-bright);
+    }
+    .remote-filter-input:focus { outline: 1px solid var(--accent); }
+    .remote-sort-select {
+      font-size: 12px;
+      padding: 3px 6px;
+      min-width: 0;
+    }
+    /* 列表拉取中的轻量反馈：沿用旧列表但降透明度 + 右上角角标，区分「在刷新」与「没反应」 */
+    #localBranchList, #remoteBranchList { position: relative; }
+    #localBranchList.is-loading, #remoteBranchList.is-loading { opacity: 0.55; }
+    #localBranchList.is-loading::after, #remoteBranchList.is-loading::after {
+      content: '加载中…';
+      position: absolute;
+      top: 8px;
+      right: 14px;
+      font-size: 11px;
+      color: var(--accent);
+      pointer-events: none;
+    }
+    /* 弹层内输入实时校验的错误提示（重名预检/非法分支名） */
+    .remote-modal-hint.error { color: var(--danger); }
+    .remote-modal-hint.ok { color: var(--success); }
+    /* 分支列表的删除按钮：保留 outline 造型但转为危险色，与「移除」类操作的视觉权重区分开 */
+    .branch-delete-btn {
+      color: var(--danger);
+      border-color: rgba(220, 38, 38, 0.4);
+    }
+    .branch-delete-btn:hover {
+      background: rgba(220, 38, 38, 0.12);
+      border-color: var(--danger);
+    }
+    .panel-header-action {
+      margin-left: auto;
+      margin-right: 8px;
+      font-size: 12px;
+      padding: 4px 10px;
+      white-space: nowrap;
+    }
+    .remote-autofetch-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: nowrap;
+      white-space: nowrap;
+      flex-shrink: 0;
+      /* 自动刷新是设置项而非动作：用分隔线与左侧动作按钮在视觉上分组 */
+      padding-left: 14px;
+      border-left: 1px solid var(--border);
+      margin-left: 4px;
+    }
+    .remote-autofetch-group .picker-label span { font-size: 12px; color: var(--text-muted); }
+    .remote-autofetch-group .picker-select { min-width: 110px; }
+    .wt-name-badge {
+      background: rgba(88, 166, 255, 0.15);
+      color: var(--accent);
+      border: 1px solid rgba(88, 166, 255, 0.3);
+    }
+    /* Worktree 标题行内工具（上锁开关 + 别名编辑），与标题 y 轴居中 */
+    .wt-title-tools {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+    .wt-lock-btn {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .wt-lock-btn:hover { border-color: var(--accent); color: var(--text-bright); }
+    .wt-lock-btn.locked {
+      background: rgba(210, 153, 34, 0.15);
+      color: var(--warning);
+      border-color: rgba(210, 153, 34, 0.35);
+    }
+    .wt-edit-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 13px;
+      padding: 2px 4px;
+      border-radius: 4px;
+    }
+    .wt-edit-btn:hover { color: var(--accent); }
+    /* 创建 Worktree：目录输入 + 父目录选择按钮同行 */
+    .wt-path-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .wt-path-row .mr-form-input { flex: 1; }
+    .wt-path-pick-btn { white-space: nowrap; }

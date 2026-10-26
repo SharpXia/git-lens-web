@@ -874,30 +874,36 @@ async function runMultiTabCheck(baseCtx) {
       menuSnapshot ? (menuSnapshot.duplicates.length ? `重复：${menuSnapshot.duplicates.join(', ')}` : '无重复') : '菜单快照为空',
     );
 
-    // 全屏进入：驱动 → 轮询（类 + macOS 窗口拖动区禁用）
-    const enterTriggered = await inspector.evaluate(mainSetFullScreenExpr(true));
-    const entered = await waitFor(async () => {
-      const state = await readFullscreenState();
-      return state && state.fullscreenClass === true && (!isDarwin || state.appRegion === 'no-drag') ? state : null;
-    }, 10000);
-    assert(
-      'chrome 融合（全屏吸附）：进入全屏后 body.fullscreen 生效且 macOS 禁用窗口拖动',
-      enterTriggered === true && Boolean(entered),
-      `驱动=${enterTriggered} 终态=${JSON.stringify(entered)}`,
-    );
+    // 系统全屏会切换 macOS Space 并占满屏幕，即使窗口隐藏也会打断用户，
+    // 默认跳过；关键阶段设置 GIT_LENS_E2E_INTRUSIVE=1 显式执行
+    if (process.env.GIT_LENS_E2E_INTRUSIVE !== '1') {
+      console.log('[SKIP] chrome 融合（全屏吸附）：侵入式全屏往返默认跳过，设置 GIT_LENS_E2E_INTRUSIVE=1 后执行');
+    } else {
+      // 全屏进入：驱动 → 轮询（类 + macOS 窗口拖动区禁用）
+      const enterTriggered = await inspector.evaluate(mainSetFullScreenExpr(true));
+      const entered = await waitFor(async () => {
+        const state = await readFullscreenState();
+        return state && state.fullscreenClass === true && (!isDarwin || state.appRegion === 'no-drag') ? state : null;
+      }, 10000);
+      assert(
+        'chrome 融合（全屏吸附）：进入全屏后 body.fullscreen 生效且 macOS 禁用窗口拖动',
+        enterTriggered === true && Boolean(entered),
+        `驱动=${enterTriggered} 终态=${JSON.stringify(entered)}`,
+      );
 
-    // 全屏退出：恢复断言（类移除 + 恢复窗口拖动），恢复完成后再继续关标签，
-    // 避免退出协议与全屏过渡竞态
-    const exitTriggered = await inspector.evaluate(mainSetFullScreenExpr(false));
-    const exited = await waitFor(async () => {
-      const state = await readFullscreenState();
-      return state && state.fullscreenClass === false && state.appRegion === 'drag' ? state : null;
-    }, 10000);
-    assert(
-      'chrome 融合（全屏吸附）：退出全屏后 fullscreen 类移除且恢复窗口拖动',
-      exitTriggered === true && Boolean(exited),
-      `驱动=${exitTriggered} 终态=${JSON.stringify(exited)}`,
-    );
+      // 全屏退出：恢复断言（类移除 + 恢复窗口拖动），恢复完成后再继续关标签，
+      // 避免退出协议与全屏过渡竞态
+      const exitTriggered = await inspector.evaluate(mainSetFullScreenExpr(false));
+      const exited = await waitFor(async () => {
+        const state = await readFullscreenState();
+        return state && state.fullscreenClass === false && state.appRegion === 'drag' ? state : null;
+      }, 10000);
+      assert(
+        'chrome 融合（全屏吸附）：退出全屏后 fullscreen 类移除且恢复窗口拖动',
+        exitTriggered === true && Boolean(exited),
+        `驱动=${exitTriggered} 终态=${JSON.stringify(exited)}`,
+      );
+    }
 
     inspector.close();
   }

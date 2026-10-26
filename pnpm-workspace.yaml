@@ -1,0 +1,11 @@
+# pnpm 11 的项目级设置集中在此文件；.npmrc 只保留 registry/auth 类配置。
+# electron-builder 依赖扁平 node_modules 收集依赖，符号链接布局会漏包。
+nodeLinker: hoisted
+# 允许执行安装脚本的依赖：esbuild/fsevents 供开发与测试，electron-winstaller 是
+# electron-builder 的 Windows 目标依赖（macOS 构建不会调用）；Electron 44 起二进制
+# 改为按需下载，这里保留条目以兼容上游恢复 postinstall。
+allowBuilds:
+  electron: true
+  electron-winstaller: true
+  esbuild: true
+  fsevents: true

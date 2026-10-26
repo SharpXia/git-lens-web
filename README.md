@@ -26,11 +26,12 @@ Git Lens Web 把这些信息放进一个本地页面，先展示事实和 Diff�
 | --- | --- |
 | 📁 扫描目录 | 添加多个 Workspace 并持久化；检查目录本身和直接子目录中的 Git 仓库；支持系统目录选择器和手动输入路径。 |
 | 📊 仓库总览 | 展示 Worktree、分支、失联引用和可清理项；支持仓库搜索、收藏和星标筛选。 |
-| 🌳 Worktree 管理 | 区分主工作区和派生 Worktree，显示目录状态、未提交文件、领先提交和绑定分支；支持移除 Worktree、Prune 无效引用和批量清理。 |
+| 🌳 Worktree 管理 | 区分主工作区和派生 Worktree，显示目录状态、未提交文件、领先提交和绑定分支；支持移除 Worktree、Prune 无效引用和批量清理；支持在指定目录基于已有或新建分支创建 Worktree；编辑工作区名称会同步重命名根目录（主工作区仅改显示名），并支持直接上锁/解锁（上锁后 git 拒绝移除与清理）。 |
 | 🌿 分支透视 | 展示主分支、Worktree 占用、已合入、内容已被吸收和过期分支；支持普通删除或强制删除。 |
 | ⚡ Branch Diff | Base 和 Target 可分别选择 Worktree 或本地分支，支持 Worktree ↔ Worktree、分支 ↔ 分支以及混合比较。 |
 | 🧹 未提交自审 | 选择同一个 Worktree 时进入自审模式，查看未提交和未跟踪文件；支持 Stash、Pop、Drop 和丢弃全部修改。 |
 | 🔀 本地 MR | 对两个本地分支创建 Merge Request，经过通过、要求修改或拒绝后再执行 `git merge --no-ff`；冲突会自动中止并保留 MR。 |
+| 🌿 分支管理 | 左右分栏同时管理本地与远端分支：本地分支支持检出到任选工作区，未检出分支可删除（未合入主干需二次确认强制删除）；远端分支支持清单与同步状态、基于现有分支直接创建新远端分支（纯远端操作）、检出（可重命名）、合并到当前工作区（冲突支持按侧快捷采用或自定义编辑冲突区域）、删除非保护分支（远端默认分支为保护分支不可删）；支持手动/自动定时 fetch，合并前久未刷新会提醒先 fetch。 |
 | 📋 提交记录 | 查看分支相对主干的领先/落后，按作者、关键词和日期过滤，按日期分组浏览，并展开提交详情和单提交 Diff。 |
 | 🍒 提交操作 | 对当前分支执行 Cherry-pick 或 Revert；冲突、空提交和不合法目标会返回中文错误，并自动恢复现场。 |
 | 🏷️ 浏览器标签识别 | 标签标题包含当前仓库和功能页；同名仓库会补充上级目录；favicon 使用统一的 Git Lens 浅色 App icon。 |
@@ -50,7 +51,7 @@ Git Lens Web 把这些信息放进一个本地页面，先展示事实和 Diff�
 ### 环境要求
 
 - 已安装 Git，并且 `git` 可以在终端直接调用；
-- 已安装 npm；
+- 已安装 pnpm 11（推荐通过 `corepack enable` 启用）；
 - Node.js 版本满足 `^20.19.0 || >=22.12.0`；
 - 当前机器可以访问本机浏览器。
 
@@ -59,8 +60,8 @@ Git Lens Web 把这些信息放进一个本地页面，先展示事实和 Diff�
 ```bash
 git clone YOUR_REPOSITORY_URL
 cd git-lens-web
-npm ci
-npm start
+pnpm install --frozen-lockfile
+pnpm start
 ```
 
 启动后打开 [http://127.0.0.1:9527](http://127.0.0.1:9527)。
@@ -68,14 +69,14 @@ npm start
 如果端口已占用，可以换一个端口：
 
 ```bash
-PORT=8080 npm start
+PORT=8080 pnpm start
 ```
 
 Windows PowerShell：
 
 ```powershell
 $env:PORT=8080
-npm start
+pnpm start
 ```
 
 服务只监听本机 `127.0.0.1`。不要直接双击打开 `public/index.html`，页面需要通过本地服务访问 Git API 和系统目录选择器。
@@ -220,7 +221,7 @@ test/                   Git 状态、Diff、MR、Stash 和清理测试
 docs/images/            README 界面流程动图
 ```
 
-当前前端使用原生 HTML、CSS 和 JavaScript，服务通过 `npm start` 直接运行，无需先生成前端构建产物。Node 服务通过 Git CLI 读取和修改本地仓库。
+当前前端使用原生 HTML、CSS 和 JavaScript，服务通过 `pnpm start` 直接运行，无需先生成前端构建产物。Node 服务通过 Git CLI 读取和修改本地仓库。
 
 ## 验证
 
@@ -228,8 +229,17 @@ docs/images/            README 界面流程动图
 
 ```bash
 # 首次运行时安装图片预览回归测试使用的浏览器
-npx playwright install chromium
+pnpm exec playwright install chromium
+# Electron 44 起二进制按需下载，桌面相关测试前先补齐
+pnpm exec install-electron
 node --test
+```
+
+桌面自动化默认以隐藏窗口在后台运行，不抢占焦点。系统全屏等会切换 macOS Space、占满屏幕的侵入式用例默认跳过，只在发版前等关键阶段显式开启：
+
+```bash
+GIT_LENS_E2E_INTRUSIVE=1 node --test test/tab-reorder.test.mjs
+GIT_LENS_E2E_INTRUSIVE=1 node electron/checks/smoke.mjs
 ```
 
 集成验证脚本需要先启动隔离服务，并将测试配置目录指向同一份 `GIT_LENS_CONFIG_DIR`。具体命令和 fixture 构建方式见：
