@@ -251,6 +251,7 @@
       <div class="panel-header">
         <h2>⚠️ 合并冲突处理 <span id="remoteMergeLabels" class="remote-merge-labels"></span></h2>
         <div class="remote-merge-actions">
+          <span id="mergeCommitHint" class="merge-commit-hint"></span>
           <button id="mergeAbortBtn" class="btn-outline" type="button" data-action="merge-abort" title="git merge --abort，恢复合并前现场">放弃合并</button>
           <button id="mergeCommitBtn" class="btn-primary" type="button" data-action="merge-commit" title="冲突全部处理后生成合并提交">完成合并</button>
         </div>
@@ -264,6 +265,11 @@
     <div class="panel">
       <div class="panel-header">
         <h2>🌿 本地分支</h2>
+        <select id="localBranchSortSelect" class="picker-select remote-sort-select" aria-label="本地分支排序方式" title="列表排序方式">
+          <option value="recent">按最近提交</option>
+          <option value="name">按名称</option>
+          <option value="ahead">按领先主干</option>
+        </select>
         <input id="localBranchFilterInput" class="remote-filter-input" type="search" placeholder="过滤本地分支..." aria-label="过滤本地分支" autocomplete="off">
         <span id="localBranchCount" class="badge">0 个</span>
       </div>
@@ -276,6 +282,11 @@
     <div class="panel">
       <div class="panel-header">
         <h2>☁️ 远端分支</h2>
+        <select id="remoteBranchSortSelect" class="picker-select remote-sort-select" aria-label="远端分支排序方式" title="列表排序方式">
+          <option value="recent">按最近提交</option>
+          <option value="name">按名称</option>
+          <option value="ahead">按领先主干</option>
+        </select>
         <input id="remoteBranchFilterInput" class="remote-filter-input" type="search" placeholder="过滤远端分支..." aria-label="过滤远端分支" autocomplete="off">
         <span id="remoteBranchCount" class="badge">0 个</span>
       </div>
@@ -303,6 +314,7 @@
           <label for="checkoutLocalNameInput">本地分支名（可重命名）</label>
           <input id="checkoutLocalNameInput" class="mr-form-input" type="text" placeholder="例如：feature/xxx" maxlength="200" autocomplete="off">
           <div class="remote-modal-hint">将以该名称创建本地跟踪分支并检出到目标工作区，自动建立 upstream。</div>
+          <div class="remote-modal-hint error" id="checkoutNameValidation" style="display: none;"></div>
         </div>
         <div class="mr-form-group">
           <label for="checkoutWorktreeSelect">目标工作区</label>
@@ -360,6 +372,7 @@
           <label for="createRemoteBranchNameInput">新远端分支名</label>
           <input id="createRemoteBranchNameInput" class="mr-form-input" type="text" placeholder="例如：feature/xxx" maxlength="200" autocomplete="off">
           <div class="remote-modal-hint">直接 push 到远端创建，不影响任何本地分支与工作区。</div>
+          <div class="remote-modal-hint error" id="createRemoteNameValidation" style="display: none;"></div>
         </div>
         <div id="createRemoteModalError" class="mr-detail-error" role="alert"></div>
       </div>
@@ -400,13 +413,39 @@
             </div>
           </div>
           <select id="switchBranchSelect" style="display: none;"></select>
-          <div class="remote-modal-hint">选择本地分支为直接切换；选择远端分支会以同名新建本地跟踪分支并检出。</div>
+          <div class="remote-modal-hint" id="switchBranchKindHint">选择本地分支为直接切换；选择远端分支会以同名新建本地跟踪分支并检出。</div>
+          <div class="remote-modal-hint" id="switchBranchDirtyHint"></div>
         </div>
         <div id="switchBranchModalError" class="mr-detail-error" role="alert"></div>
       </div>
       <div class="scan-directory-footer">
         <button class="btn-outline" type="button" data-action="close-switch-branch-modal">取消</button>
         <button id="switchBranchSubmitBtn" class="btn-primary" type="button" data-action="submit-switch-branch">切换</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通用确认弹层：分支管理 Tab 的二次确认统一走这里（替代原生 confirm）。
+       可选第三按钮（alt）与「输入指定文本才能确认」两种防误触形态，由 app.js 按参数驱动 -->
+  <div id="appConfirmModal" class="scan-directory-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="appConfirmTitle">
+    <div class="scan-directory-card app-confirm-card">
+      <div class="scan-directory-header">
+        <h2 id="appConfirmTitle">确认操作</h2>
+        <button class="drawer-close" type="button" data-action="app-confirm-dismiss" aria-label="关闭">×</button>
+      </div>
+      <div class="scan-directory-body">
+        <div id="appConfirmMessage" class="app-confirm-message"></div>
+        <div class="mr-form-group" id="appConfirmRequireGroup" style="display: none;">
+          <label for="appConfirmRequireInput" id="appConfirmRequireLabel">请输入以下内容以确认：</label>
+          <div id="appConfirmRequireEcho" class="remote-modal-source"></div>
+          <input id="appConfirmRequireInput" class="mr-form-input" type="text" autocomplete="off" spellcheck="false">
+          <div class="remote-modal-hint">输入内容与上面完全一致后，确认按钮才会可用。</div>
+        </div>
+      </div>
+      <div class="scan-directory-footer">
+        <button class="btn-outline" type="button" data-action="app-confirm-cancel" id="appConfirmCancelBtn">取消</button>
+        <button class="btn-outline" type="button" data-action="app-confirm-alt" id="appConfirmAltBtn" style="display: none;"></button>
+        <button class="btn-primary" type="button" data-action="app-confirm-confirm" id="appConfirmOkBtn">确定</button>
       </div>
     </div>
   </div>
@@ -421,7 +460,11 @@
     <div class="conflict-drawer-hint" id="conflictDrawerHint"></div>
     <div class="conflict-hunk-tools" id="conflictHunkTools"></div>
     <div class="conflict-drawer-body">
-      <textarea id="conflictEditorTextarea" class="conflict-editor-textarea" spellcheck="false" aria-label="冲突文件内容编辑区"></textarea>
+      <!-- 编辑区与只读高亮层同度量叠放：textarea 透明背景，冲突标记行/两侧内容行由下层着色 -->
+      <div class="conflict-editor-wrap" id="conflictEditorWrap">
+        <div class="conflict-editor-highlight" id="conflictEditorHighlight" aria-hidden="true"></div>
+        <textarea id="conflictEditorTextarea" class="conflict-editor-textarea" spellcheck="false" wrap="off" aria-label="冲突文件内容编辑区"></textarea>
+      </div>
     </div>
     <div class="conflict-drawer-footer">
       <div id="conflictDrawerError" class="mr-detail-error" role="alert"></div>
