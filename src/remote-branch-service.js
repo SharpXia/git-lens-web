@@ -143,6 +143,34 @@ async function resolveRepoPath(repoPath) {
 }
 
 /**
+ * 简易并发限流器：同一时刻最多 limit 个任务执行，超出按 FIFO 排队。
+ * 用于分支清单的逐分支 rev-list 统计——几百个分支时全量 Promise.all 会同时
+ * 拉起数百个 git 进程，排队执行可压住进程峰值且总量不变。
+ * @param {number} limit - 并发上限
+ * @returns {(fn: () => Promise) => Promise} 包装后的执行函数
+ */
+function createTaskLimiter(limit) {
+  let active = 0;
+  const queue = [];
+  const pump = () => {
+    if (active >= limit || queue.length === 0) return;
+    active += 1;
+    const { fn, resolve, reject } = queue.shift();
+    fn().then(resolve, reject).finally(() => {
+      active -= 1;
+      pump();
+    });
+  };
+  return (fn) => new Promise((resolve, reject) => {
+    queue.push({ fn, resolve, reject });
+    pump();
+  });
+}
+
+// 分支统计（rev-list）专用限流：8 并发在响应速度与进程峰值间取平衡
+const branchStatLimiter = createTaskLimiter(8);
+
+/**
  * 校验分支名/引用段字符串的合法性（不校验是否存在）。
  * 先做字符串前置校验防止参数被 git 当成选项，再用 check-ref-format 做权威校验。
  * @param {string} name - 分支名（可含 / 的多级名称）
@@ -505,7 +533,8 @@ export async function listRemoteBranches(repoPath) {
 
     let ahead = null;
     let behind = null;
-    const vsMain = await tryGit(normalizedRepo, ['rev-list', '--left-right', '--count', `${mainBranch}...${shortName}`]);
+    // 相对主干的统计经限流排队，避免分支数大时进程峰值失控
+    const vsMain = await branchStatLimiter(() => tryGit(normalizedRepo, ['rev-list', '--left-right', '--count', `${mainBranch}...${shortName}`]));
     if (vsMain.ok) {
       const [behindCount = '0', aheadCount = '0'] = vsMain.stdout.trim().split(/\s+/);
       ahead = Number(aheadCount) || 0;
@@ -515,7 +544,7 @@ export async function listRemoteBranches(repoPath) {
     let local = null;
     const localSha = localHeads.get(branch);
     if (localSha) {
-      const vsLocal = await tryGit(normalizedRepo, ['rev-list', '--left-right', '--count', `${branch}...${shortName}`]);
+      const vsLocal = await branchStatLimiter(() => tryGit(normalizedRepo, ['rev-list', '--left-right', '--count', `${branch}...${shortName}`]));
       if (vsLocal.ok) {
         const [localAhead = '0', localBehind = '0'] = vsLocal.stdout.trim().split(/\s+/);
         local = { ahead: Number(localAhead) || 0, behind: Number(localBehind) || 0, sha: localSha };
@@ -633,7 +662,8 @@ export async function listLocalBranches(repoPath) {
   const branches = await Promise.all(rawRefs.map(async (ref) => {
     let ahead = null;
     let behind = null;
-    const vsMain = await tryGit(normalizedRepo, ['rev-list', '--left-right', '--count', `${mainBranch}...${ref.name}`]);
+    // 相对主干的统计经限流排队，避免分支数大时进程峰值失控
+    const vsMain = await branchStatLimiter(() => tryGit(normalizedRepo, ['rev-list', '--left-right', '--count', `${mainBranch}...${ref.name}`]));
     if (vsMain.ok) {
       const [behindCount = '0', aheadCount = '0'] = vsMain.stdout.trim().split(/\s+/);
       ahead = Number(aheadCount) || 0;
