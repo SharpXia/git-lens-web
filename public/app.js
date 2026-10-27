@@ -987,7 +987,7 @@
       if (pinnedRepo) {
         const gTitle = document.createElement('div');
         gTitle.className = 'repo-list-group-title';
-        gTitle.textContent = '📌 当前项目';
+        gTitle.textContent = '当前项目';
         container.appendChild(gTitle);
         container.appendChild(createRepoItemDom(pinnedRepo, starred.includes(pinnedRepo.path)));
       }
@@ -999,7 +999,7 @@
       if (starredItems.length > 0) {
         const gTitle = document.createElement('div');
         gTitle.className = 'repo-list-group-title';
-        gTitle.textContent = `⭐ 星标收藏 (${starredItems.length})`;
+        gTitle.textContent = `星标收藏 (${starredItems.length})`;
         container.appendChild(gTitle);
 
         starredItems.forEach(r => {
@@ -1424,15 +1424,15 @@
       const historyAheadCount = Number(wt.historyAheadCount) || 0;
       let tags = [];
       if (wt.isMain) tags.push('<span class="badge badge-success">Main 工作区</span>');
-      if (wt.branch) tags.push(`<span class="badge" title="${escapeHtml(wt.branch)}">🌿 ${escapeHtml(wt.branch)}</span>`);
+      if (wt.branch) tags.push(`<span class="badge" title="${escapeHtml(wt.branch)}">${escapeHtml(wt.branch)}</span>`);
       if (!wt.existsOnDisk) tags.push('<span class="badge badge-danger">磁盘已失联</span>');
-      if (wt.isDirty) tags.push(`<span class="badge badge-warning">⚡ 未提交修改 (${dirtyCount})</span>`);
+      if (wt.isDirty) tags.push(`<span class="badge badge-warning">未提交修改 (${dirtyCount})</span>`);
       if (aheadCount > 0) {
         if (wt.deliveredViaBranch) {
           // 传递吸收判定命中：提交的机械领先是过时快照，成果已经由载体分支进入主干
           tags.push(`<span class="badge badge-success" title="提交历史领先 ${historyAheadCount || aheadCount} 个提交，但这些提交已全部包含在已合入主干的分支 ${escapeHtml(wt.deliveredViaBranch)} 中，成果已经交付。本 Worktree 为过时快照：合并会带回旧内容，确认后可直接移除">✓ 成果已经由 ${escapeHtml(wt.deliveredViaBranch)} 进入主干</span>`);
         } else {
-          tags.push(`<span class="badge badge-success" title="分支文件内容相对 Main 仍有实际差异，提交历史领先 ${historyAheadCount || aheadCount} 个提交">🚀 领先 ${aheadCount} 提交</span>`);
+          tags.push(`<span class="badge badge-success" title="分支文件内容相对 Main 仍有实际差异，提交历史领先 ${historyAheadCount || aheadCount} 个提交">领先 ${aheadCount} 提交</span>`);
         }
       } else if (wt.isContentEqualToMain && historyAheadCount > 0) {
         tags.push(`<span class="badge badge-success" title="提交历史领先 ${historyAheadCount} 个提交，但分支改动已被主干吸收（revert 抵消 / cherry-pick / squash 合入等），合入主干不会产生实际变化">内容已与主干同步</span>`);
@@ -1443,19 +1443,19 @@
       let lockTool = '';
       if (wt.isLocked) {
         lockTool = wt.existsOnDisk
-          ? `<button class="wt-lock-btn locked" type="button" data-action="wt-lock-toggle" title="已加锁：git 拒绝对该工作区执行移除/清理。点击解锁">🔒 已加锁</button>`
-          : '<span class="badge" title="已加锁（工作区失联，请先恢复目录后再操作）">🔒 已加锁</span>';
+          ? `<button class="wt-lock-btn locked" type="button" data-action="wt-lock-toggle" title="已加锁：git 拒绝对该工作区执行移除/清理。点击解锁"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> 已加锁</button>`
+          : '<span class="badge" title="已加锁（工作区失联，请先恢复目录后再操作）"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> 已加锁</span>';
       } else if (wt.existsOnDisk && !wt.isPrunable) {
         lockTool = wt.isMain
           ? ''
-          : `<button class="wt-lock-btn" type="button" data-action="wt-lock-toggle" title="点击上锁：上锁后 git 会拒绝移除/清理该工作区（保护现场）">🔓 未上锁</button>`;
+          : `<button class="wt-lock-btn" type="button" data-action="wt-lock-toggle" title="点击上锁：上锁后 git 会拒绝移除/清理该工作区（保护现场）"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg> 未上锁</button>`;
       }
-      const editTool = `<button class="wt-edit-btn" type="button" data-action="wt-edit-info" title="编辑工作区名称（应用内标识）">✏️</button>`;
+      const editTool = `<button class="wt-edit-btn" type="button" data-action="wt-edit-info" title="编辑工作区名称（应用内标识）"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></button>`;
 
       const dirName = wt.path.split('/').filter(Boolean).pop() || wt.path;
       // 别名（应用内命名）存在时作为主标签展示，原目录名降级为徽标
       const displayName = wt.name || dirName;
-      if (wt.name) tags.unshift(`<span class="badge wt-name-badge" title="目录名：${escapeHtml(dirName)}">📁 ${escapeHtml(dirName)}</span>`);
+      if (wt.name) tags.unshift(`<span class="badge wt-name-badge" title="目录名：${escapeHtml(dirName)}">${escapeHtml(dirName)}</span>`);
       // 提交人/提交说明是外部可控的 Git 元数据，必须逐字段转义后再进 HTML
       let lastInfo = wt.lastCommit
         ? `最新提交: ${escapeHtml(wt.lastCommit.relativeTime)} by ${escapeHtml(wt.lastCommit.author)} · "${escapeHtml(wt.lastCommit.subject)}"`
@@ -1465,7 +1465,7 @@
           <div class="item-main">
             <div class="item-header-row">
               <div class="item-name" title="${escapeHtml(wt.path)}">
-                <span>📁</span>
+                <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
                 <span>${escapeHtml(displayName)}</span>
               </div>
               <div class="item-tags">${tags.join(' ')}</div>
@@ -1476,7 +1476,7 @@
               <button class="copy-path-btn" data-action="wt-copy-path" title="复制完整路径">复制</button>
             </div>
             ${lastInfo ? `<div class="item-desc">${lastInfo}</div>` : ''}
-            ${!wt.existsOnDisk || wt.isPrunable ? '<div class="item-alert">⚠️ 该 Worktree 已损坏或可被安全 prune 清理</div>' : ''}
+            ${!wt.existsOnDisk || wt.isPrunable ? '<div class="item-alert">该 Worktree 已损坏或可被安全 prune 清理</div>' : ''}
           </div>
           <div class="item-actions">
             <div class="item-actions-diff-group">
@@ -1522,7 +1522,7 @@
 
       let tags = [];
       if (b.isMain) tags.push('<span class="badge badge-success">主分支</span>');
-      if (b.inUseByWorktree) tags.push('<span class="badge">🌳 Worktree 绑定中</span>');
+      if (b.inUseByWorktree) tags.push('<span class="badge">Worktree 绑定中</span>');
       if (b.isMerged) {
         tags.push(`<span class="badge" title="${b.isDirectlyMerged ? '分支提交已直接进入主分支历史' : '分支改动已通过内容或协调分支进入主分支'}">${b.isDirectlyMerged ? '已合入主干' : '内容已合入主干'}</span>`);
       } else if (b.deliveredViaBranch) {
@@ -1535,13 +1535,13 @@
         <div class="item-main">
           <div class="item-header-row">
             <div class="item-name">
-              <span>🌿</span>
+              <span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span>
               <span>${escapeHtml(b.name)}</span>
             </div>
             <div class="item-tags">${tags.join(' ')}</div>
           </div>
           <div class="item-desc">${escapeHtml(b.relativeTime)} 由 ${escapeHtml(b.author)} 提交: "${escapeHtml(b.subject || '-')}"</div>
-          ${b.redundancyReason ? `<div class="item-alert">⚠️ ${escapeHtml(b.redundancyReason)}${b.isStaleOnly ? ' <span class="stale-delete-hint">（谨慎删除）</span>' : ''}</div>` : ''}
+          ${b.redundancyReason ? `<div class="item-alert">${escapeHtml(b.redundancyReason)}${b.isStaleOnly ? ' <span class="stale-delete-hint">（谨慎删除）</span>' : ''}</div>` : ''}
           ${b.historicalIntegration && b.historicalIntegration.currentDifferencePaths.length
             ? `<div class="item-desc" title="${escapeHtml(b.historicalIntegration.currentDifferencePaths.join('\n'))}">历史整合提交后仍有 ${b.historicalIntegration.currentDifferencePaths.length} 个差异文件，均可由后续主分支提交解释（悬停查看路径）。</div>`
             : ''}
@@ -1802,7 +1802,7 @@
           kind: 'worktree',
           value: w.path,
           identity: `worktree:${w.path}`,
-          label: `🌳 ${w.isMain ? '[Main] ' : ''}${w.branch || 'HEAD'} (${dirName})${broken ? ' · 已失联' : ''}`,
+          label: `${w.isMain ? '[Main] ' : ''}${w.branch || 'HEAD'} (${dirName})${broken ? ' · 已失联' : ''}`,
           searchText: `${w.branch || ''} ${dirName} ${w.path}`,
           disabled: broken
         });
@@ -1812,7 +1812,7 @@
           kind: 'branch',
           value: b.name,
           identity: `branch:${b.name}`,
-          label: `🌿 ${b.name}`,
+          label: `${b.name}`,
           searchText: b.name,
           disabled: false
         });
@@ -2504,7 +2504,7 @@
 
     /* Diff 摘要里的基准/对比对象徽章：branch 类型无 path，用 kind 图标区分并容错缺字段 */
     function diffRefBadgeHtml(ref) {
-      const icon = ref.kind === 'branch' ? '🌿' : '🌳';
+      const icon = ref.kind === 'branch' ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>' : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
       const name = ref.branch || ref.head || '-';
       const title = ref.path
         ? ` title="${escapeHtml(ref.path)}"`
@@ -2554,8 +2554,8 @@
       if (diff.isSameWorktree) {
         // branch↔branch 同分支与同 Worktree 自审共用该徽章，按类型区分文案
         syncStatusBadge = diff.source?.kind === 'branch'
-          ? '<span class="badge badge-success">🌿 同分支自审（内容一致）</span>'
-          : '<span class="badge badge-success">🌿 本地工作区自审</span>';
+          ? '<span class="badge badge-success">同分支自审（内容一致）</span>'
+          : '<span class="badge badge-success">本地工作区自审</span>';
       } else if (diff.contentEquivalent && (diff.historyAhead > 0 || diff.historyBehind > 0)) {
         syncStatusBadge = '<span class="badge badge-success">文件内容一致（提交历史已 squash 整合）</span>';
       } else if (diff.isCommittedContentEqual) {
@@ -2587,13 +2587,13 @@
         : (modesAvailable && !modesAvailable.includes(m) ? '当前比对对象不支持该模式' : '');
 
       if (isSelfDiff) {
-        modeTipText = '💡 分支自审模式：Base 与 Target 为同一对象，已自动锁定为【仅未提交 & 未跟踪】模式';
+        modeTipText = '分支自审模式：Base 与 Target 为同一对象，已自动锁定为【仅未提交 & 未跟踪】模式';
       } else if (effectiveMode === 'uncommitted') {
-        modeTipText = '⚡ 仅展示 Target 本地未提交修改及 untracked 新增文件';
+        modeTipText = '仅展示 Target 本地未提交修改及 untracked 新增文件';
       } else if (effectiveMode === 'all') {
-        modeTipText = '📦 全量对比：含 Target 已提交文件差异 + 本地未提交修改 + untracked 新增';
+        modeTipText = '全量对比：含 Target 已提交文件差异 + 本地未提交修改 + untracked 新增';
       } else {
-        modeTipText = '📌 纯分支文件内容对比（已忽略本地未提交修改）';
+        modeTipText = '纯分支文件内容对比（已忽略本地未提交修改）';
       }
 
       const stashActionsHtml = stashWorktreePath ? `
@@ -2618,15 +2618,15 @@
         <div id="diffModeControl" class="diff-mode-control-row">
           <div class="diff-mode-segmented">
             <button class="diff-mode-btn ${effectiveMode === 'uncommitted' ? 'active' : ''} ${isModeDisabled('uncommitted') ? 'disabled' : ''}" ${isModeDisabled('uncommitted') ? 'disabled' : ''} data-action="diff-mode" data-mode="uncommitted" title="${isModeDisabled('uncommitted') ? modeDisabledTitle('uncommitted') : '仅查看当前工作区未提交和未跟踪的代码'}">
-              <span>⚡ 仅未提交 & 未跟踪</span>
+              <span>仅未提交 & 未跟踪</span>
               <span class="diff-mode-pill">${uncommittedCount}</span>
             </button>
             <button class="diff-mode-btn ${effectiveMode === 'all' ? 'active' : ''} ${isModeDisabled('all') ? 'disabled' : ''}" ${isModeDisabled('all') ? 'disabled' : ''} data-action="diff-mode" data-mode="all" title="${isModeDisabled('all') ? modeDisabledTitle('all') : '全量对比：已提交分支修改 + 本地未提交改动'}">
-              <span>📦 全量变更</span>
+              <span>全量变更</span>
               <span class="diff-mode-pill">${allCount}</span>
             </button>
             <button class="diff-mode-btn ${effectiveMode === 'committed' ? 'active' : ''} ${isModeDisabled('committed') ? 'disabled' : ''}" ${isModeDisabled('committed') ? 'disabled' : ''} data-action="diff-mode" data-mode="committed" title="${isModeDisabled('committed') ? modeDisabledTitle('committed') : '仅查看已提交的代码修改，忽略未提交'}">
-              <span>📌 仅已提交</span>
+              <span>仅已提交</span>
               <span class="diff-mode-pill">${committedCount}</span>
             </button>
           </div>
@@ -2638,13 +2638,13 @@
 
       const emptyDiffHtml = (() => {
         if (files.length !== 0) return '';
-        let emptyDesc = '🎉 当前审查模式下无任何文件差异。';
+        let emptyDesc = '当前审查模式下无任何文件差异。';
         if (effectiveMode === 'uncommitted') {
-          emptyDesc = '🎉 Target 工作区干净，没有本地未提交修改。<br><span style="color: var(--text-muted); font-size: 13px;">如需审查已提交代码，请点击上方<b>【📦 全量变更】</b>或<b>【📌 仅已提交】</b>；历史暂存可通过上方入口还原或删除。</span>';
+          emptyDesc = 'Target 工作区干净，没有本地未提交修改。<br><span style="color: var(--text-muted); font-size: 13px;">如需审查已提交代码，请点击上方<b>【全量变更】</b>或<b>【仅已提交】</b>；历史暂存可通过上方入口还原或删除。</span>';
         } else if (diff.contentEquivalent && (diff.historyAhead > 0 || diff.historyBehind > 0)) {
-          emptyDesc = '🎉 两个工作区的最终文件内容一致。<br><span style="color: var(--text-muted); font-size: 13px;">提交历史存在差异，但这通常是 squash 合入造成的历史差异，已从文件 Diff 中过滤。</span>';
+          emptyDesc = '两个工作区的最终文件内容一致。<br><span style="color: var(--text-muted); font-size: 13px;">提交历史存在差异，但这通常是 squash 合入造成的历史差异，已从文件 Diff 中过滤。</span>';
         } else if (behind > 0 && ahead === 0) {
-          emptyDesc = `ℹ️ <b>对比分支当前落后于基准分支（落后 ${behind} 个提交）</b>，且没有领先的独有代码修改。<br><span style="color: var(--text-muted); font-size: 13px;">已默认隐藏基准分支的更新；若需查看这些文件变更，可点击右上角<b>【落后 ${behind} 个提交】</b>状态。</span>`;
+          emptyDesc = `ℹ <b>对比分支当前落后于基准分支（落后 ${behind} 个提交）</b>，且没有领先的独有代码修改。<br><span style="color: var(--text-muted); font-size: 13px;">已默认隐藏基准分支的更新；若需查看这些文件变更，可点击右上角<b>【落后 ${behind} 个提交】</b>状态。</span>`;
         }
 
         return `<div class="empty-diff-box" style="padding: 28px; border: none; background: transparent; line-height: 1.8;">${emptyDesc}</div>`;
@@ -2685,7 +2685,7 @@
 
         let statTag = '';
         if (isImg) {
-          statTag = '<span class="binary-file-tag">🖼️ 图片文件</span>';
+          statTag = '<span class="binary-file-tag">图片文件</span>';
         } else if (f.isBinary) {
           statTag = '<span class="binary-file-tag">二进制文件</span>';
         } else {
@@ -2726,7 +2726,7 @@
       const fileListHtml = files.length === 0 ? emptyDiffHtml : `
         <div class="diff-tools-bar">
           <div class="diff-tools-left">
-            <span>📁 变更文件列表 (${files.length})</span>
+            <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> 变更文件列表 (${files.length})</span>
             <span style="font-size: 12px; color: var(--text-muted); font-weight: normal;">单击单个文件展开/收起详情</span>
           </div>
           <div class="diff-tools-right">
@@ -3289,7 +3289,7 @@
           : '<button type="button" class="btn-outline" style="padding: 3px 8px; font-size: 12px;" data-action="commits-history" data-full="1">查看全量历史</button>';
       const metaEl = document.getElementById('commitsDrawerMeta');
       metaEl.innerHTML = `
-        <span class="badge" title="基准: ${escapeHtml(data.base)}">🌿 ${escapeHtml(data.branch)}</span>
+        <span class="badge" title="基准: ${escapeHtml(data.base)}">${escapeHtml(data.branch)}</span>
         <code style="color: var(--accent);">${escapeHtml((data.head || '').slice(0, 7))}</code>
         <span>${scopeText}</span>
         ${renderAheadBehindBadgeHtml()}
@@ -3443,7 +3443,7 @@
         if (hasActiveCommitsFilters()) {
           body.innerHTML = `
             <div class="empty-state">
-              <div class="empty-state-icon">🔍</div>
+              <div class="empty-state-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div>
               <div>没有符合过滤条件的提交</div>
               <div style="font-size:12px">可调整过滤条件，或清空后查看全部提交</div>
               <button class="btn-outline" style="margin-top:8px" data-action="commits-clear-filters">清空过滤</button>
@@ -3465,7 +3465,7 @@
           : `<div style="font-size:12px">相对 ${escapeHtml(commitsDrawerState.base)} 没有领先提交</div>`;
         body.innerHTML = `
           <div class="empty-state">
-            <div class="empty-state-icon">📋</div>
+            <div class="empty-state-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></div>
             <div>${emptyText}</div>
             ${emptyHint}
           </div>`;
@@ -3656,8 +3656,8 @@
         : '';
       const actionButtonsHtml = detailSha
         ? targetSelectHtml +
-          `<button type="button" class="btn-outline commit-action-btn" data-action="commit-act" data-commit-action="cherry-pick">🍒 Cherry-pick</button>` +
-          `<button type="button" class="btn-outline commit-action-btn" data-action="commit-act" data-commit-action="revert">↩️ Revert</button>`
+          `<button type="button" class="btn-outline commit-action-btn" data-action="commit-act" data-commit-action="cherry-pick">Cherry-pick</button>` +
+          `<button type="button" class="btn-outline commit-action-btn" data-action="commit-act" data-commit-action="revert">↩ Revert</button>`
         : '';
       // 「查看 Diff」与写操作按钮统一放进一行操作区，两者皆空时不渲染容器
       const actionsHtml = (diffToggleHtml || actionButtonsHtml)
@@ -3974,7 +3974,7 @@
       const body = document.getElementById('commitsDrawerBody');
       body.innerHTML = `
         <div class="empty-state">
-          <div class="empty-state-icon">⚠️</div>
+          <div class="empty-state-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
           <div>加载提交记录失败</div>
           <div style="font-size:12px">${escapeHtml(message)}</div>
           <button class="btn-outline" style="margin-top:8px" data-action="commits-retry">重试</button>
@@ -4104,11 +4104,11 @@
         <div class="list-item" style="cursor: pointer;" data-action="mr-row-open">
           <div class="item-main">
             <div class="item-header-row">
-              <div class="item-name"><span>🔀</span><span>${escapeHtml(mr.title)}</span></div>
+              <div class="item-name"><span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg></span><span>${escapeHtml(mr.title)}</span></div>
               <div class="item-tags">${mrStatusBadgeHtml(mr)}${mrReviewBadgeHtml(mr)}</div>
             </div>
             <div class="item-desc">
-              <span class="mr-branch-flow"><span>🌿 ${escapeHtml(mr.sourceBranch)}</span><span>→</span><span>🌿 ${escapeHtml(mr.targetBranch)}</span></span>
+              <span class="mr-branch-flow"><span>${escapeHtml(mr.sourceBranch)}</span><span>→</span><span>${escapeHtml(mr.targetBranch)}</span></span>
               · 创建于 ${escapeHtml(formatRelativeTimeCn(mr.createdAt))}
             </div>
           </div>
@@ -4135,7 +4135,7 @@
         kind: 'branch',
         value: b.name,
         identity: `branch:${b.name}`,
-        label: `🌿 ${b.name}`,
+        label: `${b.name}`,
         searchText: b.name,
         disabled: false
       }));
@@ -4297,7 +4297,7 @@
       if (errorMessage || !mr) {
         body.innerHTML = `
           <div class="empty-state">
-            <div class="empty-state-icon">⚠️</div>
+            <div class="empty-state-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
             <div>加载 Merge Request 详情失败</div>
             <div style="font-size:12px">${escapeHtml(errorMessage || '未知错误')}</div>
             <button class="btn-outline" style="margin-top:8px" data-action="mr-retry">重试</button>
@@ -4307,7 +4307,7 @@
         return;
       }
 
-      document.getElementById('mrDrawerTitle').textContent = `🔀 MR #${mr.id} · ${mr.title}`;
+      document.getElementById('mrDrawerTitle').textContent = `MR #${mr.id} · ${mr.title}`;
       const updatedAtText = mr.updatedAt && mr.updatedAt !== mr.createdAt
         ? ` · 更新于 ${escapeHtml(formatRelativeTimeCn(mr.updatedAt))}`
         : '';
@@ -4317,9 +4317,9 @@
           <div class="item-tags">${mrStatusBadgeHtml(mr)}${mrReviewBadgeHtml(mr)}</div>
           <div class="item-header-row" style="margin-top: 8px;">
             <span class="mr-branch-flow">
-              <span>🌿 ${escapeHtml(mr.sourceBranch)}</span>
+              <span>${escapeHtml(mr.sourceBranch)}</span>
               <span>→</span>
-              <span>🌿 ${escapeHtml(mr.targetBranch)}</span>
+              <span> ${escapeHtml(mr.targetBranch)}</span>
             </span>
             <span style="font-size: 12px; color: var(--text-muted);">
               创建时 HEAD：<code>${escapeHtml(shortSha(mr.sourceHeadAtCreate))}</code> / <code>${escapeHtml(shortSha(mr.targetHeadAtCreate))}</code>
@@ -4344,11 +4344,11 @@
         <div class="mr-detail-section">
           <div class="mr-detail-actions" id="mrActionButtons">${buildMrActionButtonsHtml(mr)}</div>
           <div id="mrDrawerActionError" class="mr-detail-error" role="alert"></div>
-          <div class="mr-detail-hint">📌 source Worktree 的未提交内容不参与合并；合并要求审阅通过，并会实际修改 target 分支绑定的 Worktree。</div>
+          <div class="mr-detail-hint">source Worktree 的未提交内容不参与合并；合并要求审阅通过，并会实际修改 target 分支绑定的 Worktree。</div>
         </div>
 
         <div class="mr-detail-section">
-          <button type="button" class="btn-outline" style="width: 100%;" data-action="mr-open-diff">⚡ 在 Diff 中查看 Branch Diff</button>
+          <button type="button" class="btn-outline" style="width: 100%;" data-action="mr-open-diff">在 Diff 中查看 Branch Diff</button>
         </div>
 
         <div class="mr-detail-section">
@@ -4384,10 +4384,10 @@
       }
       const parts = [];
       if (mr.reviewStatus === 'approved') {
-        parts.push('<button type="button" class="btn-primary" data-action="mr-act" data-mr-action="merge" data-need-confirm="1" title="将执行 --no-ff 合并到 target 分支的 Worktree">✅ 合并 (--no-ff)</button>');
+        parts.push('<button type="button" class="btn-primary" data-action="mr-act" data-mr-action="merge" data-need-confirm="1" title="将执行 --no-ff 合并到 target 分支的 Worktree">合并 (--no-ff)</button>');
       } else if (mr.reviewStatus === 'changes_requested') {
         parts.push('<button type="button" class="btn-outline" data-action="mr-act" data-mr-action="approve">重新通过（审阅通过）</button>');
-        parts.push('<button type="button" class="btn-primary" disabled title="审阅通过后才能合并">✅ 合并</button>');
+        parts.push('<button type="button" class="btn-primary" disabled title="审阅通过后才能合并">合并</button>');
       } else {
         parts.push('<button type="button" class="btn-outline" data-action="mr-act" data-mr-action="approve">审阅通过</button>');
       }
@@ -4564,7 +4564,7 @@
           </div>
         `).join('');
         if (abData && abData.contentEquivalent === true) {
-          html = `<div class="commit-diff-empty" style="color: var(--warning);">⚠️ 这些提交的内容已被 ${escapeHtml(mr.targetBranch)} 吸收（cherry-pick / squash / revert 抵消等），合并不会产生实际文件变化。</div>` + html;
+          html = `<div class="commit-diff-empty" style="color: var(--warning);">这些提交的内容已被 ${escapeHtml(mr.targetBranch)} 吸收（cherry-pick / squash / revert 抵消等），合并不会产生实际文件变化。</div>` + html;
         }
         container.innerHTML = html;
         // 与提交抽屉同一批次绑定逻辑（闭包直引 commits，hash 不经字符串往返）
@@ -4599,7 +4599,7 @@
         .forEach(w => {
           const opt = document.createElement('option');
           opt.value = w.path;
-          opt.textContent = w.isMain ? `⭐ 主工作区 · ${w.branch || w.head || '(bare)'} · ${w.path}` : `${w.branch || w.head || '(detached)'} · ${w.path}`;
+          opt.textContent = w.isMain ? `主工作区 · ${w.branch || w.head || '(bare)'} · ${w.path}` : `${w.branch || w.head || '(detached)'} · ${w.path}`;
           select.appendChild(opt);
         });
       // 目标失效（被移除等）时回退主工作区；否则保留用户选择
@@ -4762,7 +4762,7 @@
       if (b.worktree) {
         const wtName = (currentWorktrees.find(w => w.path === b.worktree.path) || {}).name;
         const wtLabel = wtName || b.worktree.path.split('/').filter(Boolean).pop() || b.worktree.path;
-        badges.push(`<span class="badge" title="正被工作区检出：${escapeHtml(b.worktree.path)}">🌳 ${b.worktree.isMain ? '主工作区检出' : escapeHtml(wtLabel)} 检出中</span>`);
+        badges.push(`<span class="badge" title="正被工作区检出：${escapeHtml(b.worktree.path)}">${b.worktree.isMain ? '主工作区检出' : escapeHtml(wtLabel)} 检出中</span>`);
       }
       if (b.ahead !== null && b.behind !== null) {
         if (b.ahead === 0 && b.behind === 0) {
@@ -4803,7 +4803,7 @@
         <div class="list-item" data-local-branch="${escapeHtml(b.name)}">
           <div class="item-main">
             <div class="item-header-row">
-              <span class="item-name">🌿 ${escapeHtml(b.name)}</span>
+              <span class="item-name">${escapeHtml(b.name)}</span>
               <span class="item-tags">${localBranchBadgesHtml(b)}</span>
             </div>
             <div class="item-desc">
@@ -4992,7 +4992,7 @@
         <div class="list-item" data-remote-branch="${escapeHtml(b.name)}">
           <div class="item-main">
             <div class="item-header-row">
-              <span class="item-name">☁️ ${escapeHtml(b.name)}</span>
+              <span class="item-name">${escapeHtml(b.name)}</span>
               <span class="item-tags">${remoteBranchBadgesHtml(b)}</span>
             </div>
             <div class="item-desc">
@@ -5058,7 +5058,7 @@
         return;
       }
       const dirty = wt.isDirty
-        ? `<span style="color: var(--warning);">⚠️ ${wt.dirtyCount || 0} 个未提交修改</span>`
+        ? `<span style="color: var(--warning);">${wt.dirtyCount || 0} 个未提交修改</span>`
         : '<span style="color: var(--success);">工作区干净</span>';
       el.innerHTML = `当前分支：<strong>${escapeHtml(wt.branch || wt.head || '(detached)')}</strong> · ${dirty}`;
     }
@@ -5078,7 +5078,7 @@
       const conflicts = state.conflictFiles || [];
       const summary = document.getElementById('remoteMergeSummary');
       if (conflicts.length === 0) {
-        summary.textContent = '✅ 冲突已全部处理，可点击「完成合并」生成合并提交。';
+        summary.textContent = '冲突已全部处理，可点击「完成合并」生成合并提交。';
         summary.className = 'remote-merge-summary done';
       } else {
         summary.textContent = `共 ${conflicts.length} 个冲突文件待处理。可逐文件快捷采用某一侧，或进入编辑器自定义修改冲突区域。`;
@@ -5506,7 +5506,7 @@
         freeBranches.forEach(b => {
           const opt = document.createElement('option');
           opt.value = b.name;
-          opt.textContent = `🌿 ${b.name}`;
+          opt.textContent = `${b.name}`;
           existingSelect.appendChild(opt);
         });
       }
@@ -5517,13 +5517,13 @@
       currentBranches.forEach(b => {
         const opt = document.createElement('option');
         opt.value = `branch:${b.name}`;
-        opt.textContent = `🌿 ${b.name}`;
+        opt.textContent = `${b.name}`;
         startPointSelect.appendChild(opt);
       });
       remoteState.branches.forEach(b => {
         const opt = document.createElement('option');
         opt.value = `remote:${b.name}`;
-        opt.textContent = `☁️ ${b.name}`;
+        opt.textContent = `${b.name}`;
         startPointSelect.appendChild(opt);
       });
 
@@ -5665,7 +5665,7 @@
         if (!data.ok) throw new Error(data.error || '创建失败');
         closeCreateWorktreeModal();
         showToast(`Worktree 已创建：${data.branch} → ${data.path}`);
-        if (data.nameError) showToast(`⚠️ ${data.nameError}`);
+        if (data.nameError) showToast(`${data.nameError}`);
         inspectRepo(currentRepo);
       } catch (err) {
         if (seq !== worktreeCreateSubmitSeq) return;
@@ -5686,7 +5686,7 @@
         .forEach(w => {
           const opt = document.createElement('option');
           opt.value = w.path;
-          opt.textContent = w.isMain ? `⭐ 主工作区 · ${w.branch || '(detached)'} · ${w.path}` : `${w.branch || '(detached)'} · ${w.path}`;
+          opt.textContent = w.isMain ? `主工作区 · ${w.branch || '(detached)'} · ${w.path}` : `${w.branch || '(detached)'} · ${w.path}`;
           selectEl.appendChild(opt);
         });
       const valid = [...selectEl.options].some(o => o.value === selectedPath);
@@ -5846,7 +5846,7 @@
         kind: 'branch',
         value: b.name,
         identity: `branch:${b.name}`,
-        label: `🌿 ${b.name}`,
+        label: `${b.name}`,
         searchText: b.name,
         disabled: false
       }));
@@ -5854,7 +5854,7 @@
         kind: 'remote',
         value: b.name,
         identity: `remote:${b.name}`,
-        label: `☁️ ${b.name}`,
+        label: `${b.name}`,
         searchText: b.name,
         disabled: false
       }));
@@ -5872,7 +5872,7 @@
         return;
       }
       if (wt.isDirty) {
-        hintEl.textContent = `⚠️ 所选工作区有 ${wt.dirtyCount || 0} 个未提交修改，切换/检出会被拒绝`;
+        hintEl.textContent = `所选工作区有 ${wt.dirtyCount || 0} 个未提交修改，切换/检出会被拒绝`;
         hintEl.className = 'remote-modal-hint error';
       } else {
         hintEl.textContent = '✓ 所选工作区当前干净，可执行切换';
@@ -5981,7 +5981,7 @@
         return;
       }
       remoteState.editingConflictPath = filePath;
-      document.getElementById('conflictDrawerTitle').textContent = `✏️ 编辑冲突文件 · ${filePath}`;
+      document.getElementById('conflictDrawerTitle').textContent = `编辑冲突文件 · ${filePath}`;
       const textarea = document.getElementById('conflictEditorTextarea');
       document.getElementById('conflictDrawerError').textContent = '';
       if (data.isBinary) {
@@ -6511,7 +6511,7 @@
       listId: 'mrSourcePickerList',
       selectId: 'mrSourceSelect',
       getItems: branchPickerItems,
-      groupTitles: { branch: '🌿 本地分支' },
+      groupTitles: { branch: '本地分支' },
       emptyText: '没有匹配的分支',
       placeholder: '选择源分支'
     });
@@ -6524,7 +6524,7 @@
       listId: 'mrTargetPickerList',
       selectId: 'mrTargetSelect',
       getItems: branchPickerItems,
-      groupTitles: { branch: '🌿 本地分支' },
+      groupTitles: { branch: '本地分支' },
       emptyText: '没有匹配的分支',
       placeholder: '选择目标分支'
     });
@@ -6540,7 +6540,7 @@
       listId: 'diffBasePickerList',
       selectId: 'diffBaseSelect',
       getItems: buildDiffRefOptions,
-      groupTitles: { worktree: '🌳 Worktree', branch: '🌿 本地分支' },
+      groupTitles: { worktree: 'Worktree', branch: '本地分支' },
       emptyText: '没有匹配的 Worktree 或分支',
       placeholder: '请选择基准',
       onSelect: () => fetchAndRenderRefDiff(null, true)
@@ -6554,7 +6554,7 @@
       listId: 'diffTargetPickerList',
       selectId: 'diffTargetSelect',
       getItems: buildDiffRefOptions,
-      groupTitles: { worktree: '🌳 Worktree', branch: '🌿 本地分支' },
+      groupTitles: { worktree: 'Worktree', branch: '本地分支' },
       emptyText: '没有匹配的 Worktree 或分支',
       placeholder: '请选择对比对象',
       onSelect: () => fetchAndRenderRefDiff(null, true)
@@ -6571,7 +6571,7 @@
       listId: 'switchBranchPickerList',
       selectId: 'switchBranchSelect',
       getItems: switchBranchPickerItems,
-      groupTitles: { branch: '🌿 本地分支', remote: '☁️ 远端分支' },
+      groupTitles: { branch: '本地分支', remote: '远端分支' },
       emptyText: '没有匹配的分支',
       placeholder: '选择本地或远端分支',
       onSelect: (identity) => updateSwitchBranchModalState(identity)

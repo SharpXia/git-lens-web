@@ -21,26 +21,26 @@
     </div>
   </div>
   <!-- 桌面模式「服务已停止」静默提示条（非阻断，不遮蔽页面内容） -->
-  <div id="serviceStoppedBar" class="service-stopped-bar" style="display:none" role="status">⏹ 本地服务已停止</div>
+  <div id="serviceStoppedBar" class="service-stopped-bar" style="display:none" role="status"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="vertical-align:-1px"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg> 本地服务已停止</div>
 
   <header>
-    <h1>🔍 Git Lens <span class="badge">Worktree & Branch Guard + Code Diff Inspector</span></h1>
+    <h1><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> Git Lens <span class="badge">Worktree & Branch Guard + Code Diff Inspector</span></h1>
     <span id="headerPath" style="font-size: 13px; color: var(--text-muted);"></span>
   </header>
 
   <!-- 顶部功能切换 TAB -->
   <div class="tab-bar">
     <button id="tabOverview" class="tab-btn active" data-action="tab-overview">
-      <span>📊 仓库总览与管理</span>
+      <span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>仓库总览与管理</span>
     </button>
     <button id="tabDiff" class="tab-btn" data-action="tab-diff">
-      <span>⚡ Worktree 差异对比 (Branch Diff)</span>
+      <span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Worktree 差异对比 (Branch Diff)</span>
     </button>
     <button id="tabMr" class="tab-btn" data-action="tab-mr">
-      <span>🔀 Merge Requests</span>
+      <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>Merge Requests</span>
     </button>
     <button id="tabRemote" class="tab-btn" data-action="tab-remote">
-      <span>🌿 分支管理</span>
+      <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>分支管理</span>
     </button>
     <div class="tab-bar-actions">
       <button id="newMrBtn" class="btn-primary" data-action="open-create-mr" title="基于当前仓库的两个本地分支发起 Merge Request">新建 MR</button>
@@ -66,7 +66,7 @@
             <button type="button" class="search-clear-btn" id="repoFilterClearBtn" aria-label="清除仓库搜索" title="清除搜索">×</button>
           </div>
           <button type="button" id="starredFilterBtn" class="btn-outline filter-starred-btn" data-action="toggle-starred-filter">
-            <span>⭐ 只看星标</span>
+            <span><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>只看星标</span>
           </button>
         </div>
         <div class="repo-list-container" id="repoDropdownList">
@@ -113,8 +113,8 @@
       <!-- Worktrees 面板 -->
       <div class="panel">
         <div class="panel-header">
-          <h2>🌳 Git Worktrees 隔离工作区</h2>
-          <button id="createWorktreeBtn" class="btn-outline panel-header-action" type="button" data-action="open-create-worktree" title="在指定目录基于指定分支创建新的 Worktree">➕ 创建工作区</button>
+          <h2><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> Git Worktrees 隔离工作区</h2>
+          <button id="createWorktreeBtn" class="btn-outline panel-header-action" type="button" data-action="open-create-worktree" title="在指定目录基于指定分支创建新的 Worktree"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> 创建工作区</button>
           <span id="wtCountBadge" class="badge">0 个</span>
         </div>
         <div id="wtList">
@@ -125,7 +125,7 @@
       <!-- 分支透视面板 -->
       <div class="panel">
         <div class="panel-header">
-          <h2>🌿 本地分支透视 (按冗余度排序)</h2>
+          <h2><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> 本地分支透视 (按冗余度排序)</h2>
           <span id="brCountBadge" class="badge">0 个</span>
         </div>
         <div id="brList">
@@ -139,7 +139,7 @@
   <div id="viewMr" style="display: none;">
     <div class="panel">
       <div class="panel-header">
-        <h2>🔀 Merge Requests</h2>
+        <h2><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg> Merge Requests</h2>
         <div class="mr-panel-controls">
           <div class="diff-mode-segmented" id="mrStatusFilterGroup">
             <button type="button" class="diff-mode-btn active" data-status="all" data-action="mr-filter">全部</button>
@@ -249,7 +249,7 @@
     <!-- 合并进行中面板：冲突清单 + 快捷处理 + 完成合并入口（由 merge-state 接口驱动） -->
     <div id="remoteMergePanel" class="panel remote-merge-panel" style="display: none;">
       <div class="panel-header">
-        <h2>⚠️ 合并冲突处理 <span id="remoteMergeLabels" class="remote-merge-labels"></span></h2>
+        <h2><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> 合并冲突处理 <span id="remoteMergeLabels" class="remote-merge-labels"></span></h2>
         <div class="remote-merge-actions">
           <span id="mergeCommitHint" class="merge-commit-hint"></span>
           <button id="mergeAbortBtn" class="btn-outline" type="button" data-action="merge-abort" title="git merge --abort，恢复合并前现场">放弃合并</button>
@@ -264,7 +264,7 @@
     <!-- 左栏：本地分支（检出到任选工作区 + 删除） -->
     <div class="panel">
       <div class="panel-header">
-        <h2>🌿 本地分支</h2>
+        <h2><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> 本地分支</h2>
         <select id="localBranchSortSelect" class="picker-select remote-sort-select" aria-label="本地分支排序方式" title="列表排序方式">
           <option value="recent">按最近提交</option>
           <option value="name">按名称</option>
@@ -281,7 +281,7 @@
     <!-- 右栏：远端分支（远端操作 + 检出 + 合并 + 删除非保护分支） -->
     <div class="panel">
       <div class="panel-header">
-        <h2>☁️ 远端分支</h2>
+        <h2><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg> 远端分支</h2>
         <select id="remoteBranchSortSelect" class="picker-select remote-sort-select" aria-label="远端分支排序方式" title="列表排序方式">
           <option value="recent">按最近提交</option>
           <option value="name">按名称</option>
@@ -454,7 +454,7 @@
   <div id="conflictDrawerOverlay" class="drawer-overlay" style="display:none" data-action="close-conflict-drawer"></div>
   <div id="conflictDrawer" class="commits-drawer" style="display:none" role="dialog" aria-label="冲突文件编辑">
     <div class="commits-drawer-header">
-      <h3 id="conflictDrawerTitle">✏️ 编辑冲突文件</h3>
+      <h3 id="conflictDrawerTitle"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> 编辑冲突文件</h3>
       <button class="drawer-close" data-action="close-conflict-drawer" aria-label="关闭">×</button>
     </div>
     <div class="conflict-drawer-hint" id="conflictDrawerHint"></div>
@@ -671,7 +671,7 @@
   <div id="mrDrawerOverlay" class="drawer-overlay" style="display:none" data-action="close-mr-drawer"></div>
   <div id="mrDrawer" class="commits-drawer" style="display:none" role="dialog" aria-label="Merge Request 详情">
     <div class="commits-drawer-header">
-      <h3 id="mrDrawerTitle">🔀 Merge Request 详情</h3>
+      <h3 id="mrDrawerTitle"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg> Merge Request 详情</h3>
       <button class="drawer-close" data-action="close-mr-drawer" aria-label="关闭">×</button>
     </div>
     <div class="commits-drawer-body" id="mrDrawerBody"></div>
@@ -700,7 +700,7 @@
   <div id="commitsDrawerOverlay" class="drawer-overlay" style="display:none" data-action="close-commits-drawer"></div>
   <div id="commitsDrawer" class="commits-drawer" style="display:none" role="dialog" aria-label="提交记录">
     <div class="commits-drawer-header">
-      <h3>📋 提交记录</h3>
+      <h3><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg> 提交记录</h3>
       <div class="commits-drawer-header-actions">
         <button type="button" class="drawer-fullscreen" data-action="toggle-commits-fullscreen" aria-pressed="false" aria-label="全屏查看提交记录" title="全屏查看提交记录">全屏</button>
         <button type="button" class="drawer-close" data-action="close-commits-drawer" aria-label="关闭">×</button>
