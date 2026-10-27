@@ -397,7 +397,14 @@
       justify-content: space-between;
       align-items: center;
     }
-    .panel-header h2 { font-size: 15px; font-weight: 600; color: var(--text-bright); }
+    /* 卡片标题强制单行：标题不参与 flex 收缩，空间压力交给排序/过滤控件，避免窄栏下折行 */
+    .panel-header h2 {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-bright);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
     .list-item {
       padding: 14px 16px;
       border-bottom: 1px solid var(--border);
