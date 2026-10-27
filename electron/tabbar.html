@@ -4,15 +4,17 @@
 <meta charset="utf-8">
 <title>Git Lens 标签条</title>
 <style>
-  /* 自足样式：深色主题与应用一致（取 public/app.css :root 变量同款配色）。
+  /* 自足样式：暗色主题与应用一致（Linear 视觉语言：近黑底 + 细边框 + 靛蓝强调，
+     与 public/app.css 的 :root 令牌同源换算）。
      本页为 Shell 自有 chrome（file:// 本地加载、无远程资源），不属于契约 §14
-     的服务端 CSP 范围；所有动态文案一律经 textContent 写入，无注入面。 */
+     的服务端 CSP 范围；所有动态文案一律经 textContent 写入，无注入面。
+     几何约束：高度 38px 与红绿灯区 78px 是主进程对位契约，不得改动。 */
   html, body {
     margin: 0;
     height: 100%;
     overflow: hidden;
     background: transparent;
-    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-family: "Inter", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
     user-select: none;
     -webkit-user-select: none;
   }
@@ -20,8 +22,8 @@
     display: flex;
     align-items: stretch;
     height: 38px;
-    background: #010409;
-    border-bottom: 1px solid #30363d;
+    background: #050506;
+    border-bottom: 1px solid #1f2023;
     /* 契约 §17：标签条兼任标题栏——空白区可拖动窗口，系统双击缩放行为沿用 */
     -webkit-app-region: drag;
   }
@@ -114,10 +116,10 @@
     top: 0;
     min-width: 0;
     max-width: none;
-    border: 1px solid #58a6ff;
+    border: 1px solid #717de0;
     border-radius: 5px;
-    background: #161b22;
-    color: #f0f6fc;
+    background: #141517;
+    color: #eef0f3;
     opacity: 0.94;
     box-shadow: 0 3px 12px #0008;
     pointer-events: none;
@@ -130,7 +132,7 @@
     top: 3px;
     width: 2px;
     height: 32px;
-    background: #58a6ff;
+    background: #717de0;
     pointer-events: none;
     z-index: 3;
   }
@@ -143,17 +145,17 @@
     max-width: 220px;
     flex: 0 1 auto;
     padding: 0 8px 0 12px;
-    border-right: 1px solid #30363d;
-    color: #8b949e;
+    border-right: 1px solid #1f2023;
+    color: #8a8f98;
     font-size: 12px;
     line-height: 1;
     cursor: default;
   }
   .tab.active {
-    background: #161b22;
-    color: #f0f6fc;
+    background: #141517;
+    color: #eef0f3;
     /* 激活态顶边高亮，与编辑器类应用的标签语义一致 */
-    box-shadow: inset 0 2px 0 #58a6ff;
+    box-shadow: inset 0 2px 0 #717de0;
   }
   .tab-title {
     flex: 1;
@@ -178,19 +180,19 @@
     line-height: 1;
     cursor: pointer;
   }
-  .tab-close:hover { background: #30363d; color: #f0f6fc; }
+  .tab-close:hover { background: #1f2023; color: #eef0f3; }
   #new-tab {
     flex: none;
     width: 34px;
     border: none;
-    border-left: 1px solid #30363d;
+    border-left: 1px solid #1f2023;
     background: transparent;
-    color: #8b949e;
+    color: #8a8f98;
     font-size: 18px;
     line-height: 1;
     cursor: pointer;
   }
-  #new-tab:hover { background: #161b22; color: #f0f6fc; }
+  #new-tab:hover { background: #141517; color: #eef0f3; }
   /* 应用内更新进度（gitLensTabbar.onUpdateProgress）：细进度条贴标签栏下缘，
      阶段文案走右侧胶囊；均为只读展示，不设 no-drag，保持标题栏可拖拽 */
   #update-progress-track {
@@ -200,7 +202,7 @@
   #update-progress {
     height: 100%;
     width: 0;
-    background: #58a6ff;
+    background: #717de0;
     transition: width 0.3s ease-out;
   }
   #update-badge {
@@ -209,10 +211,10 @@
     align-self: center;
     margin-right: 8px;
     padding: 3px 10px;
-    border: 1px solid #1f6feb;
+    border: 1px solid #5e6ad2;
     border-radius: 10px;
-    background: #0d2a47;
-    color: #79c0ff;
+    background: #1e2245;
+    color: #9aa5ee;
     font-size: 11px;
     line-height: 1.2;
     white-space: nowrap;
