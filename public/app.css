@@ -80,6 +80,14 @@
   --radius-pill: 999px;
   --tab-radius: 6px;
 
+  /* 控件高度刻度：同层同级控件强制同高（主 Tab 34 / 常规 32 / 紧凑 28 / 分段钮 26 / 迷你 24 / 锁定胶囊 22） */
+  --h-tab: 34px;
+  --h-control: 32px;
+  --h-control-sm: 28px;
+  --h-seg-btn: 26px;
+  --h-mini: 24px;
+  --h-lock: 22px;
+
   /* 阴影：仅浮层使用，卡片靠边框分层 */
   --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.5);
   --shadow-modal: 0 18px 50px rgba(0, 0, 0, 0.55);
@@ -197,11 +205,13 @@ h1 svg, .panel-header h2 svg, .commits-drawer-header h3 svg,
   gap: 8px;
   margin-left: auto;
 }
+.tab-bar-actions button { height: var(--h-tab); }
 .tab-btn {
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-muted);
-  padding: 7px 14px;
+  height: var(--h-tab);
+  padding: 0 14px;
   border-radius: var(--tab-radius);
   font-size: 13.5px;
   cursor: pointer;
@@ -243,7 +253,8 @@ select, button, input {
   background: var(--card-bg);
   border: 1px solid var(--border);
   color: var(--text);
-  padding: 6px 12px;
+  height: var(--h-control);
+  padding: 0 12px;
   border-radius: var(--radius-md);
   font-size: 13.5px;
   outline: none;
@@ -310,7 +321,8 @@ button:disabled {
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 7px 12px;
+  height: var(--h-control);
+  padding: 0 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -366,7 +378,8 @@ button:disabled {
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text-bright);
-  padding: 6px 30px 6px 10px;
+  height: 30px;
+  padding: 0 30px 0 10px;
   font-size: 13px;
   border-radius: var(--radius-md);
 }
@@ -398,7 +411,8 @@ button:disabled {
   color: var(--text-bright);
 }
 .filter-starred-btn {
-  padding: 6px 10px;
+  height: 30px;
+  padding: 0 10px;
   font-size: 12px;
   white-space: nowrap;
   display: flex;
@@ -496,7 +510,7 @@ button:disabled {
 .panels {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 20px;
+  gap: 24px;
 }
 @media (max-width: 960px) {
   .panels { grid-template-columns: 1fr; }
@@ -528,7 +542,7 @@ button:disabled {
   gap: 8px;
 }
 .list-item {
-  padding: 14px 16px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--border-muted);
   display: flex;
   justify-content: space-between;
@@ -543,7 +557,7 @@ button:disabled {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 .item-header-row {
   display: flex;
@@ -634,20 +648,21 @@ button:disabled {
   flex-direction: column;
   align-items: flex-end;
   flex-shrink: 0;
-  gap: 6px;
+  gap: 8px;
 }
 .item-actions-diff-group {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 4px;
+  gap: 6px;
 }
 .item-actions .btn-outline,
 .item-actions .btn-danger {
   text-align: center;
   box-sizing: border-box;
   font-size: 12px;
-  padding: 4px 10px;
+  height: var(--h-control-sm);
+  padding: 0 10px;
   white-space: nowrap;
 }
 .item-actions .btn-remove-wt {
@@ -687,10 +702,11 @@ button:disabled {
 }
 .picker-select {
   width: 100%;
-  padding: 8px 12px;
+  height: var(--h-control);
+  padding: 0 12px;
 }
 .swap-btn {
-  padding: 8px 12px;
+  padding: 0 12px;
   align-self: flex-end;
   margin-bottom: 2px;
 }
@@ -734,7 +750,8 @@ button:disabled {
   border: none;
   background: transparent;
   color: var(--text-muted);
-  padding: 4px 10px;
+  height: var(--h-seg-btn);
+  padding: 0 10px;
   border-radius: var(--radius-sm);
   font-size: 12px;
   cursor: pointer;
@@ -786,12 +803,12 @@ button:disabled {
 .diff-stash-actions > button,
 .stash-menu > summary,
 .stash-cleanup-menu > button {
-  min-height: 30px;
+  height: var(--h-control-sm);
   box-sizing: border-box;
   font-size: 12px;
   font-weight: 500;
   line-height: 1.2;
-  padding: 6px 12px;
+  padding: 0 12px;
   white-space: nowrap;
 }
 .stash-action-button {
@@ -825,7 +842,8 @@ button:disabled {
 .stash-target-select {
   width: 100%;
   margin: 8px 0 12px;
-  padding: 7px 8px;
+  height: var(--h-control-sm);
+  padding: 0 8px;
   color: var(--text-bright);
   background: var(--bg);
   border: 1px solid var(--border);
@@ -879,7 +897,8 @@ button:disabled {
 .diff-tools-right > button,
 .diff-find-panel > button {
   font-size: 12px;
-  padding: 4px 10px;
+  height: var(--h-control-sm);
+  padding: 0 10px;
   flex-shrink: 0;
 }
 .diff-find-panel {
@@ -1243,7 +1262,8 @@ button:disabled {
 }
 .scan-directory-remove {
   flex: 0 0 auto;
-  padding: 3px 7px;
+  height: var(--h-mini);
+  padding: 0 7px;
   color: var(--danger);
   font-size: 12px;
 }
@@ -1484,7 +1504,8 @@ button:disabled {
   font-size: 12px;
   line-height: 1.4;
   cursor: pointer;
-  padding: 4px 8px;
+  height: 28px;
+  padding: 0 8px;
   border-radius: var(--radius-md);
 }
 .drawer-fullscreen:hover,
@@ -1500,7 +1521,12 @@ button:disabled {
   font-size: 20px;
   line-height: 1;
   cursor: pointer;
-  padding: 4px 8px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: var(--radius-md);
 }
 .drawer-close:hover {
@@ -1525,7 +1551,7 @@ button:disabled {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   flex-shrink: 0;
 }
 .commits-drawer-filters input {
@@ -1534,7 +1560,8 @@ button:disabled {
   border-radius: var(--radius-md);
   color: var(--text-bright);
   font-size: 12px;
-  padding: 4px 8px;
+  height: var(--h-control-sm);
+  padding: 0 8px;
   color-scheme: var(--color-scheme); /* 让原生日期控件按当前主题渲染 */
 }
 .commits-drawer-filters input::placeholder {
@@ -1547,13 +1574,16 @@ button:disabled {
 .commit-filter-text {
   flex: 1 1 104px;
   min-width: 96px;
+  height: var(--h-control-sm);
 }
 .commit-filter-date {
   width: 128px;
   flex: 0 1 128px;
+  height: var(--h-control-sm);
 }
 .commit-filter-btn {
-  padding: 3px 10px;
+  height: var(--h-control-sm);
+  padding: 0 10px;
   font-size: 12px;
   flex-shrink: 0;
 }
@@ -1561,7 +1591,8 @@ button:disabled {
 .commit-collapse-all-btn {
   margin-left: auto;
   flex-shrink: 0;
-  padding: 3px 10px;
+  height: var(--h-control-sm);
+  padding: 0 10px;
   font-size: 12px;
 }
 .commits-drawer-body {
@@ -1709,7 +1740,8 @@ button:disabled {
 /* 提交详情面板内「查看 Diff」按钮与逐文件 Diff 区块 */
 .commit-diff-toggle-btn {
   margin-top: 2px;
-  padding: 3px 10px;
+  height: var(--h-control-sm);
+  padding: 0 10px;
   font-size: 12px;
 }
 /* 提交详情面板内 Cherry-pick / Revert 操作按钮行 */
@@ -1717,16 +1749,18 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   margin-top: 2px;
 }
 .commit-action-btn {
-  padding: 3px 10px;
+  height: var(--h-control-sm);
+  padding: 0 10px;
   font-size: 12px;
 }
 /* Cherry-pick / Revert 的目标工作区选择器，与操作按钮同行 */
 .commit-action-target {
-  padding: 3px 6px;
+  height: var(--h-control-sm);
+  padding: 0 6px;
   font-size: 12px;
   max-width: 220px;
 }
@@ -1883,7 +1917,7 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 /* 行内原因输入行：替代 window.prompt（内嵌/受限环境不支持 prompt） */
 .mr-reason-row {
@@ -1894,7 +1928,8 @@ button:disabled {
 .mr-reason-input {
   flex: 1;
   min-width: 0;
-  padding: 6px 10px;
+  height: var(--h-control);
+  padding: 0 10px;
   font-size: 13px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -1923,8 +1958,8 @@ button:disabled {
 .mr-form-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-bottom: 14px;
+  gap: 8px;
+  margin-bottom: 16px;
 }
 .mr-form-group > label {
   font-size: 13px;
@@ -1937,10 +1972,11 @@ button:disabled {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   color: var(--text-bright);
-  padding: 8px 10px;
+  padding: 0 10px;
   font-size: 13px;
   font-family: inherit;
 }
+.mr-form-input { height: var(--h-control); }
 .mr-form-input:focus,
 .mr-form-textarea:focus {
   outline: none;
@@ -1948,6 +1984,7 @@ button:disabled {
 }
 .mr-form-textarea {
   min-height: 88px;
+  padding: 8px 10px;
   resize: vertical;
 }
 .mr-picker-wrapper {
@@ -2155,7 +2192,8 @@ button:disabled {
 .conflict-item-actions .btn-danger,
 .conflict-item-actions .btn-primary {
   font-size: 12px;
-  padding: 4px 10px;
+  height: var(--h-control-sm);
+  padding: 0 10px;
   white-space: nowrap;
 }
 
@@ -2191,7 +2229,8 @@ button:disabled {
 .conflict-hunk-actions { display: flex; gap: 6px; }
 .conflict-hunk-actions button {
   font-size: 11px;
-  padding: 2px 8px;
+  height: var(--h-mini);
+  padding: 0 8px;
   white-space: nowrap;
 }
 .conflict-side {
@@ -2285,7 +2324,8 @@ button:disabled {
 .remote-filter-input {
   width: 200px;
   font-size: 12px;
-  padding: 4px 10px;
+  height: var(--h-control-sm);
+  padding: 0 10px;
   background: var(--code-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -2294,7 +2334,8 @@ button:disabled {
 .remote-filter-input:focus { outline: 1px solid var(--accent); }
 .remote-sort-select {
   font-size: 12px;
-  padding: 3px 6px;
+  height: var(--h-control-sm);
+  padding: 0 6px;
   min-width: 0;
 }
 /* 列表拉取中的轻量反馈：沿用旧列表但降透明度 + 右上角角标，区分「在刷新」与「没反应」 */
@@ -2325,7 +2366,8 @@ button:disabled {
   margin-left: auto;
   margin-right: 8px;
   font-size: 12px;
-  padding: 4px 10px;
+  height: var(--h-control-sm);
+  padding: 0 10px;
   white-space: nowrap;
 }
 .remote-autofetch-group {
@@ -2360,7 +2402,8 @@ button:disabled {
   align-items: center;
   gap: 4px;
   font-size: 11px;
-  padding: 2px 8px;
+  height: var(--h-lock);
+  padding: 0 8px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--border);
   background: transparent;
@@ -2687,7 +2730,7 @@ html[data-theme="macos"] .tab-bar {
 html[data-theme="macos"] .tab-btn {
   border: none;
   border-radius: 7px;
-  padding: 6px 14px;
+  padding: 0 14px;
   color: var(--text);
 }
 html[data-theme="macos"] .tab-btn > span { justify-content: center; width: 100%; }
@@ -3698,5 +3741,5 @@ html[data-theme="custom"][data-custom-radius="round"] { --radius-sm: 10px; --rad
 .theme-switcher { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .theme-switcher .theme-select { max-width: 200px; }
 .theme-accent-row { display: flex; align-items: center; gap: 10px; }
-.theme-accent-row input[type="color"] { width: 46px; height: 34px; padding: 2px; cursor: pointer; }
+.theme-accent-row input[type="color"] { width: 46px; height: var(--h-control); padding: 2px; cursor: pointer; }
 .theme-accent-row .remote-modal-source { margin: 0; }
