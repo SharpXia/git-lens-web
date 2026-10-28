@@ -726,7 +726,8 @@ function pushTabbarUpdateProgress() {
 /** 主题同步支持的合法主题 id（与页面 THEME_OPTIONS 一致） */
 const TABBAR_THEME_IDS = [
   'glass-light', 'glass-dark', 'linear', 'raycast', 'supabase', 'discord',
-  'stripe', 'perplexity', 'warm-clay', 'notion', 'macos', 'terminal', 'custom',
+  'stripe', 'perplexity', 'warm-clay', 'notion', 'notion-dark',
+  'macos', 'macos-dark', 'terminal', 'custom',
 ];
 
 /**
@@ -746,6 +747,8 @@ const THEME_WINDOW_BG = {
   'warm-clay': '#f4f2ea',
   notion: '#f7f6f3',
   macos: '#f0f0f2',
+  'macos-dark': '#1e1e20',
+  'notion-dark': '#191919',
   terminal: '#0a0a0a',
 };
 

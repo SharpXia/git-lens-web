@@ -80,6 +80,18 @@
     --bar-badge-bg: #f6e3da; --bar-badge-text: #b05c3e; --bar-badge-border: #ecc0af;
     --bar-font: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   }
+  body[data-theme="notion-dark"] {
+    --bar-bg: #191919; --bar-border: #2f2f2f; --bar-active: #202020;
+    --bar-muted: #9b9a97; --bar-bright: #ffffff; --bar-accent: #2383e2;
+    --bar-badge-bg: #1c2f42; --bar-badge-text: #6fb3ea; --bar-badge-border: #2f4a63;
+    --bar-font: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="macos-dark"] {
+    --bar-bg: #1e1e20; --bar-border: #38383a; --bar-active: #5a5a5e;
+    --bar-muted: #98989f; --bar-bright: #ffffff; --bar-accent: #0a84ff;
+    --bar-badge-bg: #1c2c40; --bar-badge-text: #6cb2ff; --bar-badge-border: #31435c;
+    --bar-font: -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
   body[data-theme="macos"] {
     --bar-bg: #f0f0f2; --bar-border: #d5d5da; --bar-active: #ffffff;
     --bar-muted: #6e6e73; --bar-bright: #1d1d1f; --bar-accent: #007aff;
@@ -326,7 +338,8 @@
   /* Stripe / Perplexity / Notion：下划线画法（与内容页 Tab 同语言） */
   body[data-theme="stripe"] .tab,
   body[data-theme="perplexity"] .tab,
-  body[data-theme="notion"] .tab {
+  body[data-theme="notion"] .tab,
+  body[data-theme="notion-dark"] .tab {
     border-right: none; margin: 0 2px; background: transparent;
   }
   body[data-theme="stripe"] .tab.active,
@@ -334,14 +347,16 @@
     background: var(--bar-active);
     box-shadow: inset 0 -2px 0 var(--bar-accent);
   }
-  body[data-theme="notion"] .tab.active {
+  body[data-theme="notion"] .tab.active,
+  body[data-theme="notion-dark"] .tab.active {
     background: transparent;
     box-shadow: inset 0 -2px 0 var(--bar-bright);
     font-weight: 600;
   }
   body[data-theme="stripe"] #new-tab,
   body[data-theme="perplexity"] #new-tab,
-  body[data-theme="notion"] #new-tab {
+  body[data-theme="notion"] #new-tab,
+  body[data-theme="notion-dark"] #new-tab {
     border-left: none; margin: 0 2px;
   }
 
@@ -352,13 +367,20 @@
   body[data-theme="warm-clay"] #new-tab { border-left: none; margin: 5px 3px; border-radius: 8px; width: 30px; }
 
   /* macOS：分段控件画法（内容页 Tab 同款白块） */
-  body[data-theme="macos"] .tab { margin: 4px 3px; padding: 0 10px; border-right: none; border-radius: 7px; }
+  body[data-theme="macos"] .tab,
+  body[data-theme="macos-dark"] .tab { margin: 4px 3px; padding: 0 10px; border-right: none; border-radius: 7px; }
   body[data-theme="macos"] .tab.active {
     background: #ffffff;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
   }
+  body[data-theme="macos-dark"] .tab.active {
+    background: var(--bar-active);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.40);
+  }
   body[data-theme="macos"] .tab:not(.active):hover { background: rgba(255, 255, 255, 0.55); }
-  body[data-theme="macos"] #new-tab { border-left: none; margin: 4px 3px; border-radius: 7px; width: 30px; }
+  body[data-theme="macos-dark"] .tab:not(.active):hover { background: rgba(255, 255, 255, 0.06); }
+  body[data-theme="macos"] #new-tab,
+  body[data-theme="macos-dark"] #new-tab { border-left: none; margin: 4px 3px; border-radius: 7px; width: 30px; }
 
   /* 终端 TUI：[01] 编号 + 描边方块（与内容页 Tab 同语言） */
   body[data-theme="terminal"] #tabs { counter-reset: gl-nativetab; }

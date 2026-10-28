@@ -34,8 +34,7 @@
     // 预设主题 id 与展示名（顺序即下拉顺序；linear 为 :root 默认令牌，无需覆盖块）。
     // 选择持久化在 localStorage；桌面模式经 gitLens.setTheme 同步给原生标签条换肤。
     const THEME_OPTIONS = [
-      ['glass-light', '液态玻璃 · 昼（Apple 风）'],
-      ['glass-dark', '液态玻璃 · 夜（Apple 风）'],
+      ['glass', '液态玻璃（Apple 风 · 浅/深）'],
       ['linear', 'Linear（靛蓝工程）'],
       ['raycast', 'Raycast（余烬渐变）'],
       ['supabase', 'Supabase（翡翠石墨）'],
@@ -51,6 +50,57 @@
     const THEME_STORAGE_KEY = 'gl-theme';
     const THEME_CUSTOM_STORAGE_KEY = 'gl-theme-custom';
     const THEME_CUSTOM_DEFAULTS = { mode: 'dark', accent: '#5e6ad2', radius: 'soft' };
+
+    // 双态主题：预设 id → [亮色内部 id, 深色内部 id]；单态主题内部 id 即预设 id
+    const DUAL_MODE_THEMES = {
+      glass: ['glass-light', 'glass-dark'],
+      macos: ['macos', 'macos-dark'],
+      notion: ['notion', 'notion-dark'],
+    };
+    // 旧版把玻璃昼/夜当两个预设存储，启动时迁移到合并后的预设
+    const LEGACY_THEME_MAP = { 'glass-light': 'glass', 'glass-dark': 'glass' };
+
+    // 亮/深偏好：light / dark / system（跟随系统）
+    const MODE_PREF_KEY = 'gl-theme-mode';
+    const MODE_PREFS = ['light', 'dark', 'system'];
+    const mediaDark = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(prefers-color-scheme: dark)')
+      : null;
+
+    /**
+     * 读取亮/深偏好；存储缺失或非法时回落跟随系统。
+     * @returns {'light'|'dark'|'system'} 偏好
+     */
+    function readModePref() {
+      try {
+        const stored = localStorage.getItem(MODE_PREF_KEY);
+        if (MODE_PREFS.includes(stored)) return stored;
+      } catch {
+        // 存储不可用时按跟随系统处理
+      }
+      return 'system';
+    }
+
+    /**
+     * 把偏好解析为实际模式；跟随系统时读取系统深色设置。
+     * @param {'light'|'dark'|'system'} pref - 偏好
+     * @returns {'light'|'dark'} 实际模式
+     */
+    function resolveModePref(pref) {
+      return pref === 'system' ? (mediaDark && mediaDark.matches ? 'dark' : 'light') : pref;
+    }
+
+    /**
+     * 由预设 + 偏好解析内部主题 id（双态主题按模式取变体，单态主题原样）。
+     * @param {string} preset - 预设 id
+     * @param {'light'|'dark'|'system'} pref - 偏好
+     * @returns {string} 内部主题 id（对应 CSS 的 data-theme 值）
+     */
+    function resolveInternalTheme(preset, pref) {
+      const dual = DUAL_MODE_THEMES[preset];
+      if (!dual) return preset;
+      return resolveModePref(pref) === 'dark' ? dual[1] : dual[0];
+    }
 
     /**
      * 计算强调色相对亮度，决定主按钮文字用深还是浅。
@@ -102,13 +152,14 @@
 
     /**
      * 把主题同步给原生标签条（红绿灯底色随主题）；浏览器模式无 gitLens 静默跳过。
-     * @param {{theme: string, mode?: string, accent?: string}} config - 主题配置
+     * @param {{preset: string, mode?: string, accent?: string}} config - 主题配置
+     * @param {string} internalId - 内部主题 id（双态主题已按模式解析）
      */
-    function pushThemeToShell(config) {
+    function pushThemeToShell(config, internalId) {
       if (!isDesktop || typeof window.gitLens?.setTheme !== 'function') return;
-      const payload = config.theme === 'custom'
+      const payload = config.preset === 'custom'
         ? { theme: 'custom', mode: config.mode, accent: config.accent }
-        : { theme: config.theme };
+        : { theme: internalId };
       try {
         window.gitLens.setTheme(payload);
       } catch (err) {
@@ -117,17 +168,19 @@
     }
 
     /**
-     * 应用主题配置：切换根元素 data-theme、按需写自定义变量，可选持久化。
-     * @param {{theme: string, mode?: string, accent?: string, radius?: string}} config - 主题配置
+     * 应用主题配置：按偏好解析内部主题并切换 data-theme，可选持久化预设。
+     * @param {{preset: string, mode?: string, accent?: string, radius?: string}} config - 主题配置
      * @param {boolean} persist - 是否写入 localStorage
      */
     function applyThemeConfig(config, persist) {
+      const modePref = readModePref();
+      const internalId = resolveInternalTheme(config.preset, modePref);
       // 切主题瞬间禁用全局过渡：整页逐元素渐变会显得浑浊，且后台窗口下过渡时钟
       // 被节流会出现长时间停留在旧配色的观感
       const root = document.documentElement;
       root.classList.add('gl-theme-switching');
-      root.dataset.theme = config.theme;
-      if (config.theme === 'custom') {
+      root.dataset.theme = internalId;
+      if (config.preset === 'custom') {
         const custom = {
           mode: config.mode || 'dark',
           accent: config.accent || THEME_CUSTOM_DEFAULTS.accent,
@@ -136,31 +189,32 @@
         applyThemeCustomVars(custom);
         if (persist) localStorage.setItem(THEME_CUSTOM_STORAGE_KEY, JSON.stringify(custom));
       }
-      if (persist) localStorage.setItem(THEME_STORAGE_KEY, config.theme);
+      if (persist) localStorage.setItem(THEME_STORAGE_KEY, config.preset);
       // 程序化应用（启动恢复/自定义弹层实时预览）也要回写切换器显示，避免下拉框与实际主题脱节
       const select = document.getElementById('themeSelect');
-      if (select && select.value !== config.theme) select.value = config.theme;
+      if (select && select.value !== config.preset) select.value = config.preset;
       const customBtn = document.getElementById('themeCustomBtn');
-      if (customBtn) customBtn.style.display = config.theme === 'custom' ? '' : 'none';
-      pushThemeToShell(config);
+      if (customBtn) customBtn.style.display = config.preset === 'custom' ? '' : 'none';
+      pushThemeToShell(config, internalId);
       // 过渡禁用只需覆盖本次重排的一帧，下一拍恢复常规过渡（hover 等）
       setTimeout(() => root.classList.remove('gl-theme-switching'), 80);
     }
 
     /**
-     * 读取本地存储的主题配置；id 非法时回落 linear。
-     * @returns {{theme: string, mode?: string, accent?: string, radius?: string}} 主题配置
+     * 读取本地存储的主题预设；id 非法时回落 linear（旧版玻璃昼/夜迁移为合并预设）。
+     * @returns {{preset: string, mode?: string, accent?: string, radius?: string}} 主题配置
      */
     function loadThemeConfig() {
-      let themeId = 'linear';
+      let preset = 'linear';
       try {
-        const stored = localStorage.getItem(THEME_STORAGE_KEY);
-        if (THEME_OPTIONS.some(([id]) => id === stored)) themeId = stored;
+        let stored = localStorage.getItem(THEME_STORAGE_KEY);
+        if (LEGACY_THEME_MAP[stored]) stored = LEGACY_THEME_MAP[stored];
+        if (THEME_OPTIONS.some(([id]) => id === stored)) preset = stored;
       } catch {
         // 存储不可用时按默认主题处理
       }
-      const config = { theme: themeId };
-      if (themeId === 'custom') Object.assign(config, readThemeCustomConfig());
+      const config = { preset };
+      if (preset === 'custom') Object.assign(config, readThemeCustomConfig());
       return config;
     }
 
@@ -180,21 +234,21 @@
         select.appendChild(option);
       }
       const current = loadThemeConfig();
-      select.value = current.theme;
-      customBtn.style.display = current.theme === 'custom' ? '' : 'none';
+      select.value = current.preset;
+      customBtn.style.display = current.preset === 'custom' ? '' : 'none';
 
       select.addEventListener('change', () => {
-        const themeId = select.value;
-        if (themeId === 'custom') {
+        const presetId = select.value;
+        if (presetId === 'custom') {
           const custom = readThemeCustomConfig();
-          applyThemeConfig({ theme: 'custom', ...custom }, true);
+          applyThemeConfig({ preset: 'custom', ...custom }, true);
           customBtn.style.display = '';
           modal.style.display = '';
           syncThemeCustomModal(custom);
           return;
         }
         customBtn.style.display = 'none';
-        applyThemeConfig({ theme: themeId }, true);
+        applyThemeConfig({ preset: presetId }, true);
       });
 
       customBtn.addEventListener('click', () => {
@@ -230,7 +284,7 @@
           accent: accentInput.value,
           radius: radiusSelect.value,
         };
-        applyThemeConfig({ theme: 'custom', ...config }, true);
+        applyThemeConfig({ preset: 'custom', ...config }, true);
       }
 
       modeGroup.addEventListener('click', (event) => {
@@ -250,7 +304,7 @@
       // 恢复默认：配置回到默认值并即时生效
       document.getElementById('themeCustomResetBtn').addEventListener('click', () => {
         const defaults = { ...THEME_CUSTOM_DEFAULTS };
-        applyThemeConfig({ theme: 'custom', ...defaults }, true);
+        applyThemeConfig({ preset: 'custom', ...defaults }, true);
         syncThemeCustomModal(defaults);
       });
       for (const btn of modal.querySelectorAll('[data-action="close-theme-custom"]')) {
@@ -261,9 +315,48 @@
       });
     }
 
-    // 启动即恢复上次主题（persist=false：仅应用，不重复写存储），再挂切换器
+    /**
+     * 初始化亮/深三态按钮：点击在亮色 → 深色 → 跟随系统间循环，图标与提示同步。
+     */
+    function initThemeModeButton() {
+      const btn = document.getElementById('themeModeBtn');
+      if (!btn) return;
+      const render = (pref) => {
+        for (const icon of btn.querySelectorAll('[data-mode-icon]')) {
+          icon.hidden = icon.dataset.modeIcon !== pref;
+        }
+        const resolved = resolveModePref(pref);
+        const label = pref === 'system'
+          ? `跟随系统（当前${resolved === 'dark' ? '深色' : '亮色'}）`
+          : (pref === 'light' ? '亮色模式' : '深色模式');
+        btn.title = label;
+        btn.setAttribute('aria-label', label);
+      };
+      const pref = readModePref();
+      render(pref);
+      btn.addEventListener('click', () => {
+        const next = MODE_PREFS[(MODE_PREFS.indexOf(readModePref()) + 1) % MODE_PREFS.length];
+        try {
+          localStorage.setItem(MODE_PREF_KEY, next);
+        } catch {
+          // 存储不可用时偏好仅在本次会话生效
+        }
+        render(next);
+        applyThemeConfig(loadThemeConfig(), false);
+      });
+      // 跟随系统时监听系统深色切换，双态主题实时换边
+      if (mediaDark && typeof mediaDark.addEventListener === 'function') {
+        mediaDark.addEventListener('change', () => {
+          if (readModePref() !== 'system') return;
+          applyThemeConfig(loadThemeConfig(), false);
+        });
+      }
+    }
+
+    // 启动即恢复上次主题（persist=false：仅应用，不重复写存储），再挂切换器与三态按钮
     applyThemeConfig(loadThemeConfig(), false);
     initThemeSwitcher();
+    initThemeModeButton();
 
     const TAB_TITLE_LABELS = {
       overview: '仓库总览',

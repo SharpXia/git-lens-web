@@ -3739,9 +3739,209 @@ html[data-theme="custom"][data-custom-mode="light"] {
 html[data-theme="custom"][data-custom-radius="sharp"] { --radius-sm: 2px; --radius-md: 4px; --radius-lg: 6px; --radius-xl: 8px; }
 html[data-theme="custom"][data-custom-radius="round"] { --radius-sm: 10px; --radius-md: 14px; --radius-lg: 18px; --radius-xl: 22px; }
 
+/* ===== 预设主题：Notion 暖纸（深色变体，与 notion 共用落款画法）===== */
+html[data-theme="notion-dark"] {
+  --color-scheme: dark;
+  --bg: #191919;
+  --card-bg: #1f1f1f;
+  --card-alt: #262626;
+  --card-elev: #202020;
+  --code-bg: #1e1e1e;
+  --code-elev-bg: #262626;
+  --code-tools-bg: rgba(25, 25, 25, 0.94);
+  --border: #2f2f2f;
+  --border-muted: #262626;
+  --border-strong: #404040;
+  --text: #d4d1cb;
+  --text-muted: #9b9a97;
+  --text-bright: #ffffff;
+  --accent: #2383e2;
+  --accent-hover: #4f9fee;
+  --on-accent: #ffffff;
+  --accent-soft: rgba(35, 131, 226, 0.14);
+  --accent-border-soft: rgba(35, 131, 226, 0.40);
+  --focus-ring: rgba(35, 131, 226, 0.50);
+  --btn-primary-bg: #2383e2;
+  --btn-primary-bg-hover: #4f9fee;
+  --btn-primary-border: #2383e2;
+  --btn-primary-text: #ffffff;
+  --btn-primary-disabled-bg: #1d3a55;
+  --danger: #e5726a;
+  --danger-soft: rgba(229, 114, 106, 0.12);
+  --danger-border-soft: rgba(229, 114, 106, 0.40);
+  --warning: #d3a04c;
+  --warning-soft: rgba(211, 160, 76, 0.14);
+  --warning-border-soft: rgba(211, 160, 76, 0.38);
+  --success: #5cb894;
+  --success-soft: rgba(92, 184, 148, 0.13);
+  --success-border-soft: rgba(92, 184, 148, 0.40);
+  --star-color: #e8b31a;
+  --diff-add-bg: rgba(92, 184, 148, 0.13);
+  --diff-add-text: #5cb894;
+  --diff-del-bg: rgba(229, 114, 106, 0.12);
+  --diff-del-text: #ec7c74;
+  --diff-hunk-bg: rgba(35, 131, 226, 0.15);
+  --diff-hunk-text: #6fb3ea;
+  --find-match-bg: rgba(232, 179, 26, 0.24);
+  --find-match-text: #f0dfa8;
+  --find-match-active-bg: #e8b31a;
+  --find-match-active-text: #191919;
+  --find-match-active-ring: rgba(232, 179, 26, 0.50);
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-pill: 999px;
+  --tab-radius: 6px;
+  --shadow-pop: 0 0 0 1px #2f2f2f, 0 3px 6px rgba(0, 0, 0, 0.35);
+  --shadow-modal: 0 0 0 1px #2f2f2f, 0 9px 24px rgba(0, 0, 0, 0.45);
+  --shadow-drawer: -1px 0 0 #2f2f2f, -6px 0 20px rgba(0, 0, 0, 0.35);
+  --shadow-float: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "SFMono-Regular", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+  --scrollbar-thumb: #3d3d3d;
+  --scrollbar-thumb-hover: #4d4d4d;
+}
+
+/* ===== 预设主题：macOS 原生（深色变体，落款画法另行深色覆盖）===== */
+html[data-theme="macos-dark"] {
+  --color-scheme: dark;
+  --bg: #1e1e20;
+  --card-bg: #28282a;
+  --card-alt: #323234;
+  --card-elev: #2c2c2e;
+  --code-bg: #232325;
+  --code-elev-bg: #2c2c2e;
+  --code-tools-bg: rgba(30, 30, 32, 0.88);
+  --border: #3d3d40;
+  --border-muted: #2c2c2e;
+  --border-strong: #4a4a4e;
+  --text: #e8e8ed;
+  --text-muted: #98989f;
+  --text-bright: #ffffff;
+  --accent: #0a84ff;
+  --accent-hover: #409cff;
+  --on-accent: #ffffff;
+  --accent-soft: rgba(10, 132, 255, 0.14);
+  --accent-border-soft: rgba(10, 132, 255, 0.40);
+  --focus-ring: rgba(10, 132, 255, 0.50);
+  --btn-primary-bg: #0a84ff;
+  --btn-primary-bg-hover: #409cff;
+  --btn-primary-border: #0a84ff;
+  --btn-primary-text: #ffffff;
+  --btn-primary-disabled-bg: #0e2f52;
+  --danger: #ff453a;
+  --danger-soft: rgba(255, 69, 58, 0.12);
+  --danger-border-soft: rgba(255, 69, 58, 0.38);
+  --warning: #ffd60a;
+  --warning-soft: rgba(255, 214, 10, 0.12);
+  --warning-border-soft: rgba(255, 214, 10, 0.35);
+  --success: #30d158;
+  --success-soft: rgba(48, 209, 88, 0.12);
+  --success-border-soft: rgba(48, 209, 88, 0.38);
+  --star-color: #ffd60a;
+  --diff-add-bg: rgba(48, 209, 88, 0.14);
+  --diff-add-text: #45d05f;
+  --diff-del-bg: rgba(255, 69, 58, 0.13);
+  --diff-del-text: #ff6961;
+  --diff-hunk-bg: rgba(10, 132, 255, 0.16);
+  --diff-hunk-text: #64aefc;
+  --find-match-bg: rgba(255, 214, 10, 0.26);
+  --find-match-text: #ffeeb0;
+  --find-match-active-bg: #ffd60a;
+  --find-match-active-text: #1e1e20;
+  --find-match-active-ring: rgba(255, 214, 10, 0.50);
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-pill: 999px;
+  --tab-radius: 7px;
+  --shadow-pop: 0 5px 20px rgba(0, 0, 0, 0.45), 0 12px 40px rgba(0, 0, 0, 0.4);
+  --shadow-modal: 0 10px 40px rgba(0, 0, 0, 0.5), 0 24px 64px rgba(0, 0, 0, 0.4);
+  --shadow-drawer: -10px 0 40px rgba(0, 0, 0, 0.45);
+  --shadow-float: 0 2px 10px rgba(0, 0, 0, 0.4);
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --scrollbar-thumb: rgba(255, 255, 255, 0.18);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.30);
+}
+
+/* macOS 深色变体的落款：分段控件结构不变，色面整体转深 */
+html[data-theme="macos-dark"] body {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(30, 30, 32, 0) 160px), var(--bg);
+}
+html[data-theme="macos-dark"] .tab-bar {
+  background: rgba(44, 44, 46, 0.75);
+  border: 1px solid var(--border-muted);
+  border-radius: 9px;
+  padding: 2px;
+  gap: 2px;
+}
+html[data-theme="macos-dark"] .tab-btn {
+  border: none;
+  border-radius: 7px;
+  padding: 0 14px;
+  color: var(--text);
+}
+html[data-theme="macos-dark"] .tab-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--text-bright); }
+html[data-theme="macos-dark"] .tab-btn.active {
+  background: #5a5a5e;
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.40);
+}
+html[data-theme="macos-dark"] .repo-item.selected { background: var(--accent); border-left: none; }
+html[data-theme="macos-dark"] .repo-item.selected .repo-item-name,
+html[data-theme="macos-dark"] .repo-item.selected .repo-item-group { color: #ffffff; }
+html[data-theme="macos-dark"] button:not(.btn-primary):not(.btn-danger) { background: #333336; }
+html[data-theme="macos-dark"] button:not(.btn-primary):not(.btn-danger):hover { background: #3a3a3d; }
+html[data-theme="macos-dark"] button:not(.btn-primary):not(.btn-danger):active { background: #262628; }
+html[data-theme="macos-dark"] select,
+html[data-theme="macos-dark"] input { background: #232325; }
+html[data-theme="macos-dark"] .diff-mode-segmented {
+  background: rgba(44, 44, 46, 0.75);
+  border-radius: 8px;
+  padding: 2px;
+}
+html[data-theme="macos-dark"] .diff-mode-btn.active {
+  background: #5a5a5e;
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.40);
+}
+html[data-theme="macos-dark"] :focus-visible {
+  outline: 3px solid rgba(10, 132, 255, 0.40);
+  outline-offset: 1px;
+  border-radius: 6px;
+}
+html[data-theme="macos-dark"] select:focus-visible,
+html[data-theme="macos-dark"] input:focus-visible,
+html[data-theme="macos-dark"] .diff-mode-btn:focus-visible { outline: none; }
+html[data-theme="macos-dark"] select:focus,
+html[data-theme="macos-dark"] input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3.5px rgba(10, 132, 255, 0.25);
+}
+
 /* ===== 主题切换器与自定义主题弹层 ===== */
 .header-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .theme-switcher { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+/* 亮/深三态按钮：太阳/月亮/显示器图标随偏好切换 */
+.theme-mode-btn {
+  flex: none;
+  width: var(--h-control);
+  height: var(--h-control);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+}
+.theme-mode-btn:hover { color: var(--text-bright); background: var(--card-alt); }
+.theme-mode-btn svg { width: 16px; height: 16px; }
 .theme-switcher .theme-select { max-width: 200px; }
 .theme-accent-row { display: flex; align-items: center; gap: 10px; }
 .theme-accent-row input[type="color"] { width: 46px; height: var(--h-control); padding: 2px; cursor: pointer; }
