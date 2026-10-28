@@ -104,8 +104,11 @@
 }
 /* 原生控件（日期选择器等）随主题明暗渲染 */
 html { color-scheme: var(--color-scheme); }
-/* 主题切换瞬间：整页禁用过渡，切换即时生效（由 applyThemeConfig 挂/摘类驱动） */
-html.gl-theme-switching, html.gl-theme-switching *, html.gl-theme-switching *::before, html.gl-theme-switching *::after { transition: none !important; }
+/* 主题切换瞬间：整页禁用过渡，切换即时生效（由 applyThemeConfig 挂/摘类驱动）。
+   三态按钮图标不在禁用之列——它的矢量缩放/旋转切换动画需要过渡才能播放 */
+html.gl-theme-switching *:not(.theme-mode-btn svg),
+html.gl-theme-switching *:not(.theme-mode-btn svg)::before,
+html.gl-theme-switching *:not(.theme-mode-btn svg)::after { transition: none !important; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 /* 细滚动条：桌面应用的常态是贴边细条而非系统宽条 */
