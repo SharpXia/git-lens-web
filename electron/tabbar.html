@@ -273,6 +273,101 @@
     cursor: pointer;
   }
   #new-tab:hover { background: var(--bar-active); color: var(--bar-bright); }
+  /* ---- 主题画法：原生标签项跟随各主题的视觉语言（几何契约 38px/78px 不变） ---- */
+  .tab:not(.active):hover { color: var(--bar-bright); }
+
+  /* 玻璃昼夜：胶囊标签 + 玻璃高光，无分隔线 */
+  body[data-theme="glass-light"] .tab,
+  body[data-theme="glass-dark"] .tab {
+    margin: 5px 3px;
+    padding: 0 10px;
+    border-right: none;
+    border-radius: 8px;
+    border: 1px solid transparent;
+  }
+  body[data-theme="glass-light"] .tab.active {
+    background: rgba(255, 255, 255, 0.78);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 4px rgba(31, 41, 66, 0.14);
+  }
+  body[data-theme="glass-light"] .tab:not(.active):hover { background: rgba(255, 255, 255, 0.45); }
+  body[data-theme="glass-dark"] .tab.active {
+    background: rgba(255, 255, 255, 0.09);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 1px 6px rgba(0, 0, 0, 0.3);
+  }
+  body[data-theme="glass-dark"] .tab:not(.active):hover { background: rgba(255, 255, 255, 0.05); }
+  body[data-theme="glass-light"] #new-tab,
+  body[data-theme="glass-dark"] #new-tab {
+    border-left: none; margin: 5px 3px; border-radius: 8px; width: 30px;
+  }
+
+  /* Raycast：余烬渐变软胶囊 */
+  body[data-theme="raycast"] .tab {
+    margin: 5px 3px; padding: 0 10px; border-right: none; border-radius: 8px;
+  }
+  body[data-theme="raycast"] .tab.active {
+    background: linear-gradient(135deg, rgba(255, 99, 99, 0.24), rgba(255, 159, 67, 0.24));
+    box-shadow: inset 0 0 0 1px rgba(255, 159, 67, 0.35);
+  }
+  body[data-theme="raycast"] .tab:not(.active):hover { background: rgba(255, 159, 67, 0.10); }
+  body[data-theme="raycast"] #new-tab { border-left: none; margin: 5px 3px; border-radius: 8px; width: 30px; }
+
+  /* Supabase：翡翠软块 */
+  body[data-theme="supabase"] .tab { margin: 5px 3px; padding: 0 10px; border-right: none; border-radius: 6px; }
+  body[data-theme="supabase"] .tab.active { background: rgba(62, 207, 142, 0.16); color: #57d6a0; }
+  body[data-theme="supabase"] .tab:not(.active):hover { background: rgba(255, 255, 255, 0.05); }
+  body[data-theme="supabase"] #new-tab { border-left: none; margin: 5px 3px; border-radius: 6px; width: 30px; }
+
+  /* Discord：频道式圆块 */
+  body[data-theme="discord"] .tab { margin: 5px 3px; padding: 0 10px; border-right: none; border-radius: 8px; }
+  body[data-theme="discord"] .tab.active { background: rgba(255, 255, 255, 0.09); }
+  body[data-theme="discord"] .tab:not(.active):hover { background: rgba(255, 255, 255, 0.045); }
+  body[data-theme="discord"] #new-tab { border-left: none; margin: 5px 3px; border-radius: 8px; width: 30px; }
+
+  /* Stripe / Perplexity / Notion：下划线画法（与内容页 Tab 同语言） */
+  body[data-theme="stripe"] .tab,
+  body[data-theme="perplexity"] .tab,
+  body[data-theme="notion"] .tab {
+    border-right: none; margin: 0 2px; background: transparent;
+  }
+  body[data-theme="stripe"] .tab.active,
+  body[data-theme="perplexity"] .tab.active {
+    background: var(--bar-active);
+    box-shadow: inset 0 -2px 0 var(--bar-accent);
+  }
+  body[data-theme="notion"] .tab.active {
+    background: transparent;
+    box-shadow: inset 0 -2px 0 var(--bar-bright);
+    font-weight: 600;
+  }
+  body[data-theme="stripe"] #new-tab,
+  body[data-theme="perplexity"] #new-tab,
+  body[data-theme="notion"] #new-tab {
+    border-left: none; margin: 0 2px;
+  }
+
+  /* 暖陶：赤陶软块 */
+  body[data-theme="warm-clay"] .tab { margin: 5px 3px; padding: 0 10px; border-right: none; border-radius: 8px; }
+  body[data-theme="warm-clay"] .tab.active { background: rgba(217, 119, 87, 0.14); color: #b05c3e; }
+  body[data-theme="warm-clay"] .tab:not(.active):hover { background: rgba(217, 119, 87, 0.07); }
+  body[data-theme="warm-clay"] #new-tab { border-left: none; margin: 5px 3px; border-radius: 8px; width: 30px; }
+
+  /* macOS：分段控件画法（内容页 Tab 同款白块） */
+  body[data-theme="macos"] .tab { margin: 4px 3px; padding: 0 10px; border-right: none; border-radius: 7px; }
+  body[data-theme="macos"] .tab.active {
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  }
+  body[data-theme="macos"] .tab:not(.active):hover { background: rgba(255, 255, 255, 0.55); }
+  body[data-theme="macos"] #new-tab { border-left: none; margin: 4px 3px; border-radius: 7px; width: 30px; }
+
+  /* 终端 TUI：[01] 编号 + 描边方块（与内容页 Tab 同语言） */
+  body[data-theme="terminal"] #tabs { counter-reset: gl-nativetab; }
+  body[data-theme="terminal"] .tab-title::before {
+    counter-increment: gl-nativetab;
+    content: '[' counter(gl-nativetab, decimal-leading-zero) '] ';
+    color: var(--bar-accent);
+  }
+  body[data-theme="terminal"] .tab.active { box-shadow: inset 0 0 0 1px var(--bar-accent); }
   /* 应用内更新进度（gitLensTabbar.onUpdateProgress）：细进度条贴标签栏下缘，
      阶段文案走右侧胶囊；均为只读展示，不设 no-drag，保持标题栏可拖拽 */
   #update-progress-track {
