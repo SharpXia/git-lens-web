@@ -133,6 +133,7 @@ header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
   margin-bottom: 20px;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--border);
@@ -528,6 +529,7 @@ button:disabled {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 10px;
 }
 /* 卡片标题强制单行：标题不参与 flex 收缩，空间压力交给排序/过滤控件，避免窄栏下折行 */
 .panel-header h2 {
@@ -1487,7 +1489,7 @@ button:disabled {
 .commits-drawer-header-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 .commits-drawer-header h3 {
   margin: 0;
