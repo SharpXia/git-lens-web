@@ -84,6 +84,23 @@ const gitLens = {
     assertHttpUrl(url);
     return ipcRenderer.invoke('git-lens:open-external', url);
   },
+
+  /**
+   * 同步当前主题给原生标签条（feat/theme-switcher：标签条红绿灯底色随应用主题换肤）。
+   * @param {{theme: string, mode?: 'dark'|'light', accent?: string}} theme - 主题载荷；
+   *   theme 为预设 id 或 'custom'，custom 时附加明暗模式与 #rrggbb 强调色
+   * @returns {void} 经 IPC 通知主进程缓存并转发给标签条
+   */
+  setTheme(theme) {
+    if (!theme || typeof theme !== 'object' || typeof theme.theme !== 'string') {
+      throw new TypeError('gitLens.setTheme 的参数必须是含 theme 字符串字段的对象');
+    }
+    ipcRenderer.send('git-lens-app:theme-changed', {
+      theme: theme.theme,
+      mode: theme.mode === 'light' ? 'light' : 'dark',
+      accent: typeof theme.accent === 'string' ? theme.accent : null,
+    });
+  },
 };
 
 contextBridge.exposeInMainWorld('gitLens', Object.freeze(gitLens));

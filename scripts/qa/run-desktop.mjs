@@ -322,8 +322,11 @@ async function main() {
     // 遮罩消失（恢复页切回应用页）+ 数据可重载
     let recovered = false;
     if (restarted) {
+      // 等应用页脚本就绪而非仅等 URL 归位：导航起始瞬间 location 已是 http，
+      // 但 app.js 尚未执行完，直接求值 window.selectRepo 会竞态失败（实测可复现）
       const appPageBack = await pollPage(page, () =>
-        location.protocol === 'http:' && location.hostname === '127.0.0.1', null, 20000);
+        location.protocol === 'http:' && location.hostname === '127.0.0.1'
+          && typeof window.selectRepo === 'function', null, 20000);
       await page.evaluate((repoPath) => { window.selectRepo(repoPath); }, fixture.main.repo);
       const dataBack = await pollPage(page, () => {
         const items = document.querySelectorAll('#wtList .list-item');

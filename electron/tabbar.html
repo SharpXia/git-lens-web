@@ -4,24 +4,166 @@
 <meta charset="utf-8">
 <title>Git Lens 标签条</title>
 <style>
-  /* 自足样式：深色主题与应用一致（取 public/app.css :root 变量同款配色）。
+  /* 自足样式：与应用主题实时联动（feat/theme-switcher）。
+     配色收敛为 --bar-* 变量：默认 linear，其余预设走 body[data-theme] 覆盖，
+     自定义主题由主题订阅脚本按明暗模式与强调色写入内联变量。
      本页为 Shell 自有 chrome（file:// 本地加载、无远程资源），不属于契约 §14
-     的服务端 CSP 范围；所有动态文案一律经 textContent 写入，无注入面。 */
+     的服务端 CSP 范围；所有动态文案一律经 textContent 写入，无注入面。
+     几何约束：高度 38px 与红绿灯区 78px 是主进程对位契约，不得改动。 */
   html, body {
     margin: 0;
     height: 100%;
     overflow: hidden;
     background: transparent;
-    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-family: var(--bar-font);
     user-select: none;
     -webkit-user-select: none;
+  }
+  body {
+    /* 默认主题 linear 的标签条配色；各预设经 body[data-theme] 整体覆盖 */
+    --bar-bg: #050506;
+    --bar-border: #1f2023;
+    --bar-active: #141517;
+    --bar-muted: #8a8f98;
+    --bar-bright: #eef0f3;
+    --bar-accent: #717de0;
+    --bar-badge-bg: #1e2245;
+    --bar-badge-text: #9aa5ee;
+    --bar-badge-border: #5e6ad2;
+    --bar-font: "Inter", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="raycast"] {
+    --bar-bg: #131317; --bar-border: #333338; --bar-active: #26262c;
+    --bar-muted: #9b9ba3; --bar-bright: #f2f2f6; --bar-accent: #ff9f43;
+    --bar-badge-bg: #3a2410; --bar-badge-text: #ffbf80; --bar-badge-border: #a8551e;
+    --bar-font: -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="glass-light"] {
+    --bar-bg: #e9ecf4; --bar-border: #d8dce6; --bar-active: #f7f9fd;
+    --bar-muted: #5d6577; --bar-bright: #0f1626; --bar-accent: #4f6cf7;
+    --bar-badge-bg: #e4e9fe; --bar-badge-text: #3a51d1; --bar-badge-border: #c3ccf9;
+    --bar-font: -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="glass-dark"] {
+    --bar-bg: #0c0e14; --bar-border: #232733; --bar-active: #161a24;
+    --bar-muted: #8f97ab; --bar-bright: #f5f8ff; --bar-accent: #6e85f7;
+    --bar-badge-bg: #1c2340; --bar-badge-text: #a4b4ff; --bar-badge-border: #4a5ac9;
+    --bar-font: -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="supabase"] {
+    --bar-bg: #121212; --bar-border: #2e2e2e; --bar-active: #1c1c1c;
+    --bar-muted: #9c9c9c; --bar-bright: #ffffff; --bar-accent: #3ecf8e;
+    --bar-badge-bg: #12291d; --bar-badge-text: #57d6a0; --bar-badge-border: #2c5c44;
+    --bar-font: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="discord"] {
+    --bar-bg: #1e1f22; --bar-border: #3f4147; --bar-active: #2b2d31;
+    --bar-muted: #949ba4; --bar-bright: #f2f3f5; --bar-accent: #5865f2;
+    --bar-badge-bg: #2a2e63; --bar-badge-text: #9ba3f7; --bar-badge-border: #4752c4;
+    --bar-font: "gg sans", "Noto Sans", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="stripe"] {
+    --bar-bg: #f6f9fc; --bar-border: #e3e8ee; --bar-active: #ffffff;
+    --bar-muted: #697386; --bar-bright: #0a2540; --bar-accent: #635bff;
+    --bar-badge-bg: #e9e8ff; --bar-badge-text: #5851ec; --bar-badge-border: #c9c7f8;
+    --bar-font: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="perplexity"] {
+    --bar-bg: #fbfcfa; --bar-border: #e2e7dd; --bar-active: #ffffff;
+    --bar-muted: #64716c; --bar-bright: #091717; --bar-accent: #20808d;
+    --bar-badge-bg: #e2efee; --bar-badge-text: #196b76; --bar-badge-border: #bcd8d5;
+    --bar-font: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="warm-clay"] {
+    --bar-bg: #f4f1e8; --bar-border: #e2ddcc; --bar-active: #fbfaf5;
+    --bar-muted: #7a7561; --bar-bright: #21201a; --bar-accent: #d97757;
+    --bar-badge-bg: #f6e3da; --bar-badge-text: #b05c3e; --bar-badge-border: #ecc0af;
+    --bar-font: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="notion-dark"] {
+    --bar-bg: #191919; --bar-border: #2f2f2f; --bar-active: #202020;
+    --bar-muted: #9b9a97; --bar-bright: #ffffff; --bar-accent: #2383e2;
+    --bar-badge-bg: #1c2f42; --bar-badge-text: #6fb3ea; --bar-badge-border: #2f4a63;
+    --bar-font: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="macos-dark"] {
+    --bar-bg: #1e1e20; --bar-border: #38383a; --bar-active: #5a5a5e;
+    --bar-muted: #98989f; --bar-bright: #ffffff; --bar-accent: #0a84ff;
+    --bar-badge-bg: #1c2c40; --bar-badge-text: #6cb2ff; --bar-badge-border: #31435c;
+    --bar-font: -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="linear-light"] {
+    --bar-bg: #f7f8f8; --bar-border: #e4e5e6; --bar-active: #ffffff;
+    --bar-muted: #82858c; --bar-bright: #1a1c1f; --bar-accent: #5e6ad2;
+    --bar-badge-bg: #e9eaf6; --bar-badge-text: #4c58b8; --bar-badge-border: #c9cdf0;
+    --bar-font: "Inter", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="raycast-light"] {
+    --bar-bg: #f5f5f6; --bar-border: #e4e4e8; --bar-active: #ffffff;
+    --bar-muted: #82828c; --bar-bright: #111114; --bar-accent: #d94b33;
+    --bar-badge-bg: #fbe9e4; --bar-badge-text: #c24128; --bar-badge-border: #f2c4b8;
+    --bar-font: -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="supabase-light"] {
+    --bar-bg: #fcfcfc; --bar-border: #e0e0e0; --bar-active: #ffffff;
+    --bar-muted: #6f6f6f; --bar-bright: #171717; --bar-accent: #188454;
+    --bar-badge-bg: #dcf2e6; --bar-badge-text: #146b43; --bar-badge-border: #b5e0cd;
+    --bar-font: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="discord-light"] {
+    --bar-bg: #e3e5e8; --bar-border: #c4c9ce; --bar-active: #ffffff;
+    --bar-muted: #5c5e66; --bar-bright: #060607; --bar-accent: #5865f2;
+    --bar-badge-bg: #e2e4fd; --bar-badge-text: #4752c4; --bar-badge-border: #c9cdf8;
+    --bar-font: "gg sans", "Noto Sans", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="stripe-dark"] {
+    --bar-bg: #0c1424; --bar-border: #23324a; --bar-active: #16233a;
+    --bar-muted: #7f8ea3; --bar-bright: #f0f5fc; --bar-accent: #7a73ff;
+    --bar-badge-bg: #1b2340; --bar-badge-text: #9a94ff; --bar-badge-border: #31376b;
+    --bar-font: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="perplexity-dark"] {
+    --bar-bg: #1f2121; --bar-border: #3a3d3c; --bar-active: #292b2a;
+    --bar-muted: #8f938f; --bar-bright: #f2f4f0; --bar-accent: #37a0ac;
+    --bar-badge-bg: #1d3336; --bar-badge-text: #6cc0cb; --bar-badge-border: #2c4a4e;
+    --bar-font: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="warm-clay-dark"] {
+    --bar-bg: #211e18; --bar-border: #3e3a2d; --bar-active: #2c2820;
+    --bar-muted: #a29b84; --bar-bright: #f5f2e8; --bar-accent: #e08b6d;
+    --bar-badge-bg: #3a2c22; --bar-badge-text: #eda17f; --bar-badge-border: #55382a;
+    --bar-font: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="terminal-light"] {
+    --bar-bg: #f2f3ef; --bar-border: #d6d8cd; --bar-active: #ffffff;
+    --bar-muted: #6b756b; --bar-bright: #0f2010; --bar-accent: #0f8a3c;
+    --bar-badge-bg: #dcefe2; --bar-badge-text: #0c7434; --bar-badge-border: #b3d8c1;
+    --bar-font: "SF Mono", ui-monospace, Menlo, "PingFang SC", "Microsoft YaHei", monospace;
+  }
+  body[data-theme="macos"] {
+    --bar-bg: #f0f0f2; --bar-border: #d5d5da; --bar-active: #ffffff;
+    --bar-muted: #6e6e73; --bar-bright: #1d1d1f; --bar-accent: #007aff;
+    --bar-badge-bg: #d8e8ff; --bar-badge-text: #0057b8; --bar-badge-border: #b3d2f5;
+    --bar-font: -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="notion"] {
+    --bar-bg: #f7f6f3; --bar-border: #e3e2de; --bar-active: #ffffff;
+    --bar-muted: #787774; --bar-bright: #191917; --bar-accent: #2383e2;
+    --bar-badge-bg: #e0ecf9; --bar-badge-text: #1b74cc; --bar-badge-border: #bcd8f2;
+    --bar-font: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="terminal"] {
+    --bar-bg: #0a0a0a; --bar-border: #263026; --bar-active: #121712;
+    --bar-muted: #7d8578; --bar-bright: #e8f5e9; --bar-accent: #33ff66;
+    --bar-badge-bg: #0d2b18; --bar-badge-text: #66ff99; --bar-badge-border: #1a4d2e;
+    --bar-font: "SF Mono", ui-monospace, Menlo, "PingFang SC", "Microsoft YaHei", monospace;
   }
   #bar {
     display: flex;
     align-items: stretch;
     height: 38px;
-    background: #010409;
-    border-bottom: 1px solid #30363d;
+    background: var(--bar-bg);
+    border-bottom: 1px solid var(--bar-border);
     /* 契约 §17：标签条兼任标题栏——空白区可拖动窗口，系统双击缩放行为沿用 */
     -webkit-app-region: drag;
   }
@@ -114,10 +256,10 @@
     top: 0;
     min-width: 0;
     max-width: none;
-    border: 1px solid #58a6ff;
+    border: 1px solid var(--bar-accent);
     border-radius: 5px;
-    background: #161b22;
-    color: #f0f6fc;
+    background: var(--bar-active);
+    color: var(--bar-bright);
     opacity: 0.94;
     box-shadow: 0 3px 12px #0008;
     pointer-events: none;
@@ -130,7 +272,7 @@
     top: 3px;
     width: 2px;
     height: 32px;
-    background: #58a6ff;
+    background: var(--bar-accent);
     pointer-events: none;
     z-index: 3;
   }
@@ -143,17 +285,17 @@
     max-width: 220px;
     flex: 0 1 auto;
     padding: 0 8px 0 12px;
-    border-right: 1px solid #30363d;
-    color: #8b949e;
+    border-right: 1px solid var(--bar-border);
+    color: var(--bar-muted);
     font-size: 12px;
     line-height: 1;
     cursor: default;
   }
   .tab.active {
-    background: #161b22;
-    color: #f0f6fc;
+    background: var(--bar-active);
+    color: var(--bar-bright);
     /* 激活态顶边高亮，与编辑器类应用的标签语义一致 */
-    box-shadow: inset 0 2px 0 #58a6ff;
+    box-shadow: inset 0 2px 0 var(--bar-accent);
   }
   .tab-title {
     flex: 1;
@@ -178,19 +320,149 @@
     line-height: 1;
     cursor: pointer;
   }
-  .tab-close:hover { background: #30363d; color: #f0f6fc; }
+  .tab-close:hover { background: var(--bar-border); color: var(--bar-bright); }
   #new-tab {
     flex: none;
     width: 34px;
     border: none;
-    border-left: 1px solid #30363d;
+    border-left: 1px solid var(--bar-border);
     background: transparent;
-    color: #8b949e;
+    color: var(--bar-muted);
     font-size: 18px;
     line-height: 1;
     cursor: pointer;
   }
-  #new-tab:hover { background: #161b22; color: #f0f6fc; }
+  #new-tab:hover { background: var(--bar-active); color: var(--bar-bright); }
+  /* ---- 主题画法：原生标签项跟随各主题的视觉语言（几何契约 38px/78px 不变） ---- */
+  .tab:not(.active):hover { color: var(--bar-bright); }
+
+  /* 玻璃昼夜：胶囊标签 + 玻璃高光，无分隔线 */
+  body[data-theme="glass-light"] .tab,
+  body[data-theme="glass-dark"] .tab {
+    margin: 5px 3px;
+    padding: 0 10px;
+    border-right: none;
+    border-radius: 8px;
+    border: 1px solid transparent;
+  }
+  body[data-theme="glass-light"] .tab.active {
+    background: rgba(255, 255, 255, 0.78);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 4px rgba(31, 41, 66, 0.14);
+  }
+  body[data-theme="glass-light"] .tab:not(.active):hover { background: rgba(255, 255, 255, 0.45); }
+  body[data-theme="glass-dark"] .tab.active {
+    background: rgba(255, 255, 255, 0.09);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 1px 6px rgba(0, 0, 0, 0.3);
+  }
+  body[data-theme="glass-dark"] .tab:not(.active):hover { background: rgba(255, 255, 255, 0.05); }
+  body[data-theme="glass-light"] #new-tab,
+  body[data-theme="glass-dark"] #new-tab {
+    border-left: none; margin: 5px 3px; border-radius: 8px; width: 30px;
+  }
+
+  /* Raycast：余烬渐变软胶囊 */
+  body[data-theme="raycast"] .tab,
+  body[data-theme="raycast-light"] .tab {
+    margin: 5px 3px; padding: 0 10px; border-right: none; border-radius: 8px;
+  }
+  body[data-theme="raycast"] .tab.active,
+  body[data-theme="raycast-light"] .tab.active {
+    background: linear-gradient(135deg, rgba(255, 99, 99, 0.20), rgba(255, 159, 67, 0.20));
+    box-shadow: inset 0 0 0 1px rgba(255, 159, 67, 0.35);
+  }
+  body[data-theme="raycast"] .tab:not(.active):hover { background: rgba(255, 159, 67, 0.10); }
+  body[data-theme="raycast-light"] .tab:not(.active):hover { background: rgba(217, 75, 51, 0.08); }
+  body[data-theme="raycast"] #new-tab,
+  body[data-theme="raycast-light"] #new-tab { border-left: none; margin: 5px 3px; border-radius: 8px; width: 30px; }
+
+  /* Supabase：翡翠软块 */
+  body[data-theme="supabase"] .tab,
+  body[data-theme="supabase-light"] .tab { margin: 5px 3px; padding: 0 10px; border-right: none; border-radius: 6px; }
+  body[data-theme="supabase"] .tab.active { background: rgba(62, 207, 142, 0.16); color: #57d6a0; }
+  body[data-theme="supabase"] .tab:not(.active):hover { background: rgba(255, 255, 255, 0.05); }
+  body[data-theme="supabase-light"] .tab.active { background: rgba(24, 132, 84, 0.12); color: #146b43; }
+  body[data-theme="supabase-light"] .tab:not(.active):hover { background: rgba(0, 0, 0, 0.045); }
+  body[data-theme="supabase"] #new-tab,
+  body[data-theme="supabase-light"] #new-tab { border-left: none; margin: 5px 3px; border-radius: 6px; width: 30px; }
+
+  /* Discord：频道式圆块 */
+  body[data-theme="discord"] .tab,
+  body[data-theme="discord-light"] .tab { margin: 5px 3px; padding: 0 10px; border-right: none; border-radius: 8px; }
+  body[data-theme="discord"] .tab.active { background: rgba(255, 255, 255, 0.09); }
+  body[data-theme="discord"] .tab:not(.active):hover { background: rgba(255, 255, 255, 0.045); }
+  body[data-theme="discord-light"] .tab.active { background: rgba(88, 101, 242, 0.10); }
+  body[data-theme="discord-light"] .tab:not(.active):hover { background: rgba(0, 0, 0, 0.04); }
+  body[data-theme="discord"] #new-tab,
+  body[data-theme="discord-light"] #new-tab { border-left: none; margin: 5px 3px; border-radius: 8px; width: 30px; }
+
+  /* Stripe / Perplexity / Notion：下划线画法（与内容页 Tab 同语言） */
+  body[data-theme="stripe"] .tab,
+  body[data-theme="stripe-dark"] .tab,
+  body[data-theme="perplexity"] .tab,
+  body[data-theme="perplexity-dark"] .tab,
+  body[data-theme="notion"] .tab,
+  body[data-theme="notion-dark"] .tab {
+    border-right: none; margin: 0 2px; background: transparent;
+  }
+  body[data-theme="stripe"] .tab.active,
+  body[data-theme="stripe-dark"] .tab.active,
+  body[data-theme="perplexity"] .tab.active,
+  body[data-theme="perplexity-dark"] .tab.active {
+    background: var(--bar-active);
+    box-shadow: inset 0 -2px 0 var(--bar-accent);
+  }
+  body[data-theme="notion"] .tab.active,
+  body[data-theme="notion-dark"] .tab.active {
+    background: transparent;
+    box-shadow: inset 0 -2px 0 var(--bar-bright);
+    font-weight: 600;
+  }
+  body[data-theme="stripe"] #new-tab,
+  body[data-theme="stripe-dark"] #new-tab,
+  body[data-theme="perplexity"] #new-tab,
+  body[data-theme="perplexity-dark"] #new-tab,
+  body[data-theme="notion"] #new-tab,
+  body[data-theme="notion-dark"] #new-tab {
+    border-left: none; margin: 0 2px;
+  }
+
+  /* 暖陶：赤陶软块 */
+  body[data-theme="warm-clay"] .tab,
+  body[data-theme="warm-clay-dark"] .tab { margin: 5px 3px; padding: 0 10px; border-right: none; border-radius: 8px; }
+  body[data-theme="warm-clay"] .tab.active { background: rgba(217, 119, 87, 0.14); color: #b05c3e; }
+  body[data-theme="warm-clay"] .tab:not(.active):hover { background: rgba(217, 119, 87, 0.07); }
+  body[data-theme="warm-clay-dark"] .tab.active { background: rgba(224, 139, 109, 0.18); color: #eda17f; }
+  body[data-theme="warm-clay-dark"] .tab:not(.active):hover { background: rgba(224, 139, 109, 0.08); }
+  body[data-theme="warm-clay"] #new-tab,
+  body[data-theme="warm-clay-dark"] #new-tab { border-left: none; margin: 5px 3px; border-radius: 8px; width: 30px; }
+
+  /* macOS：分段控件画法（内容页 Tab 同款白块） */
+  body[data-theme="macos"] .tab,
+  body[data-theme="macos-dark"] .tab { margin: 4px 3px; padding: 0 10px; border-right: none; border-radius: 7px; }
+  body[data-theme="macos"] .tab.active {
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  }
+  body[data-theme="macos-dark"] .tab.active {
+    background: var(--bar-active);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.40);
+  }
+  body[data-theme="macos"] .tab:not(.active):hover { background: rgba(255, 255, 255, 0.55); }
+  body[data-theme="macos-dark"] .tab:not(.active):hover { background: rgba(255, 255, 255, 0.06); }
+  body[data-theme="macos"] #new-tab,
+  body[data-theme="macos-dark"] #new-tab { border-left: none; margin: 4px 3px; border-radius: 7px; width: 30px; }
+
+  /* 终端 TUI：[01] 编号 + 描边方块（与内容页 Tab 同语言） */
+  body[data-theme="terminal"] #tabs,
+  body[data-theme="terminal-light"] #tabs { counter-reset: gl-nativetab; }
+  body[data-theme="terminal"] .tab-title::before,
+  body[data-theme="terminal-light"] .tab-title::before {
+    counter-increment: gl-nativetab;
+    content: '[' counter(gl-nativetab, decimal-leading-zero) '] ';
+    color: var(--bar-accent);
+  }
+  body[data-theme="terminal"] .tab.active,
+  body[data-theme="terminal-light"] .tab.active { box-shadow: inset 0 0 0 1px var(--bar-accent); }
   /* 应用内更新进度（gitLensTabbar.onUpdateProgress）：细进度条贴标签栏下缘，
      阶段文案走右侧胶囊；均为只读展示，不设 no-drag，保持标题栏可拖拽 */
   #update-progress-track {
@@ -200,7 +472,7 @@
   #update-progress {
     height: 100%;
     width: 0;
-    background: #58a6ff;
+    background: var(--bar-accent);
     transition: width 0.3s ease-out;
   }
   #update-badge {
@@ -209,10 +481,10 @@
     align-self: center;
     margin-right: 8px;
     padding: 3px 10px;
-    border: 1px solid #1f6feb;
+    border: 1px solid var(--bar-badge-border);
     border-radius: 10px;
-    background: #0d2a47;
-    color: #79c0ff;
+    background: var(--bar-badge-bg);
+    color: var(--bar-badge-text);
     font-size: 11px;
     line-height: 1.2;
     white-space: nowrap;
@@ -480,6 +752,31 @@
       event.preventDefault();
       finishDrag();
     }
+  });
+
+  // 主题同步（feat/theme-switcher）：应用页切换主题后主进程转发到这里，
+  // 红绿灯所在标签条底色随之换肤；自定义主题按明暗模式与强调色写入内联变量。
+  window.gitLensTabbar.onThemeChanged(function (theme) {
+    document.body.dataset.theme = theme.theme;
+    var rootStyle = document.documentElement.style;
+    var customVars = ['--bar-bg', '--bar-border', '--bar-active', '--bar-muted',
+      '--bar-bright', '--bar-accent', '--bar-badge-bg', '--bar-badge-text', '--bar-badge-border'];
+    if (theme.theme !== 'custom') {
+      for (var name of customVars) rootStyle.removeProperty(name);
+      return;
+    }
+    var dark = theme.mode !== 'light';
+    var accent = /^#[0-9a-fA-F]{6}$/.test(theme.accent || '') ? theme.accent : (dark ? '#5e6ad2' : '#2383e2');
+    var palette = dark
+      ? { '--bar-bg': '#0a0a0c', '--bar-border': '#232329', '--bar-active': '#16161b',
+          '--bar-muted': '#9b9ba3', '--bar-bright': '#f2f2f6',
+          '--bar-badge-bg': '#1e2245', '--bar-badge-text': '#9aa5ee' }
+      : { '--bar-bg': '#f4f2ee', '--bar-border': '#e2dfda', '--bar-active': '#ffffff',
+          '--bar-muted': '#6b6a66', '--bar-bright': '#1c1c1a',
+          '--bar-badge-bg': '#ece8ff', '--bar-badge-text': '#5a48d6' };
+    palette['--bar-accent'] = accent;
+    palette['--bar-badge-border'] = accent;
+    for (var key of customVars) rootStyle.setProperty(key, palette[key]);
   });
 
   window.gitLensTabbar.onTabsChanged(render);

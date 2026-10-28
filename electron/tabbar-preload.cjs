@@ -112,6 +112,28 @@ const gitLensTabbar = {
     };
   },
 
+  /**
+   * 订阅应用主题变化（feat/theme-switcher：主进程在应用页切换主题及标签条加载完成时推送）。
+   * @param {(theme: {theme: string, mode?: 'dark'|'light', accent?: string|null}) => void} callback - 主题回调
+   * @returns {() => void} 取消订阅函数
+   */
+  onThemeChanged(callback) {
+    assertFunction(callback, 'onThemeChanged');
+    const listener = (_event, theme) => {
+      // 只放行含主题 id 字符串的载荷，异常数据静默丢弃
+      if (!theme || typeof theme.theme !== 'string') return;
+      try {
+        callback(theme);
+      } catch {
+        // 页面回调异常不应影响 IPC 链路
+      }
+    };
+    ipcRenderer.on('git-lens-tabbar:theme-changed', listener);
+    return () => {
+      ipcRenderer.removeListener('git-lens-tabbar:theme-changed', listener);
+    };
+  },
+
   /** 请求新建标签（加载应用首页，契约 §15） */
   newTab() {
     ipcRenderer.send('git-lens-tabbar:new-tab');
