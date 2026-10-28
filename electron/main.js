@@ -167,8 +167,9 @@ let tabbarDragActive = false;
 let tabbarFullscreen = false;
 /** 最近一次更新进度载荷（null=空闲）；标签条重建或晚就绪时经 did-finish-load 回发对齐 */
 let lastUpdateProgress = null;
-/** 标签条当前主题载荷（feat/theme-switcher）：应用页切换主题后经此缓存，晚就绪的标签条加载完成时回填 */
-let tabbarTheme = { theme: 'linear' };
+/** 标签条当前主题载荷（feat/theme-switcher）：应用页切换主题后经此缓存，晚就绪的标签条加载完成时回填；
+ * 初始值取 userData 持久化的上次主题，启动首帧即可用正确底色建窗 */
+let tabbarTheme = readPersistedTheme();
 /** 内容标签集合：每个标签一个 WebContentsView（契约 §15） */
 const tabs = [];
 /** 当前激活标签 id；null 表示尚无标签 */
@@ -724,9 +725,76 @@ function pushTabbarUpdateProgress() {
 
 /** 主题同步支持的合法主题 id（与页面 THEME_OPTIONS 一致） */
 const TABBAR_THEME_IDS = [
-  'linear', 'geist', 'arc', 'raycast', 'macos', 'fluent',
-  'material3', 'notion', 'neobrutalism', 'terminal', 'custom',
+  'glass-light', 'glass-dark', 'linear', 'raycast', 'supabase', 'discord',
+  'stripe', 'perplexity', 'warm-clay', 'notion', 'macos', 'terminal', 'custom',
 ];
+
+/**
+ * 各主题对应的窗口背景色（与 tabbar.html 的 --bar-bg 同源）。
+ * 窗口态下标签条视图从红绿灯区（78px）右侧开始，左侧露出的就是窗口背景——
+ * 主题切换时同步改写它，红绿灯底色才能与标签条浑然一体。
+ */
+const THEME_WINDOW_BG = {
+  'glass-light': '#e9ecf4',
+  'glass-dark': '#0c0e14',
+  linear: '#050506',
+  raycast: '#131317',
+  supabase: '#121212',
+  discord: '#1e1f22',
+  stripe: '#f6f9fc',
+  perplexity: '#fbfcfa',
+  'warm-clay': '#f4f2ea',
+  notion: '#f7f6f3',
+  macos: '#f0f0f2',
+  terminal: '#0a0a0a',
+};
+
+/**
+ * 由主题载荷解析窗口背景色；自定义主题按明暗模式取底色。
+ * @param {{theme: string, mode?: string}} theme - 归一化主题载荷
+ * @returns {string} 窗口背景色
+ */
+function resolveThemeWindowBg(theme) {
+  if (theme.theme === 'custom') return theme.mode === 'light' ? '#f4f2ee' : '#0a0a0c';
+  return THEME_WINDOW_BG[theme.theme] || '#050506';
+}
+
+/** 主题持久化文件名（userData 下，随 GIT_LENS_USER_DATA 天然隔离） */
+const THEME_STATE_FILE = 'theme.json';
+
+/**
+ * 读取持久化的主题载荷；文件缺失/损坏/字段非法时回落 linear。
+ * @returns {{theme: string, mode?: string, accent?: string|null}} 主题载荷
+ */
+function readPersistedTheme() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), THEME_STATE_FILE), 'utf-8'));
+    return normalizeTabbarTheme(raw) || { theme: 'linear' };
+  } catch {
+    return { theme: 'linear' };
+  }
+}
+
+/**
+ * 持久化主题载荷；写入失败静默忽略（主题丢失只影响下次启动的初始底色）。
+ * @param {{theme: string, mode?: string, accent?: string|null}} theme - 归一化主题载荷
+ */
+function persistTheme(theme) {
+  try {
+    fs.writeFileSync(path.join(app.getPath('userData'), THEME_STATE_FILE), JSON.stringify(theme, null, 2));
+  } catch {
+    // 只读 userData 等场景下放弃持久化，不影响本次会话换肤
+  }
+}
+
+/**
+ * 把主题底色应用到窗口背景：红绿灯所在的左侧露出区随之换肤。
+ * @param {{theme: string, mode?: string}} theme - 归一化主题载荷
+ */
+function applyThemeWindowBackground(theme) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.setBackgroundColor(resolveThemeWindowBg(theme));
+}
 
 /**
  * 归一化应用页发来的主题载荷：主题 id 必须在白名单内；自定义主题附加
@@ -1439,7 +1507,8 @@ function createMainWindow() {
     // showInactive；focusable:false 保证窗口永远不会成为 key window
     show: !e2eBackgroundWindow,
     ...(e2eBackgroundWindow ? { focusable: false } : {}),
-    backgroundColor: '#010409',
+    // 窗口底色随主题：红绿灯所在的左侧露出区（标签条视图从 78px 起）露的就是它
+    backgroundColor: resolveThemeWindowBg(tabbarTheme),
     // 契约 §17：窗口 chrome 融合——标签条兼任标题栏。darwin 用 hiddenInset 隐藏
     // 原生标题栏并把红绿灯压进 38px 标签条（trafficLightPosition 近似垂直居中）；
     // win/linux 用系统绘制的 titleBarOverlay（⚠️ 真机未验收，契约 §1 平台矩阵）。
@@ -1965,6 +2034,9 @@ function registerIpc() {
     const normalized = normalizeTabbarTheme(theme);
     if (!normalized) return;
     tabbarTheme = normalized;
+    persistTheme(normalized);
+    // 窗口背景（红绿灯露出区）与标签条同步换肤
+    applyThemeWindowBackground(normalized);
     pushTabbarTheme();
   });
 

@@ -34,15 +34,17 @@
     // 预设主题 id 与展示名（顺序即下拉顺序；linear 为 :root 默认令牌，无需覆盖块）。
     // 选择持久化在 localStorage；桌面模式经 gitLens.setTheme 同步给原生标签条换肤。
     const THEME_OPTIONS = [
-      ['linear', 'Linear（暗色工程）'],
-      ['geist', 'Geist（极简黑白）'],
-      ['arc', 'Arc（柔和浅色）'],
-      ['raycast', 'Raycast（命令面板）'],
-      ['macos', 'macOS（原生质感）'],
-      ['fluent', 'Fluent 2（层深浅色）'],
-      ['material3', 'Material 3（tonal 圆润）'],
-      ['notion', 'Notion（极简纸面）'],
-      ['neobrutalism', '新粗野主义（硬投影）'],
+      ['glass-light', '液态玻璃 · 昼（Apple 风）'],
+      ['glass-dark', '液态玻璃 · 夜（Apple 风）'],
+      ['linear', 'Linear（靛蓝工程）'],
+      ['raycast', 'Raycast（余烬渐变）'],
+      ['supabase', 'Supabase（翡翠石墨）'],
+      ['discord', 'Discord（模糊紫）'],
+      ['stripe', 'Stripe（雾紫 · 浅）'],
+      ['perplexity', 'Perplexity（青瓷 · 浅）'],
+      ['warm-clay', '暖陶奶油（浅）'],
+      ['notion', 'Notion（暖纸 · 浅）'],
+      ['macos', 'macOS（原生 · 浅）'],
       ['terminal', '终端 TUI（荧光绿）'],
       ['custom', '自定义…'],
     ];
@@ -120,7 +122,11 @@
      * @param {boolean} persist - 是否写入 localStorage
      */
     function applyThemeConfig(config, persist) {
-      document.documentElement.dataset.theme = config.theme;
+      // 切主题瞬间禁用全局过渡：整页逐元素渐变会显得浑浊，且后台窗口下过渡时钟
+      // 被节流会出现长时间停留在旧配色的观感
+      const root = document.documentElement;
+      root.classList.add('gl-theme-switching');
+      root.dataset.theme = config.theme;
       if (config.theme === 'custom') {
         const custom = {
           mode: config.mode || 'dark',
@@ -131,7 +137,14 @@
         if (persist) localStorage.setItem(THEME_CUSTOM_STORAGE_KEY, JSON.stringify(custom));
       }
       if (persist) localStorage.setItem(THEME_STORAGE_KEY, config.theme);
+      // 程序化应用（启动恢复/自定义弹层实时预览）也要回写切换器显示，避免下拉框与实际主题脱节
+      const select = document.getElementById('themeSelect');
+      if (select && select.value !== config.theme) select.value = config.theme;
+      const customBtn = document.getElementById('themeCustomBtn');
+      if (customBtn) customBtn.style.display = config.theme === 'custom' ? '' : 'none';
       pushThemeToShell(config);
+      // 过渡禁用只需覆盖本次重排的一帧，下一拍恢复常规过渡（hover 等）
+      setTimeout(() => root.classList.remove('gl-theme-switching'), 80);
     }
 
     /**

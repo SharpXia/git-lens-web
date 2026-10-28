@@ -32,23 +32,53 @@
     --bar-badge-border: #5e6ad2;
     --bar-font: "Inter", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   }
-  body[data-theme="geist"] {
-    --bar-bg: #000000; --bar-border: #262626; --bar-active: #111111;
-    --bar-muted: #a1a1a1; --bar-bright: #ededed; --bar-accent: #52a8ff;
-    --bar-badge-bg: #0a2540; --bar-badge-text: #7cbcff; --bar-badge-border: #0070f3;
-    --bar-font: "Geist", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-  }
-  body[data-theme="arc"] {
-    --bar-bg: #f4f2ee; --bar-border: #e2dfda; --bar-active: #ffffff;
-    --bar-muted: #6b6a66; --bar-bright: #1c1c1a; --bar-accent: #7c6cf6;
-    --bar-badge-bg: #ece8ff; --bar-badge-text: #6a59ee; --bar-badge-border: #c9c2f8;
-    --bar-font: -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
-  }
   body[data-theme="raycast"] {
     --bar-bg: #131317; --bar-border: #333338; --bar-active: #26262c;
     --bar-muted: #9b9ba3; --bar-bright: #f2f2f6; --bar-accent: #ff9f43;
     --bar-badge-bg: #3a2410; --bar-badge-text: #ffbf80; --bar-badge-border: #a8551e;
     --bar-font: -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="glass-light"] {
+    --bar-bg: #e9ecf4; --bar-border: #d8dce6; --bar-active: #f7f9fd;
+    --bar-muted: #5d6577; --bar-bright: #0f1626; --bar-accent: #4f6cf7;
+    --bar-badge-bg: #e4e9fe; --bar-badge-text: #3a51d1; --bar-badge-border: #c3ccf9;
+    --bar-font: -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="glass-dark"] {
+    --bar-bg: #0c0e14; --bar-border: #232733; --bar-active: #161a24;
+    --bar-muted: #8f97ab; --bar-bright: #f5f8ff; --bar-accent: #6e85f7;
+    --bar-badge-bg: #1c2340; --bar-badge-text: #a4b4ff; --bar-badge-border: #4a5ac9;
+    --bar-font: -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="supabase"] {
+    --bar-bg: #121212; --bar-border: #2e2e2e; --bar-active: #1c1c1c;
+    --bar-muted: #9c9c9c; --bar-bright: #ffffff; --bar-accent: #3ecf8e;
+    --bar-badge-bg: #12291d; --bar-badge-text: #57d6a0; --bar-badge-border: #2c5c44;
+    --bar-font: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="discord"] {
+    --bar-bg: #1e1f22; --bar-border: #3f4147; --bar-active: #2b2d31;
+    --bar-muted: #949ba4; --bar-bright: #f2f3f5; --bar-accent: #5865f2;
+    --bar-badge-bg: #2a2e63; --bar-badge-text: #9ba3f7; --bar-badge-border: #4752c4;
+    --bar-font: "gg sans", "Noto Sans", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="stripe"] {
+    --bar-bg: #f6f9fc; --bar-border: #e3e8ee; --bar-active: #ffffff;
+    --bar-muted: #697386; --bar-bright: #0a2540; --bar-accent: #635bff;
+    --bar-badge-bg: #e9e8ff; --bar-badge-text: #5851ec; --bar-badge-border: #c9c7f8;
+    --bar-font: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="perplexity"] {
+    --bar-bg: #fbfcfa; --bar-border: #e2e7dd; --bar-active: #ffffff;
+    --bar-muted: #64716c; --bar-bright: #091717; --bar-accent: #20808d;
+    --bar-badge-bg: #e2efee; --bar-badge-text: #196b76; --bar-badge-border: #bcd8d5;
+    --bar-font: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="warm-clay"] {
+    --bar-bg: #f4f1e8; --bar-border: #e2ddcc; --bar-active: #fbfaf5;
+    --bar-muted: #7a7561; --bar-bright: #21201a; --bar-accent: #d97757;
+    --bar-badge-bg: #f6e3da; --bar-badge-text: #b05c3e; --bar-badge-border: #ecc0af;
+    --bar-font: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   }
   body[data-theme="macos"] {
     --bar-bg: #f0f0f2; --bar-border: #d5d5da; --bar-active: #ffffff;
@@ -56,28 +86,10 @@
     --bar-badge-bg: #d8e8ff; --bar-badge-text: #0057b8; --bar-badge-border: #b3d2f5;
     --bar-font: -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
   }
-  body[data-theme="fluent"] {
-    --bar-bg: #f3f3f3; --bar-border: #e0e0e0; --bar-active: #ffffff;
-    --bar-muted: #616161; --bar-bright: #1a1a1a; --bar-accent: #0067c0;
-    --bar-badge-bg: #d0e4f5; --bar-badge-text: #005ba1; --bar-badge-border: #b3d4ee;
-    --bar-font: "Segoe UI Variable Text", "Segoe UI", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-  }
-  body[data-theme="material3"] {
-    --bar-bg: #f3edf7; --bar-border: #e2daea; --bar-active: #ffffff;
-    --bar-muted: #5f5b67; --bar-bright: #1d1b20; --bar-accent: #6750a4;
-    --bar-badge-bg: #e8def8; --bar-badge-text: #5a4390; --bar-badge-border: #cabfe0;
-    --bar-font: "Google Sans", Roboto, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-  }
   body[data-theme="notion"] {
     --bar-bg: #f7f6f3; --bar-border: #e3e2de; --bar-active: #ffffff;
     --bar-muted: #787774; --bar-bright: #191917; --bar-accent: #2383e2;
     --bar-badge-bg: #e0ecf9; --bar-badge-text: #1b74cc; --bar-badge-border: #bcd8f2;
-    --bar-font: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-  }
-  body[data-theme="neobrutalism"] {
-    --bar-bg: #fffdf5; --bar-border: #111111; --bar-active: #ffd23f;
-    --bar-muted: #55554e; --bar-bright: #111111; --bar-accent: #111111;
-    --bar-badge-bg: #fff6d9; --bar-badge-text: #7a5200; --bar-badge-border: #ffd23f;
     --bar-font: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   }
   body[data-theme="terminal"] {
