@@ -30,6 +30,228 @@
     // 浏览器模式无该全局，isDesktop 恒为 false，所有桌面分支均不生效、行为保持零变化。
     const isDesktop = Boolean(window.gitLens && window.gitLens.isDesktop);
 
+    // ---- 主题系统（feat/theme-switcher）----
+    // 预设主题 id 与展示名（顺序即下拉顺序；linear 为 :root 默认令牌，无需覆盖块）。
+    // 选择持久化在 localStorage；桌面模式经 gitLens.setTheme 同步给原生标签条换肤。
+    const THEME_OPTIONS = [
+      ['linear', 'Linear（暗色工程）'],
+      ['geist', 'Geist（极简黑白）'],
+      ['arc', 'Arc（柔和浅色）'],
+      ['raycast', 'Raycast（命令面板）'],
+      ['macos', 'macOS（原生质感）'],
+      ['fluent', 'Fluent 2（层深浅色）'],
+      ['material3', 'Material 3（tonal 圆润）'],
+      ['notion', 'Notion（极简纸面）'],
+      ['neobrutalism', '新粗野主义（硬投影）'],
+      ['terminal', '终端 TUI（荧光绿）'],
+      ['custom', '自定义…'],
+    ];
+    const THEME_STORAGE_KEY = 'gl-theme';
+    const THEME_CUSTOM_STORAGE_KEY = 'gl-theme-custom';
+    const THEME_CUSTOM_DEFAULTS = { mode: 'dark', accent: '#5e6ad2', radius: 'soft' };
+
+    /**
+     * 计算强调色相对亮度，决定主按钮文字用深还是浅。
+     * @param {string} hex - #rrggbb 颜色
+     * @returns {boolean} 是否偏亮
+     */
+    function isThemeAccentLight(hex) {
+      const channel = (text) => {
+        const value = parseInt(text, 16) / 255;
+        return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+      };
+      const luminance = 0.2126 * channel(hex.slice(1, 3))
+        + 0.7152 * channel(hex.slice(3, 5))
+        + 0.0722 * channel(hex.slice(5, 7));
+      return luminance > 0.45;
+    }
+
+    /**
+     * 读取自定义主题配置；存储缺失或字段非法时逐项回落默认值。
+     * @returns {{mode: string, accent: string, radius: string}} 合法配置
+     */
+    function readThemeCustomConfig() {
+      const config = { ...THEME_CUSTOM_DEFAULTS };
+      try {
+        const stored = JSON.parse(localStorage.getItem(THEME_CUSTOM_STORAGE_KEY) || '{}');
+        if (typeof stored === 'object' && stored) {
+          if (stored.mode === 'light' || stored.mode === 'dark') config.mode = stored.mode;
+          if (typeof stored.accent === 'string' && /^#[0-9a-fA-F]{6}$/.test(stored.accent)) config.accent = stored.accent;
+          if (['soft', 'sharp', 'round'].includes(stored.radius)) config.radius = stored.radius;
+        }
+      } catch {
+        // 存储损坏时按默认配置处理
+      }
+      return config;
+    }
+
+    /**
+     * 把自定义主题配置写入根元素（data-* 驱动 CSS 块，变量驱动强调色）。
+     * @param {{mode: string, accent: string, radius: string}} config - 自定义配置
+     */
+    function applyThemeCustomVars(config) {
+      const root = document.documentElement;
+      root.dataset.customMode = config.mode;
+      root.dataset.customRadius = config.radius;
+      root.style.setProperty('--custom-accent', config.accent);
+      // 主按钮文字颜色按强调色亮度自动取黑/白，避免浅色强调色上白字不可读
+      root.style.setProperty('--custom-on-accent', isThemeAccentLight(config.accent) ? '#16161a' : '#ffffff');
+    }
+
+    /**
+     * 把主题同步给原生标签条（红绿灯底色随主题）；浏览器模式无 gitLens 静默跳过。
+     * @param {{theme: string, mode?: string, accent?: string}} config - 主题配置
+     */
+    function pushThemeToShell(config) {
+      if (!isDesktop || typeof window.gitLens?.setTheme !== 'function') return;
+      const payload = config.theme === 'custom'
+        ? { theme: 'custom', mode: config.mode, accent: config.accent }
+        : { theme: config.theme };
+      try {
+        window.gitLens.setTheme(payload);
+      } catch (err) {
+        console.warn('主题同步失败:', err && err.message);
+      }
+    }
+
+    /**
+     * 应用主题配置：切换根元素 data-theme、按需写自定义变量，可选持久化。
+     * @param {{theme: string, mode?: string, accent?: string, radius?: string}} config - 主题配置
+     * @param {boolean} persist - 是否写入 localStorage
+     */
+    function applyThemeConfig(config, persist) {
+      document.documentElement.dataset.theme = config.theme;
+      if (config.theme === 'custom') {
+        const custom = {
+          mode: config.mode || 'dark',
+          accent: config.accent || THEME_CUSTOM_DEFAULTS.accent,
+          radius: config.radius || 'soft',
+        };
+        applyThemeCustomVars(custom);
+        if (persist) localStorage.setItem(THEME_CUSTOM_STORAGE_KEY, JSON.stringify(custom));
+      }
+      if (persist) localStorage.setItem(THEME_STORAGE_KEY, config.theme);
+      pushThemeToShell(config);
+    }
+
+    /**
+     * 读取本地存储的主题配置；id 非法时回落 linear。
+     * @returns {{theme: string, mode?: string, accent?: string, radius?: string}} 主题配置
+     */
+    function loadThemeConfig() {
+      let themeId = 'linear';
+      try {
+        const stored = localStorage.getItem(THEME_STORAGE_KEY);
+        if (THEME_OPTIONS.some(([id]) => id === stored)) themeId = stored;
+      } catch {
+        // 存储不可用时按默认主题处理
+      }
+      const config = { theme: themeId };
+      if (themeId === 'custom') Object.assign(config, readThemeCustomConfig());
+      return config;
+    }
+
+    /**
+     * 初始化主题切换器：填充下拉、恢复上次选择、挂接切换与自定义弹层事件。
+     */
+    function initThemeSwitcher() {
+      const select = document.getElementById('themeSelect');
+      const customBtn = document.getElementById('themeCustomBtn');
+      const modal = document.getElementById('themeCustomModal');
+      if (!select || !customBtn || !modal) return;
+
+      for (const [id, label] of THEME_OPTIONS) {
+        const option = document.createElement('option');
+        option.value = id;
+        option.textContent = label;
+        select.appendChild(option);
+      }
+      const current = loadThemeConfig();
+      select.value = current.theme;
+      customBtn.style.display = current.theme === 'custom' ? '' : 'none';
+
+      select.addEventListener('change', () => {
+        const themeId = select.value;
+        if (themeId === 'custom') {
+          const custom = readThemeCustomConfig();
+          applyThemeConfig({ theme: 'custom', ...custom }, true);
+          customBtn.style.display = '';
+          modal.style.display = '';
+          syncThemeCustomModal(custom);
+          return;
+        }
+        customBtn.style.display = 'none';
+        applyThemeConfig({ theme: themeId }, true);
+      });
+
+      customBtn.addEventListener('click', () => {
+        modal.style.display = '';
+        syncThemeCustomModal(readThemeCustomConfig());
+      });
+
+      const modeGroup = document.getElementById('themeCustomModeGroup');
+      const accentInput = document.getElementById('themeCustomAccent');
+      const accentValue = document.getElementById('themeCustomAccentValue');
+      const radiusSelect = document.getElementById('themeCustomRadius');
+
+      /**
+       * 把配置回填到弹层控件；改动即时生效并持久化（实时换肤）。
+       * @param {{mode: string, accent: string, radius: string}} config - 自定义配置
+       */
+      function syncThemeCustomModal(config) {
+        for (const btn of modeGroup.querySelectorAll('.diff-mode-btn')) {
+          btn.classList.toggle('active', btn.dataset.mode === config.mode);
+        }
+        accentInput.value = config.accent;
+        accentValue.textContent = config.accent;
+        radiusSelect.value = config.radius;
+      }
+
+      /**
+       * 收集弹层当前配置并应用 + 持久化。
+       */
+      function applyCustomFromModal() {
+        const activeMode = modeGroup.querySelector('.diff-mode-btn.active');
+        const config = {
+          mode: activeMode ? activeMode.dataset.mode : 'dark',
+          accent: accentInput.value,
+          radius: radiusSelect.value,
+        };
+        applyThemeConfig({ theme: 'custom', ...config }, true);
+      }
+
+      modeGroup.addEventListener('click', (event) => {
+        const btn = event.target.closest('[data-action="theme-custom-mode"]');
+        if (!btn) return;
+        for (const item of modeGroup.querySelectorAll('.diff-mode-btn')) {
+          item.classList.toggle('active', item === btn);
+        }
+        applyCustomFromModal();
+      });
+      accentInput.addEventListener('input', () => {
+        accentValue.textContent = accentInput.value;
+        applyCustomFromModal();
+      });
+      radiusSelect.addEventListener('change', applyCustomFromModal);
+
+      // 恢复默认：配置回到默认值并即时生效
+      document.getElementById('themeCustomResetBtn').addEventListener('click', () => {
+        const defaults = { ...THEME_CUSTOM_DEFAULTS };
+        applyThemeConfig({ theme: 'custom', ...defaults }, true);
+        syncThemeCustomModal(defaults);
+      });
+      for (const btn of modal.querySelectorAll('[data-action="close-theme-custom"]')) {
+        btn.addEventListener('click', () => { modal.style.display = 'none'; });
+      }
+      modal.addEventListener('click', (event) => {
+        if (event.target === modal) modal.style.display = 'none';
+      });
+    }
+
+    // 启动即恢复上次主题（persist=false：仅应用，不重复写存储），再挂切换器
+    applyThemeConfig(loadThemeConfig(), false);
+    initThemeSwitcher();
+
     const TAB_TITLE_LABELS = {
       overview: '仓库总览',
       diff: '差异对比',

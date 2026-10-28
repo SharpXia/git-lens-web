@@ -25,6 +25,11 @@
 
   <header>
     <h1><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> Git Lens <span class="badge">Worktree & Branch Guard + Code Diff Inspector</span></h1>
+    <div class="theme-switcher" id="themeSwitcher">
+      <label class="picker-label" for="themeSelect"><span>主题</span></label>
+      <select id="themeSelect" class="picker-select theme-select" aria-label="切换界面主题"></select>
+      <button id="themeCustomBtn" class="btn-outline" type="button" title="自定义主题：明暗模式、强调色与圆角" style="display:none;">调整…</button>
+    </div>
     <span id="headerPath" style="font-size: 13px; color: var(--text-muted);"></span>
   </header>
 
@@ -687,6 +692,45 @@
     <a id="helpAboutLink" class="app-footer-link" href="https://github.com/SharpXia/git-lens-web" target="_blank" rel="noopener noreferrer">帮助 / 关于（GitHub README）</a>
     <span id="desktopRuntimeInfo" class="app-footer-runtime" style="display:none;"></span>
   </footer>
+
+  <!-- 自定义主题弹层：明暗模式 / 强调色 / 圆角三档，改动即时生效并持久化 -->
+  <div id="themeCustomModal" class="scan-directory-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="themeCustomTitle">
+    <div class="scan-directory-card">
+      <div class="scan-directory-header">
+        <h2 id="themeCustomTitle">自定义主题</h2>
+        <button class="drawer-close" type="button" data-action="close-theme-custom" aria-label="关闭">×</button>
+      </div>
+      <div class="scan-directory-body">
+        <div class="mr-form-group">
+          <label>明暗模式</label>
+          <div class="diff-mode-segmented" id="themeCustomModeGroup">
+            <button type="button" class="diff-mode-btn active" data-mode="dark" data-action="theme-custom-mode">暗色</button>
+            <button type="button" class="diff-mode-btn" data-mode="light" data-action="theme-custom-mode">浅色</button>
+          </div>
+        </div>
+        <div class="mr-form-group">
+          <label for="themeCustomAccent">强调色</label>
+          <div class="theme-accent-row">
+            <input id="themeCustomAccent" type="color" value="#5e6ad2" aria-label="选择强调色">
+            <span id="themeCustomAccentValue" class="remote-modal-source">#5e6ad2</span>
+          </div>
+          <div class="remote-modal-hint">强调色驱动按钮、选中态、链接与焦点环；主按钮文字会按强调色亮度自动取深/浅。</div>
+        </div>
+        <div class="mr-form-group">
+          <label for="themeCustomRadius">圆角风格</label>
+          <select id="themeCustomRadius" class="picker-select" aria-label="圆角风格">
+            <option value="soft">适中（默认）</option>
+            <option value="sharp">锐利</option>
+            <option value="round">圆润</option>
+          </select>
+        </div>
+      </div>
+      <div class="scan-directory-footer">
+        <button id="themeCustomResetBtn" class="btn-outline" type="button">恢复默认</button>
+        <button class="btn-primary" type="button" data-action="close-theme-custom">完成</button>
+      </div>
+    </div>
+  </div>
 
   <script src="./app.js"></script>
 

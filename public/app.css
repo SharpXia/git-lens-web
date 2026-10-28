@@ -1402,7 +1402,7 @@ button:disabled {
   color: var(--on-accent);
   border-color: var(--accent);
   transform: translateY(-2px) scale(1.05);
-  box-shadow: 0 6px 20px rgba(94, 106, 210, 0.35);
+  box-shadow: 0 6px 20px var(--accent-border-soft);
 }
 .back-to-top-btn:active {
   transform: translateY(0) scale(0.95);
@@ -2241,11 +2241,11 @@ button:disabled {
 .conflict-editor-highlight .cel-line { min-height: 1.6em; }
 /* 冲突标记行用醒目红条；ours/theirs/base 内容行只铺淡色底，避免大面积染色 */
 .conflict-editor-highlight .cel-marker {
-  background: rgba(229, 72, 77, 0.28);
+  background: var(--danger-soft);
   box-shadow: inset 3px 0 0 var(--danger);
 }
-.conflict-editor-highlight .cel-ours { background: rgba(76, 183, 130, 0.08); }
-.conflict-editor-highlight .cel-theirs { background: rgba(94, 106, 210, 0.08); }
+.conflict-editor-highlight .cel-ours { background: var(--success-soft); }
+.conflict-editor-highlight .cel-theirs { background: var(--accent-soft); }
 .conflict-editor-highlight .cel-base { background: var(--card-alt); }
 .conflict-editor-textarea {
   position: relative;
@@ -2391,7 +2391,7 @@ button:disabled {
 .wt-path-row .mr-form-input { flex: 1; }
 .wt-path-pick-btn { white-space: nowrap; }
 
-/* ===== Linear 风格落款：该风格的专属润色，不进入通用骨架 ===== */
+/* ===== 基础润色（所有主题共享）===== */
 
 /* Linear 的克制焦点态：键盘导航可见、鼠标点击不出环 */
 :focus-visible {
@@ -2426,3 +2426,1444 @@ kbd {
 .app-footer-link:hover, .commit-hash:hover, .commit-detail-parent:hover {
   text-underline-offset: 3px;
 }
+
+/* Git Lens 页面主样式 —— Vercel Geist 视觉语言版。
+ * 纯黑白高对比：hairline 边框分层、无投影、白底黑字 primary 药丸按钮。
+ * 令牌块注释结构同 Linear 基线，便于跨风格审阅对照。 */
+html[data-theme="geist"] {
+  /* 色彩方案：告知原生控件（日期选择器等）按暗色渲染 */
+  --color-scheme: dark;
+
+  /* 表面层级：纯黑页面底，靠 hairline 边框划出层级 */
+  --bg: #000000;
+  --card-bg: #0a0a0a;
+  --card-alt: #141414;
+  --card-elev: #0a0a0a;
+  --code-bg: #050505;
+  --code-elev-bg: #0d0d0d;
+  --code-tools-bg: rgba(0, 0, 0, 0.88);
+
+  /* 边框：Geist hairline */
+  --border: #262626;
+  --border-muted: #1a1a1a;
+  --border-strong: #333333;
+
+  /* 文字三档：高对比白 */
+  --text: #ededed;
+  --text-muted: #a1a1a1;
+  --text-bright: #ffffff;
+
+  /* 强调：蓝色只用于链接/焦点/选中，按钮黑白说话 */
+  --accent: #52a8ff;
+  --accent-hover: #7cbcff;
+  --on-accent: #000000;
+  --accent-soft: rgba(82, 168, 255, 0.12);
+  --accent-border-soft: rgba(82, 168, 255, 0.4);
+  --focus-ring: rgba(255, 255, 255, 0.6);
+
+  /* 主按钮：Geist 标志性白底黑字药丸 */
+  --btn-primary-bg: #ededed;
+  --btn-primary-bg-hover: #ffffff;
+  --btn-primary-border: #ededed;
+  --btn-primary-text: #000000;
+  --btn-primary-disabled-bg: #2e2e2e;
+
+  /* 状态色 */
+  --danger: #e5484d;
+  --danger-soft: rgba(229, 72, 77, 0.14);
+  --danger-border-soft: rgba(229, 72, 77, 0.4);
+  --warning: #f5a623;
+  --warning-soft: rgba(245, 166, 35, 0.12);
+  --warning-border-soft: rgba(245, 166, 35, 0.35);
+  --success: #2fbf71;
+  --success-soft: rgba(47, 191, 113, 0.14);
+  --success-border-soft: rgba(47, 191, 113, 0.4);
+  --star-color: #f5a623;
+
+  /* Diff 配色 */
+  --diff-add-bg: rgba(47, 191, 113, 0.14);
+  --diff-add-text: #3ecf8e;
+  --diff-del-bg: rgba(229, 72, 77, 0.14);
+  --diff-del-text: #ff6b70;
+  --diff-hunk-bg: rgba(82, 168, 255, 0.16);
+  --diff-hunk-text: #7cbcff;
+
+  /* Diff 内查找高亮 */
+  --find-match-bg: rgba(245, 166, 35, 0.24);
+  --find-match-text: #ffe6b3;
+  --find-match-active-bg: #f5a623;
+  --find-match-active-text: #000000;
+  --find-match-active-ring: rgba(245, 166, 35, 0.55);
+
+  /* 形状：卡片直角锋利，控件走药丸（见落款区覆盖） */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
+  --radius-pill: 999px;
+  --tab-radius: 999px;
+
+  /* 阴影：hairline 为主，浮层只给极轻深度 */
+  --shadow-pop: 0 0 0 1px #262626, 0 8px 24px rgba(0, 0, 0, 0.7);
+  --shadow-modal: 0 0 0 1px #262626, 0 16px 48px rgba(0, 0, 0, 0.8);
+  --shadow-drawer: -1px 0 0 #262626, -16px 0 48px rgba(0, 0, 0, 0.6);
+  --shadow-float: 0 2px 8px rgba(0, 0, 0, 0.6);
+
+  /* 字体：Geist 优先 */
+  --font-ui: "Geist", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* 滚动条 */
+  --scrollbar-thumb: #262626;
+  --scrollbar-thumb-hover: #3d3d3d;
+}
+
+/* ===== Geist 风格落款：该风格的专属润色，不进入通用骨架 ===== */
+
+/* 控件药丸化：白底黑字 primary / 描边 secondary 是 Geist 的签名 */
+button { border-radius: var(--radius-pill); }
+.diff-mode-btn, .diff-mode-segmented { border-radius: var(--radius-pill); }
+.repo-trigger, input:not(.commit-filter-text):not(.commit-filter-date) { border-radius: var(--radius-md); }
+.wt-edit-btn { border-radius: var(--radius-sm); }
+
+/* 选中反色：纯黑白世界的点击反馈 */
+::selection { background: #ffffff; color: #000000; }
+
+/* 展示级字距：Geist 的紧凑标题 */
+h1 { letter-spacing: -0.03em; }
+.metric-val { letter-spacing: -0.03em; }
+.panel-header h2 { letter-spacing: -0.02em; }
+
+/* 焦点态：白色细环 */
+html[data-theme="geist"] :focus-visible {
+  outline: 1.5px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+html[data-theme="geist"] select:focus-visible, html[data-theme="geist"] input:focus-visible, html[data-theme="geist"] .diff-mode-btn:focus-visible {
+  outline: none;
+}
+
+/* kbd：黑白键帽 */
+html[data-theme="geist"] kbd {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  background: #0d0d0d;
+  color: var(--text);
+}
+
+/* 数字等宽 */
+.badge, .stat-bar, .commit-detail-stats { font-variant-numeric: tabular-nums; }
+
+/* Git Lens 页面主样式 —— Arc 浏览器柔和浅色版。
+ * 暖调纸白底 + 白卡片 + 粉彩渐变强调，大圆角与柔投影，轻盈友好。 */
+html[data-theme="arc"] {
+  /* 色彩方案：告知原生控件（日期选择器等）按浅色渲染 */
+  --color-scheme: light;
+
+  /* 表面层级：暖白页面底 → 白卡片 → 灰次级面 → 白浮层 */
+  --bg: #f9f8f6;
+  --card-bg: #ffffff;
+  --card-alt: #f4f2ee;
+  --card-elev: #ffffff;
+  --code-bg: #f6f5f2;
+  --code-elev-bg: #efede9;
+  --code-tools-bg: rgba(255, 255, 255, 0.92);
+
+  /* 边框 */
+  --border: #e8e6e1;
+  --border-muted: #efedea;
+  --border-strong: #d9d6cf;
+
+  /* 文字三档 */
+  --text: #3d3c38;
+  --text-muted: #6b6a66;
+  --text-bright: #1c1c1a;
+
+  /* 强调：粉彩渐变（紫→粉）收敛到单色令牌，渐变只出现在落款区 */
+  --accent: #7c6cf6;
+  --accent-hover: #6a59ee;
+  --on-accent: #ffffff;
+  --accent-soft: rgba(124, 108, 246, 0.1);
+  --accent-border-soft: rgba(124, 108, 246, 0.32);
+  --focus-ring: rgba(124, 108, 246, 0.55);
+
+  /* 主按钮：渐变紫底白字 */
+  --btn-primary-bg: #7c6cf6;
+  --btn-primary-bg-hover: #6a59ee;
+  --btn-primary-border: #7c6cf6;
+  --btn-primary-text: #ffffff;
+  --btn-primary-disabled-bg: #c3bcf9;
+
+  /* 状态色 */
+  --danger: #e5484d;
+  --danger-soft: rgba(229, 72, 77, 0.1);
+  --danger-border-soft: rgba(229, 72, 77, 0.3);
+  --warning: #b9820f;
+  --warning-soft: rgba(226, 179, 76, 0.14);
+  --warning-border-soft: rgba(185, 130, 15, 0.32);
+  --success: #2f9e63;
+  --success-soft: rgba(47, 158, 99, 0.12);
+  --success-border-soft: rgba(47, 158, 99, 0.32);
+  --star-color: #f5a623;
+
+  /* Diff 配色（浅色系底） */
+  --diff-add-bg: rgba(47, 158, 99, 0.12);
+  --diff-add-text: #217a4b;
+  --diff-del-bg: rgba(229, 72, 77, 0.1);
+  --diff-del-text: #c7373c;
+  --diff-hunk-bg: rgba(124, 108, 246, 0.12);
+  --diff-hunk-text: #5a48d6;
+
+  /* Diff 内查找高亮 */
+  --find-match-bg: rgba(245, 166, 35, 0.3);
+  --find-match-text: #7a5200;
+  --find-match-active-bg: #f5a623;
+  --find-match-active-text: #ffffff;
+  --find-match-active-ring: rgba(245, 166, 35, 0.6);
+
+  /* 形状：Arc 的大圆角 */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 14px;
+  --radius-pill: 999px;
+  --tab-radius: 10px;
+
+  /* 阴影：柔和大扩散低透明度 */
+  --shadow-pop: 0 4px 16px rgba(28, 28, 26, 0.08), 0 12px 40px rgba(28, 28, 26, 0.1);
+  --shadow-modal: 0 8px 24px rgba(28, 28, 26, 0.1), 0 24px 64px rgba(28, 28, 26, 0.12);
+  --shadow-drawer: -8px 0 32px rgba(28, 28, 26, 0.1);
+  --shadow-float: 0 1px 3px rgba(28, 28, 26, 0.06);
+
+  /* 字体 */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* 滚动条 */
+  --scrollbar-thumb: #d9d6cf;
+  --scrollbar-thumb-hover: #c4c0b8;
+}
+
+/* ===== Arc 风格落款：该风格的专属润色，不进入通用骨架 ===== */
+
+/* 渐变强调：主按钮与激活 Tab 用 Arc 招牌的紫→粉渐变 */
+html[data-theme="arc"] button.btn-primary {
+  background: linear-gradient(135deg, #7c6cf6, #f072b6);
+  border: none;
+}
+html[data-theme="arc"] button.btn-primary:hover {
+  background: linear-gradient(135deg, #6a59ee, #e861ad);
+  filter: brightness(1.02);
+}
+html[data-theme="arc"] button.btn-primary:disabled {
+  background: linear-gradient(135deg, #c3bcf9, #f3bddd);
+  filter: none;
+}
+html[data-theme="arc"] .tab-btn.active {
+  background: linear-gradient(135deg, rgba(124, 108, 246, 0.12), rgba(240, 114, 182, 0.12));
+  border-color: rgba(124, 108, 246, 0.35);
+  color: #5a48d6;
+}
+.tab-btn.active svg { color: #7c6cf6; }
+
+/* 白卡片浮起交互：hover 抬升 1px */
+html[data-theme="arc"] .panel, html[data-theme="arc"] .metric-card, html[data-theme="arc"] .diff-picker-bar, html[data-theme="arc"] .remote-toolbar {
+  box-shadow: 0 1px 3px rgba(28, 28, 26, 0.05);
+}
+.metric-card:hover { transform: translateY(-1px); }
+
+/* 焦点态：柔光环 */
+html[data-theme="arc"] :focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+html[data-theme="arc"] select:focus-visible, html[data-theme="arc"] input:focus-visible, html[data-theme="arc"] .diff-mode-btn:focus-visible {
+  outline: none;
+}
+html[data-theme="arc"] select:focus, html[data-theme="arc"] input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(124, 108, 246, 0.12);
+}
+
+/* 标题字距与层级 */
+h1 { letter-spacing: -0.02em; font-weight: 700; }
+.metric-val { font-weight: 700; letter-spacing: -0.02em; }
+
+/* 空态图标淡紫 */
+.commits-drawer .empty-state-icon { color: #7c6cf6; }
+
+/* Git Lens 页面主样式 —— Raycast 命令面板暗色版。
+ * 深灰面板 + 顶部内描边高光 + 红橙渐变强调，快速锋利的生产力工具质感。 */
+html[data-theme="raycast"] {
+  /* 色彩方案：告知原生控件（日期选择器等）按暗色渲染 */
+  --color-scheme: dark;
+
+  /* 表面层级：深灰底 → 面板 → 高一级面 → 浮层 */
+  --bg: #1a1a1e;
+  --card-bg: #232329;
+  --card-alt: #2a2a31;
+  --card-elev: #26262c;
+  --code-bg: #1e1e23;
+  --code-elev-bg: #25252b;
+  --code-tools-bg: rgba(35, 35, 41, 0.92);
+
+  /* 边框 */
+  --border: #333338;
+  --border-muted: #2a2a30;
+  --border-strong: #3f3f46;
+
+  /* 文字三档 */
+  --text: #d6d6dd;
+  --text-muted: #9b9ba3;
+  --text-bright: #f2f2f6;
+
+  /* 强调：红橙渐变族（单色令牌取橙，渐变在落款区） */
+  --accent: #ff6363;
+  --accent-hover: #ff7d52;
+  --on-accent: #ffffff;
+  --accent-soft: rgba(255, 99, 99, 0.14);
+  --accent-border-soft: rgba(255, 99, 99, 0.4);
+  --focus-ring: rgba(255, 159, 67, 0.65);
+
+  /* 主按钮：红橙渐变底白字 */
+  --btn-primary-bg: #ff6363;
+  --btn-primary-bg-hover: #ff7d52;
+  --btn-primary-border: #ff6363;
+  --btn-primary-text: #ffffff;
+  --btn-primary-disabled-bg: #7a4040;
+
+  /* 状态色 */
+  --danger: #ff5d5d;
+  --danger-soft: rgba(255, 93, 93, 0.14);
+  --danger-border-soft: rgba(255, 93, 93, 0.4);
+  --warning: #ffb347;
+  --warning-soft: rgba(255, 179, 71, 0.13);
+  --warning-border-soft: rgba(255, 179, 71, 0.38);
+  --success: #4ade80;
+  --success-soft: rgba(74, 222, 128, 0.13);
+  --success-border-soft: rgba(74, 222, 128, 0.38);
+  --star-color: #ffb347;
+
+  /* Diff 配色 */
+  --diff-add-bg: rgba(74, 222, 128, 0.14);
+  --diff-add-text: #6ee79a;
+  --diff-del-bg: rgba(255, 93, 93, 0.14);
+  --diff-del-text: #ff8080;
+  --diff-hunk-bg: rgba(255, 159, 67, 0.16);
+  --diff-hunk-text: #ffbf80;
+
+  /* Diff 内查找高亮 */
+  --find-match-bg: rgba(255, 179, 71, 0.26);
+  --find-match-text: #ffe0b3;
+  --find-match-active-bg: #ffb347;
+  --find-match-active-text: #1a1a1e;
+  --find-match-active-ring: rgba(255, 179, 71, 0.55);
+
+  /* 形状：命令面板的 10px 圆角 */
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-pill: 999px;
+  --tab-radius: 8px;
+
+  /* 阴影：深投影 + 玻璃高光靠落款区内描边 */
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.4), 0 16px 48px rgba(0, 0, 0, 0.35);
+  --shadow-modal: 0 16px 48px rgba(0, 0, 0, 0.5), 0 32px 80px rgba(0, 0, 0, 0.4);
+  --shadow-drawer: -8px 0 32px rgba(0, 0, 0, 0.45);
+  --shadow-float: 0 8px 24px rgba(0, 0, 0, 0.4);
+
+  /* 字体 */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* 滚动条 */
+  --scrollbar-thumb: #3a3a41;
+  --scrollbar-thumb-hover: #4a4a52;
+}
+
+/* ===== Raycast 风格落款：该风格的专属润色，不进入通用骨架 ===== */
+
+/* 红橙渐变：主按钮与激活 Tab 的招牌渐变 */
+html[data-theme="raycast"] button.btn-primary {
+  background: linear-gradient(135deg, #ff6363, #ff9f43);
+  border: none;
+}
+html[data-theme="raycast"] button.btn-primary:hover {
+  background: linear-gradient(135deg, #ff7d52, #ffb35c);
+}
+html[data-theme="raycast"] button.btn-primary:disabled {
+  background: linear-gradient(135deg, #7a4040, #7a5b3a);
+}
+html[data-theme="raycast"] .tab-btn.active {
+  background: linear-gradient(135deg, rgba(255, 99, 99, 0.14), rgba(255, 159, 67, 0.14));
+  border-color: rgba(255, 159, 67, 0.4);
+  color: #ffb08c;
+}
+
+/* 玻璃高光：卡片与面板顶部一条内描边亮线 */
+html[data-theme="raycast"] .panel, html[data-theme="raycast"] .metric-card, html[data-theme="raycast"] .diff-picker-bar, html[data-theme="raycast"] .remote-toolbar, html[data-theme="raycast"] .scan-directory-card {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+html[data-theme="raycast"] .panel-header {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0));
+}
+
+/* 焦点环：橙红渐变描边 */
+html[data-theme="raycast"] :focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+html[data-theme="raycast"] select:focus-visible, html[data-theme="raycast"] input:focus-visible, html[data-theme="raycast"] .diff-mode-btn:focus-visible {
+  outline: none;
+}
+html[data-theme="raycast"] select:focus, html[data-theme="raycast"] input:focus {
+  border-color: rgba(255, 159, 67, 0.55);
+  box-shadow: 0 0 0 3px rgba(255, 99, 99, 0.15);
+}
+
+/* 快捷键 kbd：命令面板味道 */
+html[data-theme="raycast"] kbd {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  background: var(--card-alt);
+  color: var(--text-muted);
+}
+
+/* 数字等宽 */
+.badge, .stat-bar, .commit-detail-stats { font-variant-numeric: tabular-nums; }
+
+/* Git Lens 页面主样式 —— macOS Sonoma 原生浅色版。
+ * 半透明工具层、系统字体栈、AppKit 质感控件、蓝色强调。 */
+html[data-theme="macos"] {
+  /* 色彩方案：告知原生控件（日期选择器等）按浅色渲染 */
+  --color-scheme: light;
+
+  /* 表面层级：窗口底 → 白内容面 → 灰次级面 → 浮层 */
+  --bg: #f5f5f7;
+  --card-bg: #ffffff;
+  --card-alt: #f2f2f4;
+  --card-elev: #ffffff;
+  --code-bg: #f6f6f8;
+  --code-elev-bg: #eeeef0;
+  --code-tools-bg: rgba(246, 246, 248, 0.88);
+
+  /* 边框：系统分隔线 */
+  --border: #d2d2d7;
+  --border-muted: #e5e5ea;
+  --border-strong: #b8b8bf;
+
+  /* 文字三档：系统标签色 */
+  --text: #1d1d1f;
+  --text-muted: #6e6e73;
+  --text-bright: #000000;
+
+  /* 强调：系统蓝 */
+  --accent: #007aff;
+  --accent-hover: #0071eb;
+  --on-accent: #ffffff;
+  --accent-soft: rgba(0, 122, 255, 0.1);
+  --accent-border-soft: rgba(0, 122, 255, 0.32);
+  --focus-ring: rgba(0, 122, 255, 0.5);
+
+  /* 主按钮：系统蓝实底 */
+  --btn-primary-bg: #007aff;
+  --btn-primary-bg-hover: #0071eb;
+  --btn-primary-border: #007aff;
+  --btn-primary-text: #ffffff;
+  --btn-primary-disabled-bg: #99caff;
+
+  /* 状态色：系统语义色 */
+  --danger: #ff3b30;
+  --danger-soft: rgba(255, 59, 48, 0.1);
+  --danger-border-soft: rgba(255, 59, 48, 0.3);
+  --warning: #b25000;
+  --warning-soft: rgba(255, 149, 0, 0.12);
+  --warning-border-soft: rgba(178, 80, 0, 0.32);
+  --success: #28a745;
+  --success-soft: rgba(52, 199, 89, 0.12);
+  --success-border-soft: rgba(40, 167, 69, 0.32);
+  --star-color: #f5a623;
+
+  /* Diff 配色（浅色原生） */
+  --diff-add-bg: rgba(52, 199, 89, 0.14);
+  --diff-add-text: #1d7a35;
+  --diff-del-bg: rgba(255, 59, 48, 0.1);
+  --diff-del-text: #c0261d;
+  --diff-hunk-bg: rgba(0, 122, 255, 0.12);
+  --diff-hunk-text: #0057b8;
+
+  /* Diff 内查找高亮 */
+  --find-match-bg: rgba(255, 214, 10, 0.5);
+  --find-match-text: #5c4a00;
+  --find-match-active-bg: #ffd60a;
+  --find-match-active-text: #1d1d1f;
+  --find-match-active-ring: rgba(255, 214, 10, 0.8);
+
+  /* 形状：AppKit 控件圆角 */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-pill: 999px;
+  --tab-radius: 7px;
+
+  /* 阴影：macOS 大柔影 */
+  --shadow-pop: 0 5px 20px rgba(0, 0, 0, 0.12), 0 12px 40px rgba(0, 0, 0, 0.1);
+  --shadow-modal: 0 10px 40px rgba(0, 0, 0, 0.18), 0 24px 64px rgba(0, 0, 0, 0.12);
+  --shadow-drawer: -10px 0 40px rgba(0, 0, 0, 0.14);
+  --shadow-float: 0 2px 10px rgba(0, 0, 0, 0.1);
+
+  /* 字体：系统栈优先 */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* 滚动条 */
+  --scrollbar-thumb: rgba(0, 0, 0, 0.22);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.35);
+}
+
+/* ===== macOS 风格落款：该风格的专属润色，不进入通用骨架 ===== */
+
+/* 页面工具层：与标题栏融合的半透明毛玻璃（浅色 vibrancy 感） */
+html[data-theme="macos"] body {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.6), rgba(245, 245, 247, 0) 160px),
+    var(--bg);
+}
+
+/* Tab 做成分段控件（Segmented Control）：内嵌凹槽 + 白色浮起选中块 */
+html[data-theme="macos"] .tab-bar {
+  background: rgba(228, 228, 232, 0.75);
+  border: 1px solid var(--border-muted);
+  border-radius: 9px;
+  padding: 2px;
+  gap: 2px;
+  margin-bottom: 20px;
+}
+html[data-theme="macos"] .tab-btn {
+  border: none;
+  border-radius: 7px;
+  padding: 6px 14px;
+  color: var(--text);
+}
+.tab-btn > span { justify-content: center; width: 100%; }
+.tab-btn:hover { background: rgba(255, 255, 255, 0.55); color: var(--text-bright); }
+html[data-theme="macos"] .tab-btn.active {
+  background: #ffffff;
+  color: var(--text-bright);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+}
+
+/* 列表选中行：系统蓝填充白字 */
+html[data-theme="macos"] .repo-item.selected {
+  background: var(--accent);
+  border-left: none;
+}
+.repo-item.selected .repo-item-name,
+.repo-item.selected .repo-item-group { color: #ffffff; }
+.repo-item.selected .star-icon { color: rgba(255, 255, 255, 0.9); }
+
+/* 控件质感：白底细边按下变暗 */
+button:not(.btn-primary):not(.btn-danger) { background: #ffffff; }
+button:not(.btn-primary):not(.btn-danger):hover { background: #fbfbfd; }
+button:not(.btn-primary):not(.btn-danger):active { background: #f0f0f2; }
+select, input { background: #ffffff; }
+
+/* 焦点：系统蓝柔光环 */
+html[data-theme="macos"] :focus-visible {
+  outline: 3px solid rgba(0, 122, 255, 0.35);
+  outline-offset: 1px;
+  border-radius: 6px;
+}
+html[data-theme="macos"] select:focus-visible, html[data-theme="macos"] input:focus-visible, html[data-theme="macos"] .diff-mode-btn:focus-visible {
+  outline: none;
+}
+html[data-theme="macos"] select:focus, html[data-theme="macos"] input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3.5px rgba(0, 122, 255, 0.22);
+}
+
+/* 分段切换器（审查模式）同步分段质感 */
+html[data-theme="macos"] .diff-mode-segmented {
+  background: rgba(228, 228, 232, 0.75);
+  border-radius: 8px;
+  padding: 2px;
+}
+html[data-theme="macos"] .diff-mode-btn.active {
+  background: #ffffff;
+  color: var(--text-bright);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+/* 标题排版 */
+h1 { font-size: 21px; letter-spacing: -0.015em; }
+.metric-val { letter-spacing: -0.02em; font-weight: 700; }
+
+/* 数字等宽 */
+.badge, .stat-bar, .commit-detail-stats { font-variant-numeric: tabular-nums; }
+
+/* Git Lens 页面主样式 —— Microsoft Fluent 2 浅色版。
+ * Mica 质感窗底、层深柔影、4px 双线焦点框、Segoe 字体栈。 */
+html[data-theme="fluent"] {
+  /* 色彩方案：告知原生控件（日期选择器等）按浅色渲染 */
+  --color-scheme: light;
+
+  /* 表面层级：Mica 窗底 → 白卡片 → 灰次级面 → 浮层 */
+  --bg: #f3f3f3;
+  --card-bg: #ffffff;
+  --card-alt: #f6f6f6;
+  --card-elev: #fbfbfb;
+  --code-bg: #f9f9f9;
+  --code-elev-bg: #f0f0f0;
+  --code-tools-bg: rgba(250, 250, 250, 0.9);
+
+  /* 边框：Fluent 卡片描边 */
+  --border: #e0e0e0;
+  --border-muted: #ebebeb;
+  --border-strong: #c7c7c7;
+
+  /* 文字三档：Fluent 文字层级 */
+  --text: #242424;
+  --text-muted: #616161;
+  --text-bright: #1a1a1a;
+
+  /* 强调：Microsoft 蓝 */
+  --accent: #0067c0;
+  --accent-hover: #0078d4;
+  --on-accent: #ffffff;
+  --accent-soft: rgba(0, 103, 192, 0.08);
+  --accent-border-soft: rgba(0, 103, 192, 0.28);
+  --focus-ring: #0067c0;
+
+  /* 主按钮：Fluent accent 实底 */
+  --btn-primary-bg: #0067c0;
+  --btn-primary-bg-hover: #0078d4;
+  --btn-primary-border: #0067c0;
+  --btn-primary-text: #ffffff;
+  --btn-primary-disabled-bg: #80b6e0;
+
+  /* 状态色 */
+  --danger: #c42b1c;
+  --danger-soft: rgba(196, 43, 28, 0.08);
+  --danger-border-soft: rgba(196, 43, 28, 0.28);
+  --warning: #a1610a;
+  --warning-soft: rgba(250, 190, 40, 0.14);
+  --warning-border-soft: rgba(161, 97, 10, 0.3);
+  --success: #0f7b0f;
+  --success-soft: rgba(15, 123, 15, 0.08);
+  --success-border-soft: rgba(15, 123, 15, 0.3);
+  --star-color: #e2a336;
+
+  /* Diff 配色 */
+  --diff-add-bg: rgba(15, 123, 15, 0.1);
+  --diff-add-text: #0f7b0f;
+  --diff-del-bg: rgba(196, 43, 28, 0.09);
+  --diff-del-text: #c42b1c;
+  --diff-hunk-bg: rgba(0, 103, 192, 0.1);
+  --diff-hunk-text: #0067c0;
+
+  /* Diff 内查找高亮 */
+  --find-match-bg: rgba(250, 190, 40, 0.42);
+  --find-match-text: #4a3500;
+  --find-match-active-bg: #fabe40;
+  --find-match-active-text: #1a1a1a;
+  --find-match-active-ring: rgba(250, 190, 40, 0.75);
+
+  /* 形状：Fluent 圆角体系（卡片 8 / 控件 4） */
+  --radius-sm: 4px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-pill: 999px;
+  --tab-radius: 4px;
+
+  /* 阴影：Fluent 层深阴影（soft 双层） */
+  --shadow-pop: 0 2px 4px rgba(0, 0, 0, 0.04), 0 8px 16px rgba(0, 0, 0, 0.08);
+  --shadow-modal: 0 8px 16px rgba(0, 0, 0, 0.1), 0 32px 64px rgba(0, 0, 0, 0.12);
+  --shadow-drawer: -8px 0 32px rgba(0, 0, 0, 0.1);
+  --shadow-float: 0 2px 4px rgba(0, 0, 0, 0.05), 0 4px 12px rgba(0, 0, 0, 0.06);
+
+  /* 字体：Segoe UI 栈优先 */
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "Cascadia Mono", "Consolas", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* 滚动条 */
+  --scrollbar-thumb: #c7c7c7;
+  --scrollbar-thumb-hover: #a8a8a8;
+}
+
+/* ===== Fluent 风格落款：该风格的专属润色，不进入通用骨架 ===== */
+
+/* Mica 窗底：多层柔和渐变模拟材料纵深 */
+html[data-theme="fluent"] body {
+  background:
+    radial-gradient(1200px 500px at 15% -10%, rgba(0, 103, 192, 0.05), transparent 60%),
+    radial-gradient(900px 420px at 90% -5%, rgba(136, 96, 208, 0.045), transparent 55%),
+    linear-gradient(180deg, #f6f6f6, #efefef 240px, #f3f3f3);
+  background-attachment: fixed;
+}
+
+/* Fluent 标志性 4px 双线焦点框：accent 外框 + 1px 深色内框 */
+html[data-theme="fluent"] button:focus-visible, html[data-theme="fluent"] .file-header:focus-visible, html[data-theme="fluent"] summary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  box-shadow: inset 0 0 0 1px #ffffff;
+}
+html[data-theme="fluent"] select:focus-visible, html[data-theme="fluent"] input:focus-visible, html[data-theme="fluent"] .diff-mode-btn:focus-visible {
+  outline: none;
+}
+html[data-theme="fluent"] select:focus, html[data-theme="fluent"] input:focus {
+  border-color: var(--accent);
+  border-bottom-width: 2px;
+  border-bottom-color: var(--focus-ring);
+  box-shadow: none;
+}
+
+/* 卡片与列表：Fluent 层深 + 左侧 3px accent 指示条 hover */
+html[data-theme="fluent"] .panel, html[data-theme="fluent"] .metric-card, html[data-theme="fluent"] .diff-picker-bar, html[data-theme="fluent"] .remote-toolbar, html[data-theme="fluent"] .scan-directory-card {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+.list-item { position: relative; }
+html[data-theme="fluent"] .list-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+.list-item:hover::before { background: var(--accent); }
+
+/* Tab：Fluent 下划线选择指示 */
+.tab-bar { border-bottom: 1px solid var(--border); }
+html[data-theme="fluent"] .tab-btn {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  padding-bottom: 9px;
+}
+.tab-btn:hover { background: rgba(0, 0, 0, 0.03); }
+html[data-theme="fluent"] .tab-btn.active {
+  background: transparent;
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* 标题排版 */
+h1 { letter-spacing: -0.01em; }
+.metric-val { font-weight: 650; }
+
+/* 数字等宽 */
+.badge, .stat-bar, .commit-detail-stats { font-variant-numeric: tabular-nums; }
+
+/* Git Lens 页面主样式 —— Material Design 3 (Material You) 浅色版。
+ * tonal 色面分层、大圆角、pill 控件、无硬边框。 */
+html[data-theme="material3"] {
+  /* 色彩方案：告知原生控件（日期选择器等）按浅色渲染 */
+  --color-scheme: light;
+
+  /* 表面层级：淡紫调米白 → surface-container 层级 */
+  --bg: #fef7ff;
+  --card-bg: #ffffff;
+  --card-alt: #f3edf7;
+  --card-elev: #ffffff;
+  --code-bg: #f4eef6;
+  --code-elev-bg: #ece4ef;
+  --code-tools-bg: rgba(255, 255, 255, 0.92);
+
+  /* 边框：M3 无硬边框，仅 outline 用于输入类 */
+  --border: #e7dfec;
+  --border-muted: #efe9f2;
+  --border-strong: #cac4d0;
+
+  /* 文字三档：on-surface / on-surface-variant */
+  --text: #1d1b20;
+  --text-muted: #5f5b67;
+  --text-bright: #000000;
+
+  /* 强调：M3 primary 紫 */
+  --accent: #6750a4;
+  --accent-hover: #7965b8;
+  --on-accent: #ffffff;
+  --accent-soft: rgba(103, 80, 164, 0.1);
+  --accent-border-soft: rgba(103, 80, 164, 0.3);
+  --focus-ring: rgba(103, 80, 164, 0.55);
+
+  /* 主按钮：filled 按钮 */
+  --btn-primary-bg: #6750a4;
+  --btn-primary-bg-hover: #7965b8;
+  --btn-primary-border: #6750a4;
+  --btn-primary-text: #ffffff;
+  --btn-primary-disabled-bg: #cabfe0;
+
+  /* 状态色 */
+  --danger: #b3261e;
+  --danger-soft: rgba(179, 38, 30, 0.09);
+  --danger-border-soft: rgba(179, 38, 30, 0.3);
+  --warning: #9a6100;
+  --warning-soft: rgba(250, 190, 40, 0.14);
+  --warning-border-soft: rgba(154, 97, 0, 0.3);
+  --success: #1b7f4d;
+  --success-soft: rgba(27, 127, 77, 0.1);
+  --success-border-soft: rgba(27, 127, 77, 0.3);
+  --star-color: #e89c0a;
+
+  /* Diff 配色（tonal） */
+  --diff-add-bg: rgba(27, 127, 77, 0.11);
+  --diff-add-text: #1b7f4d;
+  --diff-del-bg: rgba(179, 38, 30, 0.1);
+  --diff-del-text: #b3261e;
+  --diff-hunk-bg: rgba(103, 80, 164, 0.12);
+  --diff-hunk-text: #5a4390;
+
+  /* Diff 内查找高亮 */
+  --find-match-bg: rgba(250, 190, 40, 0.4);
+  --find-match-text: #4a3500;
+  --find-match-active-bg: #fabe40;
+  --find-match-active-text: #1d1b20;
+  --find-match-active-ring: rgba(250, 190, 40, 0.75);
+
+  /* 形状：M3 大圆角体系 */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 28px;
+  --radius-pill: 999px;
+  --tab-radius: 999px;
+
+  /* 阴影：M3 elevation 1-3，极柔 */
+  --shadow-pop: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.1);
+  --shadow-modal: 0 4px 12px rgba(0, 0, 0, 0.1), 0 16px 48px rgba(0, 0, 0, 0.14);
+  --shadow-drawer: -4px 0 24px rgba(0, 0, 0, 0.1);
+  --shadow-float: 0 1px 3px rgba(0, 0, 0, 0.08);
+
+  /* 字体：Google Sans 栈优先 */
+  --font-ui: "Google Sans", "Product Sans", Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "Roboto Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /* 滚动条 */
+  --scrollbar-thumb: #cac4d0;
+  --scrollbar-thumb-hover: #b0a7bc;
+}
+
+/* ===== Material 3 风格落款：该风格的专属润色，不进入通用骨架 ===== */
+
+/* 控件 pill 化：M3 filled/tonal/outlined 全圆角 */
+button { border-radius: var(--radius-pill); }
+.tab-btn, .diff-mode-btn, .diff-mode-segmented { border-radius: var(--radius-pill); }
+.repo-trigger { border-radius: var(--radius-md); }
+
+/* hover 用 8% state layer 叠色（M3 state layer 语义） */
+button:not(.btn-primary):hover { background: rgba(103, 80, 164, 0.08); }
+.list-item:hover, .repo-item:hover { background: rgba(103, 80, 164, 0.05); }
+
+/* 激活 Tab：M3 secondary-container 药丸 */
+html[data-theme="material3"] .tab-btn.active {
+  background: #e8def8;
+  color: #1d192b;
+  border-color: transparent;
+  font-weight: 600;
+}
+.diff-mode-btn.active { background: #e8def8; color: #1d192b; }
+
+/* 输入件：outlined 文本域（圆角小一号） */
+select, input { border-radius: 10px; background: transparent; }
+.mr-form-input, .mr-form-textarea { background: transparent; border-radius: 10px; }
+.remote-filter-input { background: transparent; border-radius: 10px; }
+.repo-search-input { background: transparent; border-radius: 10px; }
+
+/* 卡片：tonal elevation，无描边（surface-container 色面分层） */
+html[data-theme="material3"] .panel, html[data-theme="material3"] .metric-card, html[data-theme="material3"] .diff-picker-bar, html[data-theme="material3"] .remote-toolbar {
+  border-color: transparent;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 1px 3px 1px rgba(0, 0, 0, 0.04);
+}
+.panel-header { background: #f9f4fc; }
+.metric-card { background: #f9f4fc; }
+
+/* 焦点态 */
+html[data-theme="material3"] :focus-visible {
+  outline: 2.5px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+html[data-theme="material3"] select:focus-visible, html[data-theme="material3"] input:focus-visible, html[data-theme="material3"] .diff-mode-btn:focus-visible {
+  outline: none;
+}
+html[data-theme="material3"] select:focus, html[data-theme="material3"] input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(103, 80, 164, 0.12);
+}
+
+/* 标题排版 */
+h1 { font-weight: 500; letter-spacing: -0.01em; }
+.metric-val { font-weight: 500; }
+.panel-header h2 { font-weight: 500; }
+
+/* 数字等宽 */
+.badge, .stat-bar, .commit-detail-stats { font-variant-numeric: tabular-nums; }
+
+/* Git Lens 页面主样式 —— Notion / Things 3 极简文档感浅色版。
+ * 暖灰纸面、极细分隔、几乎无投影、层级全靠字重与灰度。 */
+html[data-theme="notion"] {
+  /* 色彩方案：告知原生控件（日期选择器等）按浅色渲染 */
+  --color-scheme: light;
+
+  /* 表面层级：纸白 → 白卡片 → 暖灰次级面 → 白浮层 */
+  --bg: #ffffff;
+  --card-bg: #ffffff;
+  --card-alt: #f7f6f3;
+  --card-elev: #ffffff;
+  --code-bg: #f7f6f3;
+  --code-elev-bg: #f1f0ed;
+  --code-tools-bg: rgba(255, 255, 255, 0.94);
+
+  /* 边框：Notion 极细线 */
+  --border: #e9e9e7;
+  --border-muted: #f0f0ee;
+  --border-strong: #d3d1cb;
+
+  /* 文字三档：暖调近黑 */
+  --text: #37352f;
+  --text-muted: #787774;
+  --text-bright: #191917;
+
+  /* 强调：单一天蓝，仅链接/焦点 */
+  --accent: #2383e2;
+  --accent-hover: #1b74cc;
+  --on-accent: #ffffff;
+  --accent-soft: rgba(35, 131, 226, 0.08);
+  --accent-border-soft: rgba(35, 131, 226, 0.3);
+  --focus-ring: rgba(35, 131, 226, 0.5);
+
+  /* 主按钮：蓝实底（Notion 按钮语言） */
+  --btn-primary-bg: #2383e2;
+  --btn-primary-bg-hover: #1b74cc;
+  --btn-primary-border: #2383e2;
+  --btn-primary-text: #ffffff;
+  --btn-primary-disabled-bg: #a9cdf2;
+
+  /* 状态色：Notion 高亮色系 */
+  --danger: #c4554d;
+  --danger-soft: rgba(226, 85, 77, 0.1);
+  --danger-border-soft: rgba(196, 85, 77, 0.3);
+  --warning: #a16a0a;
+  --warning-soft: rgba(241, 201, 108, 0.18);
+  --warning-border-soft: rgba(161, 106, 10, 0.3);
+  --success: #448361;
+  --success-soft: rgba(219, 237, 219, 0.6);
+  --success-border-soft: rgba(68, 131, 97, 0.3);
+  --star-color: #dfab01;
+
+  /* Diff 配色（Notion 高亮底） */
+  --diff-add-bg: #dbeddb;
+  --diff-add-text: #2c5d3f;
+  --diff-del-bg: #ffe2dd;
+  --diff-del-text: #93352d;
+  --diff-hunk-bg: #d3e5ef;
+  --diff-hunk-text: #28556e;
+
+  /* Diff 内查找高亮 */
+  --find-match-bg: rgba(253, 236, 200, 0.9);
+  --find-match-text: #644c12;
+  --find-match-active-bg: #fdecc8;
+  --find-match-active-text: #37352f;
+  --find-match-active-ring: rgba(223, 171, 1, 0.6);
+
+  /* 形状：小而精的 6px */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-pill: 999px;
+  --tab-radius: 6px;
+
+  /* 阴影：几乎不用；弹层才给一圈极淡描边阴影 */
+  --shadow-pop: 0 0 0 1px rgba(15, 15, 15, 0.05), 0 3px 6px rgba(15, 15, 15, 0.1);
+  --shadow-modal: 0 0 0 1px rgba(15, 15, 15, 0.05), 0 9px 24px rgba(15, 15, 15, 0.14);
+  --shadow-drawer: -1px 0 0 #e9e9e7, -6px 0 20px rgba(15, 15, 15, 0.06);
+  --shadow-float: 0 1px 3px rgba(15, 15, 15, 0.06);
+
+  /* 字体：ui 栈 + Notion 式行高 */
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "SFMono-Regular", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* 滚动条 */
+  --scrollbar-thumb: #d3d1cb;
+  --scrollbar-thumb-hover: #bcbab3;
+}
+
+/* ===== Notion 风格落款：该风格的专属润色，不进入通用骨架 ===== */
+
+/* Tab 改下划线式：文字层级 + 底部 2px 短线，安静不抢戏 */
+.tab-bar { border-bottom: 1px solid var(--border); gap: 2px; }
+html[data-theme="notion"] .tab-btn {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 8px 12px 9px;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+.tab-btn:hover { background: var(--card-alt); color: var(--text-bright); }
+html[data-theme="notion"] .tab-btn.active {
+  background: transparent;
+  border-bottom-color: var(--text-bright);
+  color: var(--text-bright);
+  font-weight: 600;
+}
+
+/* 行高与留白：文档感 */
+body { line-height: 1.6; }
+.list-item { padding: 16px 16px; }
+.metric-val { font-weight: 600; letter-spacing: -0.01em; }
+
+/* 卡片去底色：白纸 + 极细线，不用色面 */
+html[data-theme="notion"] .panel, html[data-theme="notion"] .metric-card, html[data-theme="notion"] .diff-picker-bar, html[data-theme="notion"] .remote-toolbar {
+  box-shadow: 0 1px 2px rgba(15, 15, 15, 0.03);
+}
+.panel-header { background: transparent; }
+.panel-header h2 { font-weight: 600; letter-spacing: -0.005em; }
+
+/* 徽标去药丸感：小方角 + 淡底 */
+.badge { border-radius: 4px; font-weight: 500; }
+
+/* 焦点态：细蓝环 */
+html[data-theme="notion"] :focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+html[data-theme="notion"] select:focus-visible, html[data-theme="notion"] input:focus-visible, html[data-theme="notion"] .diff-mode-btn:focus-visible {
+  outline: none;
+}
+html[data-theme="notion"] select:focus, html[data-theme="notion"] input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(35, 131, 226, 0.14);
+}
+
+/* 空态图标淡化 */
+.commits-drawer .empty-state-icon { opacity: 0.35; }
+
+/* Git Lens 页面主样式 —— Neo-Brutalism 新粗野主义浅色版。
+ * 奶白底、2px 纯黑边框、无模糊硬投影、高饱和撞色、粗字重。 */
+html[data-theme="neobrutalism"] {
+  /* 色彩方案：告知原生控件（日期选择器等）按浅色渲染 */
+  --color-scheme: light;
+
+  /* 表面层级：奶白底 → 白卡片 → 淡黄次级面 → 白浮层 */
+  --bg: #fffdf5;
+  --card-bg: #ffffff;
+  --card-alt: #fff6d9;
+  --card-elev: #ffffff;
+  --code-bg: #fdf8e7;
+  --code-elev-bg: #f7f0d8;
+  --code-tools-bg: rgba(255, 253, 245, 0.94);
+
+  /* 边框：一切皆 2px 黑边 */
+  --border: #111111;
+  --border-muted: #4a4a44;
+  --border-strong: #111111;
+
+  /* 文字三档：浓黑层级 */
+  --text: #111111;
+  --text-muted: #55554e;
+  --text-bright: #000000;
+
+  /* 强调：黄为主、粉为辅的撞色 */
+  --accent: #111111;
+  --accent-hover: #333333;
+  --on-accent: #ffd23f;
+  --accent-soft: #ffe98a;
+  --accent-border-soft: #111111;
+  --focus-ring: #111111;
+
+  /* 主按钮：黄底黑字黑边 */
+  --btn-primary-bg: #ffd23f;
+  --btn-primary-bg-hover: #ffdd66;
+  --btn-primary-border: #111111;
+  --btn-primary-text: #111111;
+  --btn-primary-disabled-bg: #f1e3b0;
+
+  /* 状态色：撞色但文字仍可读 */
+  --danger: #d90429;
+  --danger-soft: #ffd6dd;
+  --danger-border-soft: #111111;
+  --warning: #7a5200;
+  --warning-soft: #ffe98a;
+  --warning-border-soft: #111111;
+  --success: #0b7a45;
+  --success-soft: #c9f2d9;
+  --success-border-soft: #111111;
+  --star-color: #ff9f1c;
+
+  /* Diff 配色（撞色块 + 黑字） */
+  --diff-add-bg: #c9f2d9;
+  --diff-add-text: #0b5d34;
+  --diff-del-bg: #ffd6dd;
+  --diff-del-text: #a3021f;
+  --diff-hunk-bg: #dbe7ff;
+  --diff-hunk-text: #1d3fa8;
+
+  /* Diff 内查找高亮 */
+  --find-match-bg: #ffe98a;
+  --find-match-text: #111111;
+  --find-match-active-bg: #ff9f1c;
+  --find-match-active-text: #111111;
+  --find-match-active-ring: #111111;
+
+  /* 形状：8px 圆角 + 黑边 */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 8px;
+  --radius-pill: 999px;
+  --tab-radius: 8px;
+
+  /* 阴影：硬投影（无模糊），hover 由落款区做位移 */
+  --shadow-pop: 4px 4px 0 #111111;
+  --shadow-modal: 6px 6px 0 #111111;
+  --shadow-drawer: -5px 0 0 #111111;
+  --shadow-float: 3px 3px 0 #111111;
+
+  /* 字体：系统栈 + 粗字重（字重在落款区统一上调） */
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /* 滚动条：粗方块 */
+  --scrollbar-thumb: #111111;
+  --scrollbar-thumb-hover: #ffd23f;
+}
+
+/* ===== Neo-Brutalism 风格落款：该风格的专属润色，不进入通用骨架 ===== */
+
+/* 全局粗边框加粗：卡片 2px、控件 2px、字重上调 */
+.panel, .metric-card, .diff-picker-bar, .remote-toolbar, .scan-directory-card,
+html[data-theme="neobrutalism"] .worktree-remove-card, html[data-theme="neobrutalism"] .service-overlay-card, html[data-theme="neobrutalism"] .repo-dropdown, html[data-theme="neobrutalism"] .stash-popover {
+  border: 2px solid #111111;
+}
+html[data-theme="neobrutalism"] button, html[data-theme="neobrutalism"] select, html[data-theme="neobrutalism"] input, html[data-theme="neobrutalism"] .repo-trigger {
+  border: 2px solid #111111;
+  font-weight: 600;
+}
+button.btn-outline { background: #ffffff; }
+html[data-theme="neobrutalism"] button.btn-outline:hover {
+  background: #ffe98a;
+  color: #111111;
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 #111111;
+}
+html[data-theme="neobrutalism"] button.btn-primary {
+  border: 2px solid #111111;
+  box-shadow: 3px 3px 0 #111111;
+}
+html[data-theme="neobrutalism"] button.btn-primary:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 #111111;
+}
+html[data-theme="neobrutalism"] button.btn-primary:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 #111111;
+}
+button:disabled { box-shadow: none; }
+
+/* 撞色徽标：粗边 + 色块 */
+.badge { border: 1.5px solid #111111; font-weight: 700; }
+.badge-success { background: #c9f2d9; color: #0b5d34; }
+.badge-warning { background: #ffe98a; color: #7a5200; }
+.badge-danger { background: #ffd6dd; color: #a3021f; }
+.badge-muted { background: #f0efe8; color: #55554e; }
+
+/* Tab：撞色块标签 */
+html[data-theme="neobrutalism"] .tab-btn {
+  background: #ffffff;
+  border: 2px solid #111111;
+  font-weight: 700;
+}
+.tab-btn:hover { background: #fff6d9; }
+.tab-btn.active { background: #ffd23f; color: #111111; }
+
+/* 卡片 hover 位移（硬投影联动） */
+.panel:hover, .metric-card:hover { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 #111111; }
+
+/* 标题排版：超粗黑标题 + 高亮笔触 */
+h1 { font-weight: 800; letter-spacing: -0.02em; }
+.panel-header h2 { font-weight: 800; }
+.metric-val { font-weight: 800; }
+.panel-header { background: #fff6d9; border-bottom: 2px solid #111111; }
+.item-path-box, .remote-modal-source, .conflict-editor-highlight { border: 1.5px solid #111111; }
+
+/* 焦点态：黑环 + 黄 offset */
+html[data-theme="neobrutalism"] :focus-visible {
+  outline: 3px solid #111111;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 5px #ffd23f;
+}
+html[data-theme="neobrutalism"] select:focus-visible, html[data-theme="neobrutalism"] input:focus-visible, html[data-theme="neobrutalism"] .diff-mode-btn:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+html[data-theme="neobrutalism"] select:focus, html[data-theme="neobrutalism"] input:focus {
+  border-color: #111111;
+  box-shadow: 0 0 0 3px #ffd23f;
+}
+
+/* 数字等宽 */
+.badge, .stat-bar, .commit-detail-stats { font-variant-numeric: tabular-nums; }
+
+/* Git Lens 页面主样式 —— 终端 TUI 视觉语言版。
+ * 纯黑底、全局等宽、荧光绿强调、box-drawing 角标、键盘优先。 */
+html[data-theme="terminal"] {
+  /* 色彩方案：告知原生控件（日期选择器等）按暗色渲染 */
+  --color-scheme: dark;
+
+  /* 表面层级：终端黑 → 深灰面板 → 更深代码区 */
+  --bg: #0a0a0a;
+  --card-bg: #121212;
+  --card-alt: #191919;
+  --card-elev: #161616;
+  --code-bg: #0d0d0d;
+  --code-elev-bg: #141414;
+  --code-tools-bg: rgba(18, 18, 18, 0.94);
+
+  /* 边框：box-drawing 灰绿 */
+  --border: #263026;
+  --border-muted: #1d241d;
+  --border-strong: #3a4a3a;
+
+  /* 文字三档：终端绿灰 */
+  --text: #c9d1c9;
+  --text-muted: #7d8578;
+  --text-bright: #e8f5e9;
+
+  /* 强调：荧光绿 */
+  --accent: #33ff66;
+  --accent-hover: #66ff99;
+  --on-accent: #05140a;
+  --accent-soft: rgba(51, 255, 102, 0.1);
+  --accent-border-soft: rgba(51, 255, 102, 0.4);
+  --focus-ring: rgba(51, 255, 102, 0.65);
+
+  /* 主按钮：绿底黑字反色块 */
+  --btn-primary-bg: #33ff66;
+  --btn-primary-bg-hover: #66ff99;
+  --btn-primary-border: #33ff66;
+  --btn-primary-text: #05140a;
+  --btn-primary-disabled-bg: #1d3a28;
+
+  /* 状态色：终端经典三色 */
+  --danger: #ff5555;
+  --danger-soft: rgba(255, 85, 85, 0.12);
+  --danger-border-soft: rgba(255, 85, 85, 0.4);
+  --warning: #ffb347;
+  --warning-soft: rgba(255, 179, 71, 0.12);
+  --warning-border-soft: rgba(255, 179, 71, 0.4);
+  --success: #33ff66;
+  --success-soft: rgba(51, 255, 102, 0.1);
+  --success-border-soft: rgba(51, 255, 102, 0.4);
+  --star-color: #ffb347;
+
+  /* Diff 配色（git 经典终端色） */
+  --diff-add-bg: rgba(51, 255, 102, 0.1);
+  --diff-add-text: #6fff9a;
+  --diff-del-bg: rgba(255, 85, 85, 0.1);
+  --diff-del-text: #ff8585;
+  --diff-hunk-bg: rgba(102, 153, 255, 0.12);
+  --diff-hunk-text: #99b8ff;
+
+  /* Diff 内查找高亮 */
+  --find-match-bg: rgba(255, 179, 71, 0.24);
+  --find-match-text: #ffd9a8;
+  --find-match-active-bg: #ffb347;
+  --find-match-active-text: #0a0a0a;
+  --find-match-active-ring: rgba(255, 179, 71, 0.55);
+
+  /* 形状：终端无圆角 */
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-pill: 0px;
+  --tab-radius: 0px;
+
+  /* 阴影：无柔影，靠亮边分层 */
+  --shadow-pop: 0 0 0 1px #263026, 0 8px 24px rgba(0, 0, 0, 0.6);
+  --shadow-modal: 0 0 0 1px #263026, 0 16px 48px rgba(0, 0, 0, 0.7);
+  --shadow-drawer: -1px 0 0 #263026, -12px 0 32px rgba(0, 0, 0, 0.5);
+  --shadow-float: 0 0 0 1px #263026, 0 4px 16px rgba(0, 0, 0, 0.55);
+
+  /* 字体：全局等宽 */
+  --font-ui: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --font-mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* 滚动条：方块 */
+  --scrollbar-thumb: #263026;
+  --scrollbar-thumb-hover: #33ff66;
+}
+
+/* ===== Terminal 风格落款：该风格的专属润色，不进入通用骨架 ===== */
+
+/* 全局等宽排版：字号与行距守住可读性底线 */
+body { font-size: 13px; line-height: 1.55; letter-spacing: 0; }
+button, select, input, .badge { font-family: var(--font-mono); }
+
+/* 面板 box-drawing 角标：四角 L 形绿色线（::before/::after 画上两角，底部用边框） */
+html[data-theme="terminal"] .panel, html[data-theme="terminal"] .metric-card {
+  position: relative;
+  border-color: var(--border);
+}
+html[data-theme="terminal"] .panel::before, html[data-theme="terminal"] .metric-card::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  width: 8px;
+  height: 8px;
+  border-top: 1px solid var(--accent);
+  border-left: 1px solid var(--accent);
+  pointer-events: none;
+}
+html[data-theme="terminal"] .panel::after, html[data-theme="terminal"] .metric-card::after {
+  content: '';
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
+  border-top: 1px solid var(--accent);
+  border-right: 1px solid var(--accent);
+  pointer-events: none;
+}
+
+/* Tab 编号：CSS 计数器生成 [01] 式前缀 */
+.tab-bar { counter-reset: gl-tab; }
+html[data-theme="terminal"] .tab-btn > span::before {
+  counter-increment: gl-tab;
+  content: '[' counter(gl-tab, decimal-leading-zero) '] ';
+  color: var(--accent);
+  font-weight: 400;
+}
+html[data-theme="terminal"] .tab-btn.active {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border-soft);
+  color: var(--text-bright);
+  font-weight: 400;
+}
+.tab-btn:hover { background: var(--card-alt); color: var(--text-bright); }
+
+/* 输入件：绿光标 + 绿色焦点下划线（无框线输入） */
+select, input { background: var(--code-bg); }
+.conflict-editor-textarea { caret-color: var(--accent); animation: gl-caret 1.1s steps(1) infinite; }
+@keyframes gl-caret { 50% { caret-color: transparent; } }
+html[data-theme="terminal"] select:focus, html[data-theme="terminal"] input:focus {
+  border-color: var(--accent-border-soft);
+  box-shadow: 0 1px 0 0 var(--accent);
+}
+html[data-theme="terminal"] :focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+html[data-theme="terminal"] select:focus-visible, html[data-theme="terminal"] input:focus-visible, html[data-theme="terminal"] .diff-mode-btn:focus-visible {
+  outline: none;
+}
+
+/* 徽标：方块括号感（直角 + 单色描边） */
+.badge { border-radius: 0; font-weight: 400; letter-spacing: 0.2px; }
+
+/* 扫描线：极淡 CRT 纹理，不干扰阅读 */
+html[data-theme="terminal"] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2147483647;
+  background: repeating-linear-gradient(0deg, rgba(51, 255, 102, 0.025) 0 1px, transparent 1px 3px);
+}
+
+/* 页脚状态栏：反色条 */
+html[data-theme="terminal"] .app-footer {
+  background: var(--accent);
+  color: var(--on-accent);
+  padding: 6px 12px;
+  margin: 24px -24px -24px;
+  font-size: 12px;
+}
+.app-footer-link { color: var(--on-accent); }
+.app-footer-link:hover { color: var(--on-accent); text-decoration: underline; }
+.app-footer-runtime { color: var(--on-accent); opacity: 0.8; }
+
+/* 选中反色：终端高亮 */
+::selection { background: var(--accent); color: var(--on-accent); }
+
+/* 数字等宽（等宽字体下天然成立，徽标保持） */
+.badge, .stat-bar, .commit-detail-stats { font-variant-numeric: tabular-nums; }
+
+/* ===== 自定义主题：明暗模式/强调色/圆角由页面写入 data-* 与 --custom-*，实时换肤 ===== */
+html[data-theme="custom"] {
+  --color-scheme: dark;
+  --bg: #0b0b0d; --card-bg: #111114; --card-alt: #17171b; --card-elev: #141418;
+  --code-bg: #0d0d10; --code-elev-bg: #131317; --code-tools-bg: rgba(17, 17, 20, 0.92);
+  --border: #232329; --border-muted: #1a1a1f; --border-strong: #33333a;
+  --text: #d6d6dd; --text-muted: #9b9ba3; --text-bright: #f2f2f6;
+  --accent: var(--custom-accent, #5e6ad2);
+  --accent-hover: color-mix(in srgb, var(--accent) 82%, #ffffff);
+  --on-accent: var(--custom-on-accent, #ffffff);
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-border-soft: color-mix(in srgb, var(--accent) 45%, transparent);
+  --focus-ring: color-mix(in srgb, var(--accent) 70%, transparent);
+  --btn-primary-bg: var(--accent);
+  --btn-primary-bg-hover: var(--accent-hover);
+  --btn-primary-border: var(--accent);
+  --btn-primary-text: var(--on-accent);
+  --btn-primary-disabled-bg: color-mix(in srgb, var(--accent) 45%, #000000);
+  --danger: #e5484d; --danger-soft: rgba(229, 72, 77, 0.14); --danger-border-soft: rgba(229, 72, 77, 0.38);
+  --warning: #e2b34c; --warning-soft: rgba(226, 179, 76, 0.12); --warning-border-soft: rgba(226, 179, 76, 0.35);
+  --success: #4cb782; --success-soft: rgba(76, 183, 130, 0.14); --success-border-soft: rgba(76, 183, 130, 0.38);
+  --star-color: #f2c94c;
+  --diff-add-bg: rgba(76, 183, 130, 0.15); --diff-add-text: #61bd93;
+  --diff-del-bg: rgba(229, 72, 77, 0.15); --diff-del-text: #ef6b6f;
+  --diff-hunk-bg: color-mix(in srgb, var(--accent) 18%, transparent);
+  --diff-hunk-text: color-mix(in srgb, var(--accent) 70%, #ffffff);
+  --find-match-bg: rgba(226, 179, 76, 0.28); --find-match-text: #f5e7c0;
+  --find-match-active-bg: #f2c94c; --find-match-active-text: #17181a; --find-match-active-ring: rgba(242, 201, 76, 0.5);
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.5); --shadow-modal: 0 18px 50px rgba(0, 0, 0, 0.55);
+  --shadow-drawer: -6px 0 24px rgba(0, 0, 0, 0.4); --shadow-float: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --scrollbar-thumb: #26272b; --scrollbar-thumb-hover: #38393f;
+}
+html[data-theme="custom"][data-custom-mode="light"] {
+  --color-scheme: light;
+  --bg: #f7f6f3; --card-bg: #ffffff; --card-alt: #f1efe9; --card-elev: #ffffff;
+  --code-bg: #f5f4f0; --code-elev-bg: #edece7; --code-tools-bg: rgba(255, 255, 255, 0.92);
+  --border: #e3e1da; --border-muted: #eceae4; --border-strong: #cfccc3;
+  --text: #3a3934; --text-muted: #6f6d66; --text-bright: #191917;
+  --btn-primary-disabled-bg: color-mix(in srgb, var(--accent) 40%, #ffffff);
+  --danger: #c7362f; --warning: #96660a; --success: #2f8659;
+  --diff-add-bg: rgba(47, 133, 90, 0.12); --diff-add-text: #1f7a4d;
+  --diff-del-bg: rgba(212, 62, 56, 0.1); --diff-del-text: #bb2d27;
+  --find-match-bg: rgba(245, 196, 71, 0.4); --find-match-text: #6b4e00;
+  --shadow-pop: 0 4px 16px rgba(28, 28, 26, 0.08), 0 12px 40px rgba(28, 28, 26, 0.1);
+  --shadow-modal: 0 8px 24px rgba(28, 28, 26, 0.1), 0 24px 64px rgba(28, 28, 26, 0.12);
+  --shadow-drawer: -8px 0 32px rgba(28, 28, 26, 0.1);
+  --shadow-float: 0 1px 3px rgba(28, 28, 26, 0.06);
+  --scrollbar-thumb: #cfccc3; --scrollbar-thumb-hover: #b8b5ac;
+}
+/* 自定义圆角三档（适中档沿用基础令牌，不覆盖） */
+html[data-theme="custom"][data-custom-radius="sharp"] { --radius-sm: 2px; --radius-md: 4px; --radius-lg: 6px; --radius-xl: 8px; }
+html[data-theme="custom"][data-custom-radius="round"] { --radius-sm: 10px; --radius-md: 14px; --radius-lg: 18px; --radius-xl: 22px; }
+
+/* ===== 主题切换器与自定义主题弹层 ===== */
+.theme-switcher { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.theme-switcher .theme-select { max-width: 200px; }
+.theme-accent-row { display: flex; align-items: center; gap: 10px; }
+.theme-accent-row input[type="color"] { width: 46px; height: 34px; padding: 2px; cursor: pointer; }
+.theme-accent-row .remote-modal-source { margin: 0; }
