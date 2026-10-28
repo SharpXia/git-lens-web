@@ -2399,7 +2399,7 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  margin-left: auto;
+  /* 吸附在标题与徽标之后（左侧内容组末尾），不推到行尾最右 */
   flex-shrink: 0;
 }
 .wt-lock-btn {
