@@ -167,6 +167,8 @@ let tabbarDragActive = false;
 let tabbarFullscreen = false;
 /** 最近一次更新进度载荷（null=空闲）；标签条重建或晚就绪时经 did-finish-load 回发对齐 */
 let lastUpdateProgress = null;
+/** 标签条当前主题载荷（feat/theme-switcher）：应用页切换主题后经此缓存，晚就绪的标签条加载完成时回填 */
+let tabbarTheme = { theme: 'linear' };
 /** 内容标签集合：每个标签一个 WebContentsView（契约 §15） */
 const tabs = [];
 /** 当前激活标签 id；null 表示尚无标签 */
@@ -720,6 +722,40 @@ function pushTabbarUpdateProgress() {
   tabbarView.webContents.send('git-lens-tabbar:update-progress', lastUpdateProgress);
 }
 
+/** 主题同步支持的合法主题 id（与页面 THEME_OPTIONS 一致） */
+const TABBAR_THEME_IDS = [
+  'linear', 'geist', 'arc', 'raycast', 'macos', 'fluent',
+  'material3', 'notion', 'neobrutalism', 'terminal', 'custom',
+];
+
+/**
+ * 归一化应用页发来的主题载荷：主题 id 必须在白名单内；自定义主题附加
+ * 明暗模式与强调色（#rrggbb），非法字段一律回落默认值。
+ * @param {unknown} payload - 应用页载荷
+ * @returns {{theme: string, mode?: string, accent?: string|null}|null} 合法载荷，非法返回 null
+ */
+function normalizeTabbarTheme(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  if (!TABBAR_THEME_IDS.includes(payload.theme)) return null;
+  const normalized = { theme: payload.theme };
+  if (payload.theme === 'custom') {
+    normalized.mode = payload.mode === 'light' ? 'light' : 'dark';
+    normalized.accent = typeof payload.accent === 'string' && /^#[0-9a-fA-F]{6}$/.test(payload.accent)
+      ? payload.accent
+      : null;
+  }
+  return normalized;
+}
+
+/**
+ * 向标签条推送当前主题；标签条未就绪时静默跳过，其 did-finish-load
+ * 会回填 tabbarTheme，不会永久失步。
+ */
+function pushTabbarTheme() {
+  if (!isViewAlive(tabbarView)) return;
+  tabbarView.webContents.send('git-lens-tabbar:theme-changed', tabbarTheme);
+}
+
 /**
  * 同步视图边界；macOS 窗口态在视图外让出原生按钮区，全屏态由标签条内嵌常驻红绿灯。
  * macOS 进入/退出全屏的过渡动画起点会先触发 resize（此时 isFullScreen() 已翻转为目标值），
@@ -792,6 +828,9 @@ function createTabbarView() {
     pushTabbarFullscreen();
     // 更新进行中（下载/校验/就绪）时，重建或晚就绪的标签条也立即拿到当前进度
     pushTabbarUpdateProgress();
+    // 主题同步（feat/theme-switcher）：晚就绪/重建的标签条立即拿到当前主题，
+    // 红绿灯所在底色与应用主题保持一致
+    pushTabbarTheme();
   });
   return view;
 }
@@ -1916,6 +1955,17 @@ function registerIpc() {
 
   ipcMain.handle('git-lens:open-external', async (_event, url) => {
     openExternalIfHttp(url);
+  });
+
+  // ---- 主题同步通道（feat/theme-switcher：应用页 → 原生标签条换肤）----
+  // 只接受内容标签页视图发起，防标签条或外部页面伪造
+  ipcMain.on('git-lens-app:theme-changed', (event, theme) => {
+    const fromAppTab = tabs.some((tab) => isViewAlive(tab.view) && event.sender === tab.view.webContents);
+    if (!fromAppTab) return;
+    const normalized = normalizeTabbarTheme(theme);
+    if (!normalized) return;
+    tabbarTheme = normalized;
+    pushTabbarTheme();
   });
 
   // ---- 标签条通道（契约 §15；仅接受标签条视图自身发起，防应用页面伪造） ----

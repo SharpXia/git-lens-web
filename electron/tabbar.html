@@ -4,8 +4,9 @@
 <meta charset="utf-8">
 <title>Git Lens 标签条</title>
 <style>
-  /* 自足样式：暗色主题与应用一致（Linear 视觉语言：近黑底 + 细边框 + 靛蓝强调，
-     与 public/app.css 的 :root 令牌同源换算）。
+  /* 自足样式：与应用主题实时联动（feat/theme-switcher）。
+     配色收敛为 --bar-* 变量：默认 linear，其余预设走 body[data-theme] 覆盖，
+     自定义主题由主题订阅脚本按明暗模式与强调色写入内联变量。
      本页为 Shell 自有 chrome（file:// 本地加载、无远程资源），不属于契约 §14
      的服务端 CSP 范围；所有动态文案一律经 textContent 写入，无注入面。
      几何约束：高度 38px 与红绿灯区 78px 是主进程对位契约，不得改动。 */
@@ -14,16 +15,83 @@
     height: 100%;
     overflow: hidden;
     background: transparent;
-    font-family: "Inter", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-family: var(--bar-font);
     user-select: none;
     -webkit-user-select: none;
+  }
+  body {
+    /* 默认主题 linear 的标签条配色；各预设经 body[data-theme] 整体覆盖 */
+    --bar-bg: #050506;
+    --bar-border: #1f2023;
+    --bar-active: #141517;
+    --bar-muted: #8a8f98;
+    --bar-bright: #eef0f3;
+    --bar-accent: #717de0;
+    --bar-badge-bg: #1e2245;
+    --bar-badge-text: #9aa5ee;
+    --bar-badge-border: #5e6ad2;
+    --bar-font: "Inter", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="geist"] {
+    --bar-bg: #000000; --bar-border: #262626; --bar-active: #111111;
+    --bar-muted: #a1a1a1; --bar-bright: #ededed; --bar-accent: #52a8ff;
+    --bar-badge-bg: #0a2540; --bar-badge-text: #7cbcff; --bar-badge-border: #0070f3;
+    --bar-font: "Geist", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="arc"] {
+    --bar-bg: #f4f2ee; --bar-border: #e2dfda; --bar-active: #ffffff;
+    --bar-muted: #6b6a66; --bar-bright: #1c1c1a; --bar-accent: #7c6cf6;
+    --bar-badge-bg: #ece8ff; --bar-badge-text: #6a59ee; --bar-badge-border: #c9c2f8;
+    --bar-font: -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="raycast"] {
+    --bar-bg: #131317; --bar-border: #333338; --bar-active: #26262c;
+    --bar-muted: #9b9ba3; --bar-bright: #f2f2f6; --bar-accent: #ff9f43;
+    --bar-badge-bg: #3a2410; --bar-badge-text: #ffbf80; --bar-badge-border: #a8551e;
+    --bar-font: -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="macos"] {
+    --bar-bg: #f0f0f2; --bar-border: #d5d5da; --bar-active: #ffffff;
+    --bar-muted: #6e6e73; --bar-bright: #1d1d1f; --bar-accent: #007aff;
+    --bar-badge-bg: #d8e8ff; --bar-badge-text: #0057b8; --bar-badge-border: #b3d2f5;
+    --bar-font: -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="fluent"] {
+    --bar-bg: #f3f3f3; --bar-border: #e0e0e0; --bar-active: #ffffff;
+    --bar-muted: #616161; --bar-bright: #1a1a1a; --bar-accent: #0067c0;
+    --bar-badge-bg: #d0e4f5; --bar-badge-text: #005ba1; --bar-badge-border: #b3d4ee;
+    --bar-font: "Segoe UI Variable Text", "Segoe UI", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="material3"] {
+    --bar-bg: #f3edf7; --bar-border: #e2daea; --bar-active: #ffffff;
+    --bar-muted: #5f5b67; --bar-bright: #1d1b20; --bar-accent: #6750a4;
+    --bar-badge-bg: #e8def8; --bar-badge-text: #5a4390; --bar-badge-border: #cabfe0;
+    --bar-font: "Google Sans", Roboto, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="notion"] {
+    --bar-bg: #f7f6f3; --bar-border: #e3e2de; --bar-active: #ffffff;
+    --bar-muted: #787774; --bar-bright: #191917; --bar-accent: #2383e2;
+    --bar-badge-bg: #e0ecf9; --bar-badge-text: #1b74cc; --bar-badge-border: #bcd8f2;
+    --bar-font: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="neobrutalism"] {
+    --bar-bg: #fffdf5; --bar-border: #111111; --bar-active: #ffd23f;
+    --bar-muted: #55554e; --bar-bright: #111111; --bar-accent: #111111;
+    --bar-badge-bg: #fff6d9; --bar-badge-text: #7a5200; --bar-badge-border: #ffd23f;
+    --bar-font: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  body[data-theme="terminal"] {
+    --bar-bg: #0a0a0a; --bar-border: #263026; --bar-active: #121712;
+    --bar-muted: #7d8578; --bar-bright: #e8f5e9; --bar-accent: #33ff66;
+    --bar-badge-bg: #0d2b18; --bar-badge-text: #66ff99; --bar-badge-border: #1a4d2e;
+    --bar-font: "SF Mono", ui-monospace, Menlo, "PingFang SC", "Microsoft YaHei", monospace;
   }
   #bar {
     display: flex;
     align-items: stretch;
     height: 38px;
-    background: #050506;
-    border-bottom: 1px solid #1f2023;
+    background: var(--bar-bg);
+    border-bottom: 1px solid var(--bar-border);
     /* 契约 §17：标签条兼任标题栏——空白区可拖动窗口，系统双击缩放行为沿用 */
     -webkit-app-region: drag;
   }
@@ -116,10 +184,10 @@
     top: 0;
     min-width: 0;
     max-width: none;
-    border: 1px solid #717de0;
+    border: 1px solid var(--bar-accent);
     border-radius: 5px;
-    background: #141517;
-    color: #eef0f3;
+    background: var(--bar-active);
+    color: var(--bar-bright);
     opacity: 0.94;
     box-shadow: 0 3px 12px #0008;
     pointer-events: none;
@@ -132,7 +200,7 @@
     top: 3px;
     width: 2px;
     height: 32px;
-    background: #717de0;
+    background: var(--bar-accent);
     pointer-events: none;
     z-index: 3;
   }
@@ -145,17 +213,17 @@
     max-width: 220px;
     flex: 0 1 auto;
     padding: 0 8px 0 12px;
-    border-right: 1px solid #1f2023;
-    color: #8a8f98;
+    border-right: 1px solid var(--bar-border);
+    color: var(--bar-muted);
     font-size: 12px;
     line-height: 1;
     cursor: default;
   }
   .tab.active {
-    background: #141517;
-    color: #eef0f3;
+    background: var(--bar-active);
+    color: var(--bar-bright);
     /* 激活态顶边高亮，与编辑器类应用的标签语义一致 */
-    box-shadow: inset 0 2px 0 #717de0;
+    box-shadow: inset 0 2px 0 var(--bar-accent);
   }
   .tab-title {
     flex: 1;
@@ -180,19 +248,19 @@
     line-height: 1;
     cursor: pointer;
   }
-  .tab-close:hover { background: #1f2023; color: #eef0f3; }
+  .tab-close:hover { background: var(--bar-border); color: var(--bar-bright); }
   #new-tab {
     flex: none;
     width: 34px;
     border: none;
-    border-left: 1px solid #1f2023;
+    border-left: 1px solid var(--bar-border);
     background: transparent;
-    color: #8a8f98;
+    color: var(--bar-muted);
     font-size: 18px;
     line-height: 1;
     cursor: pointer;
   }
-  #new-tab:hover { background: #141517; color: #eef0f3; }
+  #new-tab:hover { background: var(--bar-active); color: var(--bar-bright); }
   /* 应用内更新进度（gitLensTabbar.onUpdateProgress）：细进度条贴标签栏下缘，
      阶段文案走右侧胶囊；均为只读展示，不设 no-drag，保持标题栏可拖拽 */
   #update-progress-track {
@@ -202,7 +270,7 @@
   #update-progress {
     height: 100%;
     width: 0;
-    background: #717de0;
+    background: var(--bar-accent);
     transition: width 0.3s ease-out;
   }
   #update-badge {
@@ -211,10 +279,10 @@
     align-self: center;
     margin-right: 8px;
     padding: 3px 10px;
-    border: 1px solid #5e6ad2;
+    border: 1px solid var(--bar-badge-border);
     border-radius: 10px;
-    background: #1e2245;
-    color: #9aa5ee;
+    background: var(--bar-badge-bg);
+    color: var(--bar-badge-text);
     font-size: 11px;
     line-height: 1.2;
     white-space: nowrap;
@@ -482,6 +550,31 @@
       event.preventDefault();
       finishDrag();
     }
+  });
+
+  // 主题同步（feat/theme-switcher）：应用页切换主题后主进程转发到这里，
+  // 红绿灯所在标签条底色随之换肤；自定义主题按明暗模式与强调色写入内联变量。
+  window.gitLensTabbar.onThemeChanged(function (theme) {
+    document.body.dataset.theme = theme.theme;
+    var rootStyle = document.documentElement.style;
+    var customVars = ['--bar-bg', '--bar-border', '--bar-active', '--bar-muted',
+      '--bar-bright', '--bar-accent', '--bar-badge-bg', '--bar-badge-text', '--bar-badge-border'];
+    if (theme.theme !== 'custom') {
+      for (var name of customVars) rootStyle.removeProperty(name);
+      return;
+    }
+    var dark = theme.mode !== 'light';
+    var accent = /^#[0-9a-fA-F]{6}$/.test(theme.accent || '') ? theme.accent : (dark ? '#5e6ad2' : '#2383e2');
+    var palette = dark
+      ? { '--bar-bg': '#0a0a0c', '--bar-border': '#232329', '--bar-active': '#16161b',
+          '--bar-muted': '#9b9ba3', '--bar-bright': '#f2f2f6',
+          '--bar-badge-bg': '#1e2245', '--bar-badge-text': '#9aa5ee' }
+      : { '--bar-bg': '#f4f2ee', '--bar-border': '#e2dfda', '--bar-active': '#ffffff',
+          '--bar-muted': '#6b6a66', '--bar-bright': '#1c1c1a',
+          '--bar-badge-bg': '#ece8ff', '--bar-badge-text': '#5a48d6' };
+    palette['--bar-accent'] = accent;
+    palette['--bar-badge-border'] = accent;
+    for (var key of customVars) rootStyle.setProperty(key, palette[key]);
   });
 
   window.gitLensTabbar.onTabsChanged(render);
