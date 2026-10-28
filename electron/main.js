@@ -725,9 +725,10 @@ function pushTabbarUpdateProgress() {
 
 /** 主题同步支持的合法主题 id（与页面 THEME_OPTIONS 一致） */
 const TABBAR_THEME_IDS = [
-  'glass-light', 'glass-dark', 'linear', 'raycast', 'supabase', 'discord',
-  'stripe', 'perplexity', 'warm-clay', 'notion', 'notion-dark',
-  'macos', 'macos-dark', 'terminal', 'custom',
+  'glass-light', 'glass-dark', 'linear', 'linear-light', 'raycast', 'raycast-light',
+  'supabase', 'supabase-light', 'discord', 'discord-light',
+  'stripe', 'stripe-dark', 'perplexity', 'perplexity-dark', 'warm-clay', 'warm-clay-dark',
+  'notion', 'notion-dark', 'macos', 'macos-dark', 'terminal', 'terminal-light', 'custom',
 ];
 
 /**
@@ -739,6 +740,14 @@ const THEME_WINDOW_BG = {
   'glass-light': '#e9ecf4',
   'glass-dark': '#0c0e14',
   linear: '#050506',
+  'linear-light': '#f7f8f8',
+  'raycast-light': '#f5f5f6',
+  'supabase-light': '#fcfcfc',
+  'discord-light': '#e3e5e8',
+  'stripe-dark': '#0c1424',
+  'perplexity-dark': '#1f2121',
+  'warm-clay-dark': '#211e18',
+  'terminal-light': '#f2f3ef',
   raycast: '#131317',
   supabase: '#121212',
   discord: '#1e1f22',

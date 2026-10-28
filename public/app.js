@@ -34,17 +34,17 @@
     // 预设主题 id 与展示名（顺序即下拉顺序；linear 为 :root 默认令牌，无需覆盖块）。
     // 选择持久化在 localStorage；桌面模式经 gitLens.setTheme 同步给原生标签条换肤。
     const THEME_OPTIONS = [
-      ['glass', '液态玻璃（Apple 风 · 浅/深）'],
-      ['linear', 'Linear（靛蓝工程）'],
-      ['raycast', 'Raycast（余烬渐变）'],
-      ['supabase', 'Supabase（翡翠石墨）'],
+      ['glass', '液态玻璃（Apple 风）'],
+      ['linear', 'Linear（靛蓝）'],
+      ['raycast', 'Raycast（余烬）'],
+      ['supabase', 'Supabase（翡翠）'],
       ['discord', 'Discord（模糊紫）'],
-      ['stripe', 'Stripe（雾紫 · 浅）'],
-      ['perplexity', 'Perplexity（青瓷 · 浅）'],
-      ['warm-clay', '暖陶奶油（浅）'],
-      ['notion', 'Notion（暖纸 · 浅）'],
-      ['macos', 'macOS（原生 · 浅）'],
-      ['terminal', '终端 TUI（荧光绿）'],
+      ['stripe', 'Stripe（雾紫）'],
+      ['perplexity', 'Perplexity（青瓷）'],
+      ['warm-clay', '暖陶奶油'],
+      ['notion', 'Notion（暖纸）'],
+      ['macos', 'macOS（原生）'],
+      ['terminal', '终端 TUI'],
       ['custom', '自定义…'],
     ];
     const THEME_STORAGE_KEY = 'gl-theme';
@@ -54,8 +54,16 @@
     // 双态主题：预设 id → [亮色内部 id, 深色内部 id]；单态主题内部 id 即预设 id
     const DUAL_MODE_THEMES = {
       glass: ['glass-light', 'glass-dark'],
-      macos: ['macos', 'macos-dark'],
+      linear: ['linear-light', 'linear'],
+      raycast: ['raycast-light', 'raycast'],
+      supabase: ['supabase-light', 'supabase'],
+      discord: ['discord-light', 'discord'],
+      stripe: ['stripe', 'stripe-dark'],
+      perplexity: ['perplexity', 'perplexity-dark'],
+      'warm-clay': ['warm-clay', 'warm-clay-dark'],
       notion: ['notion', 'notion-dark'],
+      macos: ['macos', 'macos-dark'],
+      terminal: ['terminal-light', 'terminal'],
     };
     // 旧版把玻璃昼/夜当两个预设存储，启动时迁移到合并后的预设
     const LEGACY_THEME_MAP = { 'glass-light': 'glass', 'glass-dark': 'glass' };
@@ -195,6 +203,13 @@
       if (select && select.value !== config.preset) select.value = config.preset;
       const customBtn = document.getElementById('themeCustomBtn');
       if (customBtn) customBtn.style.display = config.preset === 'custom' ? '' : 'none';
+      // 三态按钮图标随偏好同步（程序化改偏好时也能更新，不只靠按钮自身的 render）
+      const modeBtn = document.getElementById('themeModeBtn');
+      if (modeBtn) {
+        for (const icon of modeBtn.querySelectorAll('[data-mode-icon]')) {
+          icon.classList.toggle('is-active', icon.dataset.modeIcon === modePref);
+        }
+      }
       pushThemeToShell(config, internalId);
       // 过渡禁用只需覆盖本次重排的一帧，下一拍恢复常规过渡（hover 等）
       setTimeout(() => root.classList.remove('gl-theme-switching'), 80);
@@ -323,7 +338,7 @@
       if (!btn) return;
       const render = (pref) => {
         for (const icon of btn.querySelectorAll('[data-mode-icon]')) {
-          icon.hidden = icon.dataset.modeIcon !== pref;
+          icon.classList.toggle('is-active', icon.dataset.modeIcon === pref);
         }
         const resolved = resolveModePref(pref);
         const label = pref === 'system'
