@@ -24,11 +24,12 @@
   <div id="serviceStoppedBar" class="service-stopped-bar" style="display:none" role="status"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="vertical-align:-1px"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg> 本地服务已停止</div>
 
   <header>
-    <h1><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> Git Lens <span class="badge">Worktree & Branch Guard + Code Diff Inspector</span></h1>
-    <div class="theme-switcher" id="themeSwitcher">
-      <label class="picker-label" for="themeSelect"><span>主题</span></label>
-      <select id="themeSelect" class="picker-select theme-select" aria-label="切换界面主题"></select>
-      <button id="themeCustomBtn" class="btn-outline" type="button" title="自定义主题：明暗模式、强调色与圆角" style="display:none;">调整…</button>
+    <div class="header-left">
+      <h1><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> Git Lens <span class="badge">Worktree & Branch Guard + Code Diff Inspector</span></h1>
+      <div class="theme-switcher" id="themeSwitcher">
+        <select id="themeSelect" class="picker-select theme-select" aria-label="切换界面主题"></select>
+        <button id="themeCustomBtn" class="btn-outline" type="button" title="自定义主题：明暗模式、强调色与圆角" style="display:none;">调整…</button>
+      </div>
     </div>
     <span id="headerPath" style="font-size: 13px; color: var(--text-muted);"></span>
   </header>

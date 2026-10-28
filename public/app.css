@@ -3740,6 +3740,7 @@ html[data-theme="custom"][data-custom-radius="sharp"] { --radius-sm: 2px; --radi
 html[data-theme="custom"][data-custom-radius="round"] { --radius-sm: 10px; --radius-md: 14px; --radius-lg: 18px; --radius-xl: 22px; }
 
 /* ===== 主题切换器与自定义主题弹层 ===== */
+.header-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .theme-switcher { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .theme-switcher .theme-select { max-width: 200px; }
 .theme-accent-row { display: flex; align-items: center; gap: 10px; }
