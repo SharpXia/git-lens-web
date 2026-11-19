@@ -321,15 +321,27 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
           return { fullscreen: win.isFullScreen(), bar: view.getBounds(), buttons: win.getWindowButtonPosition() };
         });
       }
+      function dragRegionVisible() {
+        return app.evaluate(({ BrowserWindow }) => {
+          const contents = BrowserWindow.getAllWindows()[0].webContents;
+          if (!contents.getURL().startsWith('data:')) return null;
+          return contents.executeJavaScript(`(() => {
+            const region = document.getElementById('window-drag-region');
+            return region ? !region.hidden && getComputedStyle(region).webkitAppRegion === 'drag' : null;
+          })()`);
+        });
+      }
       const normal = await chromeBounds();
       assert.equal(normal.fullscreen, false);
       assert.ok(normal.bar.x >= normal.buttons.x + 56, '网页视图不能覆盖原生按钮的命中区域');
       assert.equal(await bar.evaluate(() => getComputedStyle(document.getElementById('window-controls')).display), 'none');
+      await pollUntilAsync(async () => (await dragRegionVisible()) === true, 5000, { describe: '窗口态红绿灯旁的拖拽区可用' });
       // 窗口态断言不侵入，始终执行；之后的全屏往返仅在显式开启时执行
       if (!INTRUSIVE) return ctx.skip(INTRUSIVE_SKIP_REASON);
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setFullScreen(true));
       try {
         await pollUntilAsync(() => bar.evaluate(() => document.body.classList.contains('fullscreen')), 15000);
+        await pollUntilAsync(async () => (await dragRegionVisible()) === false, 5000, { describe: '全屏时底层拖拽区让出自绘红绿灯' });
         const full = await chromeBounds();
         assert.equal(full.bar.x, 0, '全屏标签条视图从窗口左边缘开始以承载自绘红绿灯');
         assert.equal(full.bar.y, 0, '全屏顶边保持 0 偏移，进出全屏无纵向跳动');
@@ -359,6 +371,7 @@ test('桌面标签拖拽：插入、取消、位置快捷键、页面状态与�
         assert.equal(restored.bar.y, 0);
         assert.equal(restored.bar.height, 38);
         assert.equal(await bar.evaluate(() => getComputedStyle(document.getElementById('window-controls')).display), 'none');
+        await pollUntilAsync(async () => (await dragRegionVisible()) === true, 5000, { describe: '退出全屏后恢复红绿灯旁的拖拽区' });
       } finally {
         await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setFullScreen(false));
       }

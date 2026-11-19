@@ -64,6 +64,13 @@ const WINDOW_MIN_HEIGHT = 600;
 
 /** 顶部标签条固定高度（契约 §15：Shell 自有 chrome UI，DIP） */
 const TABBAR_HEIGHT = 38;
+// macOS 红绿灯外的留白由窗口自身承载。标签条从 78px 开始，无法为这块区域声明拖拽。
+const MAC_WINDOW_DRAG_SHELL_URL = 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html>
+<style>
+  body { margin: 0; }
+  #window-drag-region { width: ${MAC_WINDOW_CONTROLS_WIDTH_DIP}px; height: ${TABBAR_HEIGHT}px; -webkit-app-region: drag; }
+</style>
+<div id="window-drag-region" hidden></div>`);
 /** 新建标签的初始标题（契约 §15：加载完成前占位，页面 title 到达后覆盖） */
 const INITIAL_TAB_TITLE = '新标签页';
 
@@ -837,6 +844,17 @@ function pushTabbarTheme() {
 }
 
 /**
+ * 仅在窗口态声明原生拖拽区，避免全屏时拦截标签栏自绘红绿灯的鼠标事件。
+ * @param {Electron.BrowserWindow} win - 持有底层拖拽视图的窗口
+ * @returns {void}
+ */
+function syncMacWindowDragRegion(win) {
+  if (win.isDestroyed() || win.webContents.getURL() !== MAC_WINDOW_DRAG_SHELL_URL) return;
+  win.webContents.executeJavaScript(`document.getElementById('window-drag-region').hidden = ${win.isFullScreen()}`)
+    .catch(() => {});
+}
+
+/**
  * 同步视图边界；macOS 窗口态在视图外让出原生按钮区，全屏态由标签条内嵌常驻红绿灯。
  * macOS 进入/退出全屏的过渡动画起点会先触发 resize（此时 isFullScreen() 已翻转为目标值），
  * 约 600ms 后动画结束才触发 enter/leave-full-screen；在 syncTabBounds 内先于 setBounds
@@ -848,6 +866,7 @@ function syncTabBounds() {
   if (tabbarFullscreen !== fullscreen) {
     tabbarFullscreen = fullscreen;
     tabbarDragActive = false;
+    syncMacWindowDragRegion(mainWindow);
     pushTabbarFullscreen();
   }
   const { width, height } = mainWindow.getContentBounds();
@@ -1045,6 +1064,12 @@ function createTab(url) {
     log('服务尚未就绪，忽略新建标签请求');
     return null;
   }
+  if (process.platform === 'darwin' && tabs.length === 0) {
+    const win = mainWindow;
+    // 创建首个内容标签时，底层视图从恢复页切换为红绿灯旁的拖拽区。
+    win.loadURL(MAC_WINDOW_DRAG_SHELL_URL).then(() => syncMacWindowDragRegion(win))
+      .catch((err) => log(`加载窗口拖拽区失败：${err.message}`));
+  }
   const view = new WebContentsView({
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -1238,7 +1263,7 @@ function isDevtoolsShortcut(input) {
 /**
  * 附加主窗口（空壳）安全边界：同源导航、拒绝新窗口、拒绝权限请求、
  * 拒绝 webview、非调试模式下拦截 devtools 快捷键。
- * 多标签架构下窗口自身 webContents 平时空白未用（仅独立恢复页可能载入），
+ * 多标签架构下窗口自身 webContents 仅用于红绿灯旁的拖拽区和独立恢复页，
  * 这里保留同强度边界作纵深防御；就绪文件触发已移至内容标签视图。
  * @param {Electron.BrowserWindow} win - 目标窗口
  */
@@ -1657,7 +1682,7 @@ function injectRecoveryOverlay(state, reason, autoRecover) {
 
 /**
  * 展示独立恢复页：仅用于应用页从未加载（首启失败）的场景。恢复页加载进
- * 窗口自身的空壳 webContents（多标签架构下该 webContents 平时空白未用），
+ * 窗口自身的底层 webContents，
  * 不占用内容标签；服务就绪后首个内容标签创建并覆盖其上。
  * @param {'restarting'|'crashed'} state - 恢复页状态
  * @param {string} reason - 失败原因（中文）
