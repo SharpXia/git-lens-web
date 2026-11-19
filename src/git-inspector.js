@@ -249,27 +249,27 @@ export async function getWorktrees(repoPath) {
     worktrees[0].isMain = true;
   }
 
-  // 检查每个 worktree 的存在性和最后提交时间
   for (const wt of worktrees) {
-    try {
-      const stat = await fs.stat(wt.path);
-      wt.existsOnDisk = true;
-      wt.mtime = stat.mtime;
+    const stat = await fs.stat(wt.path).catch(() => null);
+    wt.existsOnDisk = stat?.isDirectory() ?? false;
+    if (!wt.existsOnDisk) continue;
+    wt.mtime = stat.mtime;
 
-      // 提取最后提交信息；用 NUL 分隔，作者名/标题里的 | 不会截断字段
-      const log = await runGit(wt.path, ['log', '-1', '--format=%cr%x00%an%x00%s']);
+    // Git 用全零 HEAD 表示尚无首个提交。提交信息不可用时仍可读取工作区状态。
+    if (!/^0+$/.test(wt.head ?? '')) {
+      // 用 NUL 分隔，作者名或标题里的 | 不会截断字段。
+      const log = await runGit(wt.path, ['log', '-1', '--format=%cr%x00%an%x00%s']).catch(() => '');
       if (log) {
         const [relativeTime, author, subject] = log.split('\0');
         wt.lastCommit = { relativeTime, author, subject };
       }
+    }
 
-      // 检查工作区 dirty 状态
-      const status = await runGit(wt.path, ['status', '--porcelain']);
+    // 查询失败时保留未知状态，批量清理只接受明确无修改的工作区。
+    const status = await runGit(wt.path, ['status', '--porcelain']).catch(() => null);
+    if (status !== null) {
       wt.isDirty = status.length > 0;
       wt.dirtyCount = status ? status.split('\n').filter(Boolean).length : 0;
-    } catch {
-      wt.existsOnDisk = false;
-      wt.isPrunable = true;
     }
   }
 
@@ -860,7 +860,7 @@ export async function getCleanupCandidates(repoPath) {
 
   return {
     worktrees: worktrees
-      .filter(wt => !wt.isMain && wt.existsOnDisk && !wt.isPrunable && !wt.isDirty && !wt.isLocked
+      .filter(wt => !wt.isMain && wt.existsOnDisk && !wt.isPrunable && wt.isDirty === false && !wt.isLocked
         && (wt.isContentEqualToMain || wt.deliveredViaBranch))
       .map(wt => ({ path: wt.path, branch: wt.branch || '', mergeType: wt.mergeType || null })),
     branches: branchData.branches

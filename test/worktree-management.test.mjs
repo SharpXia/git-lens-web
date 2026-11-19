@@ -171,6 +171,28 @@ test('Worktree 上锁/解锁：porcelain 状态联动，重复操作 409', async
   assert.equal(foreign.status, 404);
 });
 
+test('检查工作区：没有首个提交时仍识别主工作区及未跟踪文件', async (t) => {
+  const { request } = await startServer(t);
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'git-lens-wt-unborn-'));
+  tempRoots.push(root);
+  const repo = await fs.realpath(root);
+  await git(repo, 'init', '-b', 'main');
+  await fs.writeFile(path.join(repo, 'draft.txt'), '尚未提交\n');
+
+  const inspect = await request('GET', `/api/inspect?path=${encodeURIComponent(repo)}`);
+  assert.equal(inspect.status, 200);
+  assert.equal(inspect.body.worktrees.length, 1);
+  const [worktree] = inspect.body.worktrees;
+  assert.equal(worktree.path, repo);
+  assert.equal(worktree.branch, 'main');
+  assert.equal(worktree.isMain, true);
+  assert.equal(worktree.existsOnDisk, true);
+  assert.notEqual(worktree.isPrunable, true);
+  assert.equal(worktree.lastCommit, undefined);
+  assert.equal(worktree.isDirty, true);
+  assert.equal(worktree.dirtyCount, 1);
+});
+
 test('Worktree 别名：设置/清除与 inspect 注入', async (t) => {
   const { request, configDir } = await startServer(t);
   const { root, repo } = await makeFixture(t);
