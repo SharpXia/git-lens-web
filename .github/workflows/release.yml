@@ -35,10 +35,10 @@ jobs:
       matrix:
         include:
           - arch: arm64
-            runner: macos-14
+            runner: macos-15
           - arch: x64
-            # macos-13 runner 已长期排队；macos-14 arm64 可交叉构建 x64 Electron 包。
-            runner: macos-14
+            # 使用同一 arm64 runner 交叉构建 x64 Electron 包。
+            runner: macos-15
     env:
       MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
       MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
