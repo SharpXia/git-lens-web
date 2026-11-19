@@ -200,7 +200,7 @@ test('桌面差异页：原生快捷键、源码定位、模式刷新与文件�
     });
   }
 
-  await check('真实 App 加载并按类别、后缀和状态排序，追加内容仍标记为 Modified', async () => {
+  await check('真实 App 加载并按状态、类别和后缀排序，未跟踪文件置底', async () => {
     const identity = await page.evaluate(() => ({
       desktop: window.gitLens?.isDesktop, title: document.title,
       runtime: document.getElementById('desktopRuntimeInfo')?.textContent,
@@ -213,11 +213,13 @@ test('桌面差异页：原生快捷键、源码定位、模式刷新与文件�
     assert.ok(identity.runtime.includes('Electron'));
     assert.notEqual(ready.port, 9527);
     assert.deepEqual(identity.paths, [
-      'style.css', 'src/z-added.js', 'src/append.js', 'src/m-modified.js', 'src/d-deleted.js',
-      'src/a-untracked.js', 'README.md', 'manual.pdf', 'NOTES.TXT', 'asset.BIN',
+      'src/z-added.js', 'manual.pdf', 'NOTES.TXT', 'asset.BIN',
+      'style.css', 'src/append.js', 'src/m-modified.js', 'README.md', 'src/d-deleted.js',
+      'src/a-untracked.js',
     ]);
     assert.deepEqual(identity.statuses, [
-      'MODIFIED', 'ADDED', 'MODIFIED', 'MODIFIED', 'DELETED', 'UNTRACKED', 'MODIFIED', 'ADDED', 'ADDED', 'ADDED',
+      'ADDED', 'ADDED', 'ADDED', 'ADDED',
+      'MODIFIED', 'MODIFIED', 'MODIFIED', 'MODIFIED', 'DELETED', 'UNTRACKED',
     ]);
     assert.equal(identity.expanded, 0);
   });

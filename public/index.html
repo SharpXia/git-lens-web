@@ -127,8 +127,10 @@
       <div class="panel">
         <div class="panel-header">
           <h2><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> Git Worktrees 隔离工作区</h2>
-          <button id="createWorktreeBtn" class="btn-outline panel-header-action" type="button" data-action="open-create-worktree" title="在指定目录基于指定分支创建新的 Worktree"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> 创建工作区</button>
-          <span id="wtCountBadge" class="badge">0 个</span>
+          <div class="overview-panel-controls">
+            <button id="createWorktreeBtn" class="btn-outline panel-header-action" type="button" data-action="open-create-worktree" title="在指定目录基于指定分支创建新的 Worktree"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> 创建工作区</button>
+            <span id="wtCountBadge" class="badge">0 个</span>
+          </div>
         </div>
         <div id="wtList">
           <div class="loading">加载中...</div>
@@ -138,8 +140,10 @@
       <!-- 分支透视面板 -->
       <div class="panel">
         <div class="panel-header">
-          <h2><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> 本地分支透视 (按冗余度排序)</h2>
-          <span id="brCountBadge" class="badge">0 个</span>
+          <h2><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> 本地分支透视 <small class="overview-panel-note">按冗余度排序</small></h2>
+          <div class="overview-panel-controls">
+            <span id="brCountBadge" class="badge">0 个</span>
+          </div>
         </div>
         <div id="brList">
           <div class="loading">加载中...</div>
