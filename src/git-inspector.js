@@ -51,11 +51,17 @@ export async function getGitDiagnostics(timeoutMs = 5000) {
 }
 
 /**
- * 执行 git 命令辅助函数 (返回字符串)
+ * 执行 Git 命令并读取文本输出。
+ * @param {string} cwd - Git 命令的工作目录
+ * @param {string[]} args - Git 参数
+ * @param {string} [input] - 提供给需要读取标准输入的 Git 命令的内容
+ * @returns {Promise<string>} 去除首尾空白的标准输出
  */
-async function runGit(cwd, args) {
+async function runGit(cwd, args, input) {
   try {
-    const { stdout } = await exec(gitExecutable, args, { cwd, maxBuffer: 20 * 1024 * 1024 });
+    const command = exec(gitExecutable, args, { cwd, maxBuffer: 20 * 1024 * 1024 });
+    if (input !== undefined) command.child.stdin.end(input);
+    const { stdout } = await command;
     return stdout.trim();
   } catch (err) {
     throw new Error(`Git error in ${cwd}: ${err.message}`);
@@ -1338,7 +1344,7 @@ async function resolveRefSelector(repoPath, selector, worktrees, worktreeRealPat
  * @param {{kind: 'worktree'|'branch', value: string}} source - 来源 ref 选择器
  * @param {{kind: 'worktree'|'branch', value: string}} target - 目标 ref 选择器
  * @param {string|null} [requestedMode] - 请求模式 'uncommitted'|'all'|'committed'
- * @returns {Promise<object>} 与 getWorktreeDiff 同构的 Diff 结果，baseRevision 为当前文件 Diff 实际基准的提交 SHA
+ * @returns {Promise<object>} Diff 结果，baseRevision 为比较基准的提交或空树对象 SHA
  */
 export async function getRefDiff(repoPath, source, target, requestedMode = null) {
   validateRefSelector(source, 'source');
@@ -1363,7 +1369,7 @@ export async function getRefDiff(repoPath, source, target, requestedMode = null)
       isSameWorktree: true,
       source: buildWorktreeMeta(sourceInfo.worktree),
       target: buildWorktreeMeta(targetInfo.worktree),
-      baseRevision: targetInfo.worktree.head,
+      baseRevision: uncommittedData.baseRevision,
       ahead: 0,
       behind: 0,
       effectiveMode: 'uncommitted',
@@ -1564,7 +1570,7 @@ export async function getRefDiff(repoPath, source, target, requestedMode = null)
   return {
     source: sourceInfo.kind === 'worktree' ? buildWorktreeMeta(sourceInfo.worktree) : buildBranchMeta(sourceInfo),
     target: targetInfo.kind === 'worktree' ? buildWorktreeMeta(targetInfo.worktree) : buildBranchMeta(targetInfo),
-    baseRevision: effectiveMode === 'uncommitted' ? targetHead : targetDiffBase,
+    baseRevision: effectiveMode === 'uncommitted' ? uncommittedData.baseRevision : targetDiffBase,
     ahead,
     behind,
     historyAhead,
@@ -1603,6 +1609,11 @@ export async function getWorktreeDiff(repoPath, sourcePath, targetPath, requeste
   );
 }
 
+/**
+ * 比较工作区和暂存区的本地变更，并补充未跟踪文件。
+ * @param {string} worktreePath - 工作区路径
+ * @returns {Promise<object>} 文件 Diff、基准对象及变更统计
+ */
 export async function getUncommittedDiff(worktreePath) {
   try {
     const stat = await fs.stat(worktreePath);
@@ -1611,20 +1622,26 @@ export async function getUncommittedDiff(worktreePath) {
     throw new Error('Worktree 路径不存在或不可读');
   }
 
-  // 1. 获取工作区状态简报
-  const statusOutput = await runGit(worktreePath, ['status', '--porcelain']);
-  const statusLines = statusOutput.split('\n').filter(Boolean);
+  const statusOutput = await runGit(worktreePath, ['status', '--porcelain=v2', '--branch', '--no-ahead-behind']);
+  const statusLines = statusOutput.split('\n');
+  const branchOidPrefix = '# branch.oid ';
+  const branchOid = statusLines.find(line => line.startsWith(branchOidPrefix))?.slice(branchOidPrefix.length);
+  const isInitial = branchOid === '(initial)';
+  // 首次提交前没有 HEAD。按仓库的对象格式计算空树哈希，无需向对象库写入。
+  const baseRevision = isInitial
+    ? await runGit(worktreePath, ['hash-object', '-t', 'tree', '--stdin'], '')
+    : branchOid || 'HEAD';
+  // 让统计与补丁使用同样的非 ASCII 路径表示，供下方按路径匹配。
+  const diffArgs = ['-c', 'core.quotepath=false', 'diff'];
 
-  // 2. 获取暂存区 + 工作区的统计 numstat 对比 HEAD
   let numstatOut = '';
   try {
-    numstatOut = await runGit(worktreePath, ['diff', 'HEAD', '--numstat']);
+    numstatOut = await runGit(worktreePath, [...diffArgs, '--numstat', baseRevision, '--']);
   } catch {}
 
-  // 3. 获取暂存区 + 工作区的完整 diff 对比 HEAD
   let rawDiff = '';
   try {
-    rawDiff = await runGit(worktreePath, ['diff', 'HEAD', '-p', '-U3']);
+    rawDiff = await runGit(worktreePath, [...diffArgs, '-p', '-U3', baseRevision, '--']);
   } catch (err) {
     rawDiff = `获取未提交 Diff 失败: ${err.message}`;
   }
@@ -1644,7 +1661,7 @@ export async function getUncommittedDiff(worktreePath) {
       const isBin = isImg || added === '-' || deleted === '-';
       files.push({
         filePath,
-        status: 'M',
+        status: isInitial ? 'A' : 'M',
         added: isBin ? 0 : (added === '-' ? 0 : parseInt(added, 10)),
         deleted: isBin ? 0 : (deleted === '-' ? 0 : parseInt(deleted, 10)),
         isBinary: isBin,
@@ -1654,7 +1671,6 @@ export async function getUncommittedDiff(worktreePath) {
     }
   }
 
-  // 4. 检查是否有新增加但尚未 git add 的未跟踪文件 (Untracked ??)
   // 排除 verification/ 目录（测试验收/截图等过程文件）及常见的本地构建或工具链临时目录
   const IGNORED_UNTRACKED_PREFIXES = ['verification/', '.verification/', '.playwright/', '.cypress/'];
 
@@ -1717,10 +1733,11 @@ export async function getUncommittedDiff(worktreePath) {
 
   return {
     worktreePath,
+    baseRevision,
     totalFiles: files.length,
     totalAdded,
     totalDeleted,
-    statusCount: statusLines.length,
+    statusCount: statusLines.filter(line => line && !line.startsWith('# ')).length,
     files
   };
 }
