@@ -816,7 +816,7 @@
           if (!data.ok) throw new Error(data.error || '批量移除失败');
           const successCount = (data.results || []).filter(item => item.removed).length;
           const failed = (data.results || []).filter(item => !item.removed);
-          await inspectRepo(currentRepo);
+          await refreshRepoItems();
           alert(`已移除 ${successCount} 个 Worktree${failed.length ? `，${failed.length} 个因状态变化未处理` : ''}。`);
         } else {
           const items = candidates.branches || [];
@@ -837,7 +837,7 @@
           if (!data.ok) throw new Error(data.error || '批量删除分支失败');
           const successCount = (data.results || []).filter(item => item.deleted).length;
           const failed = (data.results || []).filter(item => !item.deleted);
-          await inspectRepo(currentRepo);
+          await refreshRepoItems();
           alert(`已删除 ${successCount} 个分支${failed.length ? `，${failed.length} 个因状态变化未处理` : ''}。`);
         }
       } catch (err) {
@@ -1689,6 +1689,192 @@
       return values.filter(Boolean).join(' ').toLocaleLowerCase().includes(keyword);
     }
 
+    function worktreeDomId(worktreePath) {
+      return 'wt-item-' + encodeURIComponent(worktreePath).replace(/%/g, '_');
+    }
+
+    function branchDomId(branchName) {
+      return 'br-item-' + encodeURIComponent(branchName).replace(/%/g, '_');
+    }
+
+    function worktreeMatchesCurrentFilter(wt) {
+      const keyword = searchKeyword.trim().toLocaleLowerCase();
+      return !keyword || includesKeyword([
+        wt.path, wt.branch, wt.name, wt.lastCommit?.relativeTime,
+        wt.lastCommit?.author, wt.lastCommit?.subject
+      ], keyword);
+    }
+
+    function branchMatchesCurrentFilter(branch) {
+      const keyword = searchKeyword.trim().toLocaleLowerCase();
+      return !keyword || includesKeyword([
+        branch.name, branch.relativeTime, branch.author,
+        branch.subject, branch.redundancyReason
+      ], keyword);
+    }
+
+    function compareWorktrees(a, b) {
+      if (a.isMain && !b.isMain) return -1;
+      if (!a.isMain && b.isMain) return 1;
+
+      const aHasDiff = (a.hasDiff || a.isDirty || (a.aheadCount > 0)) ? 1 : 0;
+      const bHasDiff = (b.hasDiff || b.isDirty || (b.aheadCount > 0)) ? 1 : 0;
+      if (aHasDiff !== bHasDiff) return bHasDiff - aHasDiff;
+
+      const aDiffWeight = (a.dirtyCount || 0) * 10 + (a.aheadCount || 0);
+      const bDiffWeight = (b.dirtyCount || 0) * 10 + (b.aheadCount || 0);
+      return bDiffWeight - aDiffWeight;
+    }
+
+    function compareBranches(a, b) {
+      const priority = (branch) => branch.isSafeToDelete ? 0 : (branch.isStaleOnly ? 2 : 1);
+      return priority(a) - priority(b) || b.daysOld - a.daysOld;
+    }
+
+    function insertWorktreeItemInPlace(wt) {
+      const container = document.getElementById('wtList');
+      if (!container || !worktreeMatchesCurrentFilter(wt)) return;
+      const visible = currentWorktrees.filter(worktreeMatchesCurrentFilter).sort(compareWorktrees);
+      const index = visible.findIndex(item => item.path === wt.path);
+      const next = visible.slice(index + 1)
+        .map(item => document.getElementById(worktreeDomId(item.path)))
+        .find(Boolean);
+      if (!container.querySelector('.list-item')) container.innerHTML = '';
+      const node = createWorktreeItemDom(wt);
+      if (next) container.insertBefore(node, next);
+      else container.appendChild(node);
+    }
+
+    function insertBranchItemInPlace(branch) {
+      const container = document.getElementById('brList');
+      if (!container || !branchMatchesCurrentFilter(branch)) return;
+      const visible = currentBranches.filter(branchMatchesCurrentFilter).sort(compareBranches);
+      const index = visible.findIndex(item => item.name === branch.name);
+      const next = visible.slice(index + 1)
+        .map(item => document.getElementById(branchDomId(item.name)))
+        .find(Boolean);
+      if (!container.querySelector('.list-item')) container.innerHTML = '';
+      const node = createBranchItemDom(branch, currentMainBranch);
+      if (next) container.insertBefore(node, next);
+      else container.appendChild(node);
+    }
+
+    function removeListItemInPlace(id, containerId, emptyText) {
+      document.getElementById(id)?.remove();
+      const container = document.getElementById(containerId);
+      if (container && !container.querySelector('.list-item')) {
+        container.innerHTML = `<div class="loading">${emptyText}</div>`;
+      }
+    }
+
+    function replaceWorktreeItemInPlace(wt, previousPath = wt.path) {
+      if (previousPath !== wt.path) document.getElementById(worktreeDomId(previousPath))?.remove();
+      document.getElementById(worktreeDomId(wt.path))?.remove();
+      insertWorktreeItemInPlace(wt);
+      const container = document.getElementById('wtList');
+      if (container && !container.querySelector('.list-item')) {
+        container.innerHTML = `<div class="loading">${searchKeyword ? '没有匹配的 Worktree' : '无任何独立 Worktree'}</div>`;
+      }
+      updateListCountBadges();
+    }
+
+    /**
+     * 只把服务端最新快照合并到指定 Worktree/分支，保留其它列表条目及其 DOM。
+     * @param {object} data - /api/inspect 返回的数据
+     * @param {object} options - 要更新或新增的条目标识
+     * @param {string[]} [options.worktreePaths]
+     * @param {string[]} [options.branchNames]
+     * @param {string[]} [options.removedWorktreePaths]
+     * @param {string[]} [options.removedBranchNames]
+     */
+    function applyRepoInspectItems(data, options = {}) {
+      if (!data?.ok) return;
+      const worktreePaths = new Set(options.worktreePaths || []);
+      const branchNames = new Set(options.branchNames || []);
+      const removedWorktreePaths = new Set(options.removedWorktreePaths || []);
+      const removedBranchNames = new Set(options.removedBranchNames || []);
+      if (data.mainBranch) currentMainBranch = data.mainBranch;
+
+      for (const worktreePath of removedWorktreePaths) {
+        currentWorktrees = currentWorktrees.filter(wt => wt.path !== worktreePath);
+        removeListItemInPlace(worktreeDomId(worktreePath), 'wtList', searchKeyword ? '没有匹配的 Worktree' : '无任何独立 Worktree');
+      }
+      for (const branchName of removedBranchNames) {
+        currentBranches = currentBranches.filter(branch => branch.name !== branchName);
+        removeListItemInPlace(branchDomId(branchName), 'brList', searchKeyword ? '没有匹配的分支' : '无本地分支');
+      }
+
+      for (const fresh of data.worktrees || []) {
+        if (!worktreePaths.has(fresh.path)) continue;
+        const previous = currentWorktrees.find(wt => wt.path === fresh.path);
+        if (previous) {
+          Object.assign(previous, fresh);
+          replaceWorktreeItemInPlace(previous);
+        } else {
+          currentWorktrees.push(fresh);
+          insertWorktreeItemInPlace(fresh);
+        }
+      }
+
+      for (const fresh of data.branches || []) {
+        if (!branchNames.has(fresh.name)) continue;
+        const previous = currentBranches.find(branch => branch.name === fresh.name);
+        if (previous) {
+          Object.assign(previous, fresh);
+          const existing = document.getElementById(branchDomId(fresh.name));
+          existing?.remove();
+          insertBranchItemInPlace(previous);
+        } else {
+          currentBranches.push(fresh);
+          insertBranchItemInPlace(fresh);
+        }
+      }
+
+      updateMetrics();
+      updateListCountBadges();
+      populateDiffSelectors();
+      if (activeTab === 'remote') {
+        populateRemoteWorktreeSelect();
+        renderRemoteTargetInfo();
+      }
+    }
+
+    /**
+     * 获取仓库最新状态，但只更新调用方声明的 item，避免重建整个总览列表。
+     * @param {object} options - 传给 applyRepoInspectItems 的条目标识
+     * @returns {Promise<object|null>}
+     */
+    async function refreshRepoItems(options = null) {
+      if (!currentRepo) return null;
+      const previousWorktrees = currentWorktrees;
+      const previousBranches = currentBranches;
+      const res = await fetch(`/api/inspect?path=${encodeURIComponent(currentRepo)}`);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || '读取仓库状态失败');
+      if (options === null) {
+        const nextWorktrees = data.worktrees || [];
+        const nextBranches = data.branches || [];
+        const previousWorktreeMap = new Map(previousWorktrees.map(wt => [wt.path, wt]));
+        const previousBranchMap = new Map(previousBranches.map(branch => [branch.name, branch]));
+        options = {
+          worktreePaths: nextWorktrees
+            .filter(wt => JSON.stringify(previousWorktreeMap.get(wt.path)) !== JSON.stringify(wt))
+            .map(wt => wt.path),
+          branchNames: nextBranches
+            .filter(branch => JSON.stringify(previousBranchMap.get(branch.name)) !== JSON.stringify(branch))
+            .map(branch => branch.name),
+          removedWorktreePaths: previousWorktrees
+            .filter(wt => !nextWorktrees.some(next => next.path === wt.path))
+            .map(wt => wt.path),
+          removedBranchNames: previousBranches
+            .filter(branch => !nextBranches.some(next => next.name === branch.name))
+            .map(branch => branch.name)
+        };
+      }
+      applyRepoInspectItems(data, options);
+      return data;
+    }
+
     function renderFilteredLists() {
       const keyword = searchKeyword.trim().toLocaleLowerCase();
       let worktrees = keyword
@@ -1696,25 +1882,7 @@
         : [...currentWorktrees];
 
       // 智能排序：Main 工作区永远置顶；有实际文件差异或本地未提交修改的 Worktree 优先。
-      worktrees.sort((a, b) => {
-        if (a.isMain && !b.isMain) return -1;
-        if (!a.isMain && b.isMain) return 1;
-
-        const aHasDiff = (a.hasDiff || a.isDirty || (a.aheadCount > 0)) ? 1 : 0;
-        const bHasDiff = (b.hasDiff || b.isDirty || (b.aheadCount > 0)) ? 1 : 0;
-        if (aHasDiff !== bHasDiff) {
-          return bHasDiff - aHasDiff; // 有 diff 的优先排在前面
-        }
-
-        // 同为有 diff 时，优先排 dirty 数量多或 ahead 数量多的
-        const aDiffWeight = (a.dirtyCount || 0) * 10 + (a.aheadCount || 0);
-        const bDiffWeight = (b.dirtyCount || 0) * 10 + (b.aheadCount || 0);
-        if (aDiffWeight !== bDiffWeight) {
-          return bDiffWeight - aDiffWeight;
-        }
-
-        return 0;
-      });
+      worktrees.sort(compareWorktrees);
       const branches = keyword
         ? currentBranches.filter(b => includesKeyword([b.name, b.relativeTime, b.author, b.subject, b.redundancyReason], keyword))
         : currentBranches;
@@ -1850,12 +2018,7 @@
     function refreshWorktreeItemInPlace(worktreePath) {
       const wt = currentWorktrees.find(w => w.path === worktreePath);
       if (!wt) return;
-      const existing = document.getElementById('wt-item-' + encodeURIComponent(worktreePath).replace(/%/g, '_'));
-      if (!existing) {
-        renderFilteredLists();
-        return;
-      }
-      existing.replaceWith(createWorktreeItemDom(wt));
+      replaceWorktreeItemInPlace(wt);
     }
 
     function createBranchItemDom(b, mainBranch) {
@@ -1914,14 +2077,7 @@
         return;
       }
 
-      const sortedBranches = [...branches].sort((a, b) => {
-        // 安全可删优先；陈旧但仍有未解释差异的分支放到末尾，避免误导用户先删它们。
-        const priority = (branch) => branch.isSafeToDelete ? 0 : (branch.isStaleOnly ? 2 : 1);
-        const aPriority = priority(a);
-        const bPriority = priority(b);
-        if (aPriority !== bPriority) return aPriority - bPriority;
-        return b.daysOld - a.daysOld;
-      });
+      const sortedBranches = [...branches].sort(compareBranches);
 
       container.innerHTML = '';
       sortedBranches.forEach(b => {
@@ -1947,16 +2103,19 @@
       }
 
       const itemDom = document.getElementById(`br-item-${encodeURIComponent(branchName).replace(/%/g, '_')}`);
-      if (itemDom) {
-        // 仅替换解除绑定的分支条目，保留其他列表项和滚动位置。
-        itemDom.replaceWith(createBranchItemDom(branch, currentMainBranch));
+      // 只移除并重新插入解除绑定的分支条目，保留其他列表项和滚动位置。
+      itemDom?.remove();
+      insertBranchItemInPlace(branch);
+      const container = document.getElementById('brList');
+      if (container && !container.querySelector('.list-item')) {
+        container.innerHTML = `<div class="loading">${searchKeyword ? '没有匹配的分支' : '无本地分支'}</div>`;
       }
     }
 
     /**
      * 主工作区 Pull 按钮（契约 §19）：对主工作区执行仅快进拉取并做非阻断反馈。
      * 反馈时序遵循 §17.2 教训：只有服务确认结果后才提示——changed 提示「已拉取最新」
-     * 并复用 inspectRepo 刷新当前仓库，未变化提示「已是最新」，失败按输出末行的
+     * 并按受影响条目同步仓库状态，未变化提示「已是最新」，失败按输出末行的
      * 中文修复提示摘要提示；网络层异常走 notifyRequestFailure。按钮全程置忙，
      * finally 恢复（刷新重渲染后按钮已随 DOM 重建，恢复操作对游离节点无害）。
      * @param {HTMLButtonElement} btn - 触发本次拉取的 Pull 按钮
@@ -1988,8 +2147,14 @@
           return;
         }
         showToast('已拉取最新');
-        // 拉取到新提交后主工作区的 ahead/最新提交展示已过时，复用既有刷新入口全量刷新
-        if (currentRepo) await inspectRepo(currentRepo);
+        // 拉取只影响主工作区及其绑定分支，保留其它 Worktree/分支条目的 DOM。
+        const mainWorktree = currentWorktrees.find(wt => wt.path === worktreePath);
+        if (currentRepo) await refreshRepoItems({
+          worktreePaths: [worktreePath],
+          branchNames: [mainWorktree?.branch]
+        });
+        await refreshLocalBranchItems([mainWorktree?.branch]);
+        await refreshRemoteItemsForLocalBranches([mainWorktree?.branch]);
       } catch (err) {
         notifyRequestFailure(err, '拉取失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
       } finally {
@@ -2054,6 +2219,9 @@
               // 分支保留或删除失败时，解除 Worktree 绑定并恢复分支操作按钮。
               updateBranchAfterWorktreeRemoval(branchName);
             }
+            // 分支管理 Tab 的本地分支行也受 Worktree 绑定变化影响，只替换这一行。
+            await refreshLocalBranchItems([branchName]);
+            await refreshRemoteItemsForLocalBranches([branchName]);
           }
 
           updateMetrics();
@@ -2113,8 +2281,6 @@
             itemDom.style.opacity = '0';
             itemDom.style.transform = 'translateX(20px)';
             setTimeout(() => itemDom.remove(), 250);
-          } else {
-            renderFilteredLists();
           }
         } else {
           alert('分支未能成功删除，请确认是否有未提交冲突。');
@@ -2410,25 +2576,16 @@
       return fetchAndRenderRefDiff(requestedMode, pushHistory);
     }
 
-    /* 拉取最新仓库分析数据并刷新外层列表/徽标。
+    /* 拉取最新仓库分析数据并按快照差异更新外层条目/徽标。
        任何改变提交关系的写操作（cherry-pick/revert/stash 等）后都应调用，
-       保证 worktree 列表的领先/同步徽标与提交抽屉徽章一致 */
+       保证 Worktree 列表的领先/同步徽标与提交抽屉徽章一致。 */
     async function refreshRepoInspectData() {
-      if (!currentRepo) return;
-      const res = await fetch(`/api/inspect?path=${encodeURIComponent(currentRepo)}`);
-      const data = await res.json();
-      if (data.ok) {
-        currentWorktrees = data.worktrees || [];
-        currentBranches = data.branches || [];
-        currentMainBranch = data.mainBranch;
-        updateMetrics();
-        renderFilteredLists();
-        populateDiffSelectors();
-      }
+      // 即使由刷新按钮触发，列表也通过差异快照逐项合并；Diff 内容本身仍按按钮语义全量重拉。
+      await refreshRepoItems();
     }
 
     /* Diff Tab 内部专用：一键刷新当前 Diff 视图及仓库最新状态 */
-    async function refreshCurrentDiff() {
+    async function refreshCurrentDiff({ skipRepoInspect = false } = {}) {
       const btn = document.getElementById('diffRefreshBtn');
       if (btn) {
         btn.disabled = true;
@@ -2436,8 +2593,8 @@
       }
 
       try {
-        // 先同步更新仓库分析数据（以防最新提交或分支发生变化）
-        await refreshRepoInspectData();
+        // 用户点击刷新时同步仓库状态；由具体写操作调用时，调用方已先做精确条目同步。
+        if (!skipRepoInspect) await refreshRepoInspectData();
 
         // 根据当前 Diff 模式重新比对刷新
         if (currentDiffType === 'uncommitted' && currentUncommittedPath) {
@@ -2798,9 +2955,9 @@
         // PDF、Office 等文档通常是二进制，文档后缀应优先于二进制兜底分类。
         return { file, extension, category: isDocument ? 1 : isResource ? 2 : 0, status: statusOrder[getDiffFileStatus(file)] };
       });
-      keyed.sort((a, b) => a.category - b.category
+      keyed.sort((a, b) => a.status - b.status
+        || a.category - b.category
         || a.extension.localeCompare(b.extension, 'en')
-        || a.status - b.status
         || a.file.filePath.localeCompare(b.file.filePath, 'zh-CN', { numeric: true }));
       return keyed.map(item => item.file);
     }
@@ -3295,7 +3452,9 @@
         });
         const data = await resp.json();
         if (!data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-        await refreshCurrentDiff();
+        // Stash 可能同时改变源/目标 Worktree，按快照差异增删或更新受影响条目。
+        await refreshRepoItems();
+        await refreshCurrentDiff({ skipRepoInspect: true });
       } catch (err) {
         notifyRequestFailure(err, `操作失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`);
         if (btn && btn.isConnected) btn.disabled = false;
@@ -4116,8 +4275,12 @@
         commitsDrawerState.loadedCount = 0;
         commitsDrawerAheadBehind = null;
         await fetchAndRenderCommits();
-        // 外层 worktree 列表的领先/同步徽标同样受写操作影响，同步刷新保持两处一致
-        await refreshRepoInspectData();
+        // 提交操作只影响目标 Worktree 与目标分支，保留其它列表条目的 DOM。
+        const targetWorktree = currentWorktrees.find(wt => wt.path === worktreePath);
+        await refreshRepoItems({
+          worktreePaths: [worktreePath],
+          branchNames: [targetWorktree?.branch]
+        });
       } catch (err) {
         notifyRequestFailure(err, `${actionLabel} 失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`);
       } finally {
@@ -4398,6 +4561,72 @@
       return map[mr.reviewStatus] || '';
     }
 
+    function mrDomId(id) {
+      return 'mr-item-' + encodeURIComponent(String(id)).replace(/%/g, '_');
+    }
+
+    function createMrItemDom(mr) {
+      const row = document.createElement('div');
+      row.className = 'list-item';
+      row.style.cursor = 'pointer';
+      row.id = mrDomId(mr.id);
+      row.innerHTML = `
+        <div class="item-main">
+          <div class="item-header-row">
+            <div class="item-name"><span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg></span><span>${escapeHtml(mr.title)}</span></div>
+            <div class="item-tags">${mrStatusBadgeHtml(mr)}${mrReviewBadgeHtml(mr)}</div>
+          </div>
+          <div class="item-desc">
+            <span class="mr-branch-flow"><span>${escapeHtml(mr.sourceBranch)}</span><span>→</span><span>${escapeHtml(mr.targetBranch)}</span></span>
+            · 创建于 ${escapeHtml(formatRelativeTimeCn(mr.createdAt))}
+          </div>
+        </div>
+        <div class="item-actions"><button class="btn-outline" data-action="mr-open-detail">查看详情</button></div>
+      `;
+      row.addEventListener('click', () => openMrDetail(String(mr.id)));
+      row.querySelector('[data-action="mr-open-detail"]')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        openMrDetail(String(mr.id));
+      });
+      return row;
+    }
+
+    function mrMatchesCurrentFilter(mr) {
+      return mrStatusFilter === 'all' || mr.status === mrStatusFilter;
+    }
+
+    function updateMrItemInPlace(fresh) {
+      if (!fresh?.id) return;
+      const previous = mergeRequestsCache.find(mr => String(mr.id) === String(fresh.id));
+      if (previous) Object.assign(previous, fresh);
+      else mergeRequestsCache.push(fresh);
+      const existing = document.getElementById(mrDomId(fresh.id));
+      existing?.remove();
+      if (!mrMatchesCurrentFilter(fresh)) {
+        mergeRequestsCache = mergeRequestsCache.filter(mr => mrMatchesCurrentFilter(mr));
+        document.getElementById('mrCountBadge').textContent = `${mergeRequestsCache.length} 个`;
+        const container = document.getElementById('mrList');
+        if (container && !container.querySelector('.list-item')) {
+          container.innerHTML = `<div class="loading">${mrStatusFilter === 'all' ? '当前仓库暂无 Merge Request' : '该筛选条件下暂无 Merge Request'}</div>`;
+        }
+        return;
+      }
+      mergeRequestsCache = mergeRequestsCache
+        .filter(mr => mrMatchesCurrentFilter(mr))
+        .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
+          || String(b.id || '').localeCompare(String(a.id || '')));
+      const container = document.getElementById('mrList');
+      if (!container) return;
+      const visible = mergeRequestsCache;
+      const index = visible.findIndex(mr => String(mr.id) === String(fresh.id));
+      const next = visible.slice(index + 1).map(mr => document.getElementById(mrDomId(mr.id))).find(Boolean);
+      if (!container.querySelector('.list-item')) container.innerHTML = '';
+      const node = createMrItemDom(fresh);
+      if (next) container.insertBefore(node, next);
+      else container.appendChild(node);
+      document.getElementById('mrCountBadge').textContent = `${mergeRequestsCache.length} 个`;
+    }
+
     function setMrStatusFilter(status) {
       mrStatusFilter = status;
       document.querySelectorAll('#mrStatusFilterGroup .diff-mode-btn').forEach(b => {
@@ -4443,33 +4672,8 @@
         container.innerHTML = `<div class="loading">${mrStatusFilter === 'all' ? '当前仓库暂无 Merge Request' : '该筛选条件下暂无 Merge Request'}</div>`;
         return;
       }
-      container.innerHTML = mergeRequestsCache.map(mr => `
-        <div class="list-item" style="cursor: pointer;" data-action="mr-row-open">
-          <div class="item-main">
-            <div class="item-header-row">
-              <div class="item-name"><span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg></span><span>${escapeHtml(mr.title)}</span></div>
-              <div class="item-tags">${mrStatusBadgeHtml(mr)}${mrReviewBadgeHtml(mr)}</div>
-            </div>
-            <div class="item-desc">
-              <span class="mr-branch-flow"><span>${escapeHtml(mr.sourceBranch)}</span><span>→</span><span>${escapeHtml(mr.targetBranch)}</span></span>
-              · 创建于 ${escapeHtml(formatRelativeTimeCn(mr.createdAt))}
-            </div>
-          </div>
-          <div class="item-actions">
-            <button class="btn-outline" data-action="mr-open-detail">查看详情</button>
-          </div>
-        </div>
-      `).join('');
-      // 行与按钮闭包直引 mr 记录，id 不经内联字符串往返（CSP 迁移）；行序与缓存严格对齐
-      container.querySelectorAll('.list-item').forEach((row, index) => {
-        const mr = mergeRequestsCache[index];
-        if (!mr) return;
-        row.addEventListener('click', () => openMrDetail(String(mr.id)));
-        row.querySelector('[data-action="mr-open-detail"]')?.addEventListener('click', (event) => {
-          event.stopPropagation(); // 与原内联一致：按钮点击不触发行点击
-          openMrDetail(String(mr.id));
-        });
-      });
+      container.innerHTML = '';
+      mergeRequestsCache.forEach(mr => container.appendChild(createMrItemDom(mr)));
     }
 
     /* MR 弹层的分支选择器选项：仅本地分支 */
@@ -4563,7 +4767,7 @@
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
         closeCreateMrModal();
-        refreshMergeRequests(); // 刷新列表与计数徽章
+        updateMrItemInPlace(data.mergeRequest); // 只插入新 MR 条目并更新计数
         if (data.mergeRequest?.id != null) {
           openMrDetail(data.mergeRequest.id); // 直接打开新 MR 详情
         }
@@ -4828,10 +5032,16 @@
 
         // 成功：重拉详情（保留滚动位置）并刷新列表/计数
         await refreshMergeRequestDetail();
-        refreshMergeRequests();
+        updateMrItemInPlace(data.mergeRequest);
         if (action === 'merge') {
-          // 合并会实际修改 target 分支：联动刷新仓库分析数据与相关视图（均为局部刷新，不做全量 reload）
-          await refreshRepoInspectData();
+          // 合并只影响 target 分支及其 Worktree；逐条同步总览项，避免重建整个列表。
+          const targetWorktree = currentWorktrees.find(wt => wt.branch === mr.targetBranch);
+          await refreshRepoItems({
+            worktreePaths: [targetWorktree?.path],
+            branchNames: [mr.sourceBranch, mr.targetBranch]
+          });
+          await refreshLocalBranchItems([mr.sourceBranch, mr.targetBranch]);
+          await refreshRemoteItemsForLocalBranches([mr.sourceBranch, mr.targetBranch]);
           refreshCommitsDrawerIfRelatedToBranches([mr.sourceBranch, mr.targetBranch]);
           refreshDiffViewIfRelatedToBranches([mr.sourceBranch, mr.targetBranch]);
         }
@@ -5119,6 +5329,112 @@
       return badges.join('');
     }
 
+    function localBranchDomId(name) {
+      return 'local-branch-item-' + encodeURIComponent(name).replace(/%/g, '_');
+    }
+
+    function createLocalBranchItemDom(b) {
+      const div = document.createElement('div');
+      div.className = 'list-item';
+      div.id = localBranchDomId(b.name);
+      div.dataset.localBranch = b.name;
+      div.innerHTML = `
+        <div class="item-main">
+          <div class="item-header-row">
+            <span class="item-name">${escapeHtml(b.name)}</span>
+            <span class="item-tags">${localBranchBadgesHtml(b)}</span>
+          </div>
+          <div class="item-desc">
+            ${escapeHtml(shortSha(b.sha))} · ${escapeHtml(b.author || '-')} ·
+            ${escapeHtml(formatRelativeTimeCn(b.committerDate) || b.committerDate || '-')} ·
+            ${escapeHtml(b.subject || '')}
+          </div>
+        </div>
+        <div class="item-actions">
+          ${b.worktree ? '' : '<button class="btn-outline" type="button" data-lb-action="checkout" title="把该分支检出到任选工作区">检出到工作区</button>'}
+          ${!b.isMain && !b.worktree ? `<button class="btn-outline branch-delete-btn" type="button" data-lb-action="delete" title="${b.mergedIntoMain ? '删除该分支（已合入主干，安全删除）' : '强制删除该分支（有未合入主干的提交，删除后不可恢复）'}">删除</button>` : ''}
+        </div>
+      `;
+      div.querySelectorAll('[data-lb-action]').forEach(btn => {
+        btn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (btn.dataset.lbAction === 'checkout') openCheckoutLocalModal(b);
+          else if (btn.dataset.lbAction === 'delete') deleteLocalBranchAction(b);
+        });
+      });
+      return div;
+    }
+
+    function localBranchMatchesFilter(branch) {
+      const keyword = document.getElementById('localBranchFilterInput')?.value.trim().toLowerCase() || '';
+      return !keyword || branch.name.toLowerCase().includes(keyword);
+    }
+
+    /**
+     * 根据本地分支名定位远端清单中的同名条目，只同步这些条目的跟踪状态。
+     * @param {string[]} branchNames - 受影响的本地分支名
+     * @returns {Promise<void>}
+     */
+    async function refreshRemoteItemsForLocalBranches(branchNames) {
+      const names = new Set((branchNames || []).filter(Boolean));
+      if (!currentRepo || names.size === 0 || remoteState.branches.length === 0) return;
+      const remoteNames = remoteState.branches
+        .filter(branch => names.has(branch.branch))
+        .map(branch => branch.name);
+      if (remoteNames.length > 0) await refreshRemoteBranchItems(remoteNames);
+    }
+
+    function insertLocalBranchItemInPlace(branch) {
+      const container = document.getElementById('localBranchList');
+      if (!container || !localBranchMatchesFilter(branch)) return;
+      const visible = sortBranchEntries(remoteState.localBranches.filter(localBranchMatchesFilter), remoteState.localBranchSort);
+      const index = visible.findIndex(item => item.name === branch.name);
+      const next = visible.slice(index + 1)
+        .map(item => document.getElementById(localBranchDomId(item.name)))
+        .find(Boolean);
+      if (!container.querySelector('.list-item')) container.innerHTML = '';
+      const node = createLocalBranchItemDom(branch);
+      if (next) container.insertBefore(node, next);
+      else container.appendChild(node);
+    }
+
+    /**
+     * 只同步远端接口返回中指定的本地分支条目，检出/删除后不重建整个本地分支列表。
+     * @param {string[]} names - 受影响的本地分支名
+     * @returns {Promise<void>}
+     */
+    async function refreshLocalBranchItems(names) {
+      const targets = [...new Set((names || []).filter(Boolean))];
+      if (!currentRepo || targets.length === 0) return;
+      const res = await fetch(`/api/local-branches?path=${encodeURIComponent(currentRepo)}`);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || '读取本地分支失败');
+      const latest = new Map((data.branches || []).map(branch => [branch.name, branch]));
+      for (const name of targets) {
+        const fresh = latest.get(name);
+        const previous = remoteState.localBranches.find(branch => branch.name === name);
+        if (fresh) {
+          if (previous) {
+            Object.assign(previous, fresh);
+            const existing = document.getElementById(localBranchDomId(name));
+            existing?.remove();
+            insertLocalBranchItem(previous);
+          } else {
+            remoteState.localBranches.push(fresh);
+            insertLocalBranchItem(fresh);
+          }
+        } else if (previous) {
+          remoteState.localBranches = remoteState.localBranches.filter(branch => branch.name !== name);
+          document.getElementById(localBranchDomId(name))?.remove();
+        }
+      }
+      document.getElementById('localBranchCount').textContent = `${remoteState.localBranches.length} 个`;
+      const container = document.getElementById('localBranchList');
+      if (container && !container.querySelector('.list-item')) {
+        container.innerHTML = remoteState.localBranches.length ? '<div class="loading">没有匹配的本地分支</div>' : '<div class="loading">没有本地分支</div>';
+      }
+    }
+
     /* 渲染本地分支列表（含客户端过滤与排序切换），逐行绑定检出与删除入口 */
     function renderLocalBranchList() {
       const container = document.getElementById('localBranchList');
@@ -5142,36 +5458,8 @@
         return;
       }
 
-      container.innerHTML = sorted.map(b => `
-        <div class="list-item" data-local-branch="${escapeHtml(b.name)}">
-          <div class="item-main">
-            <div class="item-header-row">
-              <span class="item-name">${escapeHtml(b.name)}</span>
-              <span class="item-tags">${localBranchBadgesHtml(b)}</span>
-            </div>
-            <div class="item-desc">
-              ${escapeHtml(shortSha(b.sha))} · ${escapeHtml(b.author || '-')} ·
-              ${escapeHtml(formatRelativeTimeCn(b.committerDate) || b.committerDate || '-')} ·
-              ${escapeHtml(b.subject || '')}
-            </div>
-          </div>
-          <div class="item-actions">
-            ${b.worktree ? '' : '<button class="btn-outline" type="button" data-lb-action="checkout" title="把该分支检出到任选工作区">检出到工作区</button>'}
-            ${!b.isMain && !b.worktree ? `<button class="btn-outline branch-delete-btn" type="button" data-lb-action="delete" title="${b.mergedIntoMain ? '删除该分支（已合入主干，安全删除）' : '强制删除该分支（有未合入主干的提交，删除后不可恢复）'}">删除</button>` : ''}
-          </div>
-        </div>
-      `).join('');
-
-      container.querySelectorAll('[data-lb-action]').forEach(btn => {
-        btn.addEventListener('click', (event) => {
-          event.stopPropagation();
-          const row = btn.closest('[data-local-branch]');
-          const branch = remoteState.localBranches.find(b => b.name === row.dataset.localBranch);
-          if (!branch) return;
-          if (btn.dataset.lbAction === 'checkout') openCheckoutLocalModal(branch);
-          else if (btn.dataset.lbAction === 'delete') deleteLocalBranchAction(branch);
-        });
-      });
+      container.innerHTML = '';
+      sorted.forEach(branch => container.appendChild(createLocalBranchItemDom(branch)));
     }
 
     /* 检出本地分支弹层：目标工作区可下拉选择，默认当前工具栏目标 */
@@ -5192,6 +5480,7 @@
       const branchName = remoteState.checkoutLocalModalBranch;
       if (!branchName) return;
       const worktree = document.getElementById('checkoutLocalWorktreeSelect').value || remoteState.targetWorktree;
+      const previousBranch = currentWorktrees.find(wt => wt.path === worktree)?.branch;
       const errorEl = document.getElementById('checkoutLocalModalError');
       const submitBtn = document.getElementById('checkoutLocalSubmitBtn');
       errorEl.textContent = '';
@@ -5208,8 +5497,12 @@
         syncTargetWorktreeAfterModal(worktree);
         showToast(`已把「${branchName}」检出到所选工作区`);
         // 检出会切换工作区分支：总览、检出绑定与 merge 状态都需刷新
-        inspectRepo(currentRepo);
-        refreshLocalBranches();
+        await refreshRepoItems({
+          worktreePaths: [worktree],
+          branchNames: [previousBranch, branchName]
+        });
+        await refreshLocalBranchItems([previousBranch, branchName]);
+        await refreshRemoteItemsForLocalBranches([previousBranch, branchName]);
         refreshMergeState();
       } catch (err) {
         errorEl.textContent = toDisplayErrorMessage(err, '检出失败');
@@ -5248,7 +5541,10 @@
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || '删除分支失败');
         showToast(`本地分支「${branch.name}」已删除`);
-        refreshLocalBranches();
+        await refreshLocalBranchItems([branch.name]);
+        await refreshRemoteItemsForLocalBranches([branch.name]);
+        // 总览的分支条目与 Diff 选择器也要移除同一个已删除分支，不能留下陈旧引用。
+        await refreshRepoItems({ removedBranchNames: [branch.name] });
       } catch (err) {
         showToast(`删除失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`);
       }
@@ -5274,8 +5570,7 @@
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || '删除远端分支失败');
         showToast(`远端分支「${branch.name}」已删除`);
-        refreshRemoteBranches();
-        refreshLocalBranches();
+        removeRemoteBranchItemInPlace(branch.name);
       } catch (err) {
         showToast(`删除失败：${toDisplayErrorMessage(err, '无法连接本地服务')}`);
       }
@@ -5308,6 +5603,110 @@
       return badges.join('');
     }
 
+    function remoteBranchDomId(name) {
+      return 'remote-branch-item-' + encodeURIComponent(name).replace(/%/g, '_');
+    }
+
+    function createRemoteBranchItemDom(b) {
+      const div = document.createElement('div');
+      div.className = 'list-item';
+      div.id = remoteBranchDomId(b.name);
+      div.dataset.remoteBranch = b.name;
+      div.innerHTML = `
+        <div class="item-main">
+          <div class="item-header-row">
+            <span class="item-name">${escapeHtml(b.name)}</span>
+            <span class="item-tags">${remoteBranchBadgesHtml(b)}</span>
+          </div>
+          <div class="item-desc">
+            ${escapeHtml(shortSha(b.sha))} · ${escapeHtml(b.author || '-')} ·
+            ${escapeHtml(formatRelativeTimeCn(b.committerDate) || b.committerDate || '-')} ·
+            ${escapeHtml(b.subject || '')}
+          </div>
+        </div>
+        <div class="item-actions">
+          <button class="btn-outline" type="button" data-rb-action="checkout" title="检出为本地跟踪分支（可重命名）到目标工作区">检出</button>
+          <button class="btn-outline" type="button" data-rb-action="merge" title="合并该远端分支到目标工作区当前分支">合并到工作区</button>
+          <button class="btn-outline" type="button" data-rb-action="create" title="以该远端分支为基准创建新的远端分支（纯远端操作）">建远端分支</button>
+          ${b.isProtected ? '' : '<button class="btn-outline branch-delete-btn" type="button" data-rb-action="delete" title="直接删除远端上的该分支（不可恢复）">删除</button>'}
+        </div>
+      `;
+      div.querySelectorAll('[data-rb-action]').forEach(btn => {
+        btn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (btn.dataset.rbAction === 'checkout') openCheckoutModal(b);
+          else if (btn.dataset.rbAction === 'merge') mergeRemoteRef(b);
+          else if (btn.dataset.rbAction === 'create') openCreateRemoteModal(b);
+          else if (btn.dataset.rbAction === 'delete') deleteRemoteBranchAction(b);
+        });
+      });
+      return div;
+    }
+
+    function remoteBranchMatchesFilter(branch) {
+      const keyword = document.getElementById('remoteBranchFilterInput')?.value.trim().toLowerCase() || '';
+      return !keyword || branch.name.toLowerCase().includes(keyword);
+    }
+
+    function insertRemoteBranchItemInPlace(branch) {
+      const container = document.getElementById('remoteBranchList');
+      if (!container || !remoteBranchMatchesFilter(branch)) return;
+      const visible = sortBranchEntries(remoteState.branches.filter(remoteBranchMatchesFilter), remoteState.remoteBranchSort);
+      const index = visible.findIndex(item => item.name === branch.name);
+      const next = visible.slice(index + 1)
+        .map(item => document.getElementById(remoteBranchDomId(item.name)))
+        .find(Boolean);
+      if (!container.querySelector('.list-item')) container.innerHTML = '';
+      const node = createRemoteBranchItemDom(branch);
+      if (next) container.insertBefore(node, next);
+      else container.appendChild(node);
+    }
+
+    function removeRemoteBranchItemInPlace(name) {
+      remoteState.branches = remoteState.branches.filter(branch => branch.name !== name);
+      document.getElementById(remoteBranchDomId(name))?.remove();
+      document.getElementById('remoteBranchCount').textContent = `${remoteState.branches.length} 个`;
+      const container = document.getElementById('remoteBranchList');
+      if (container && !container.querySelector('.list-item')) {
+        container.innerHTML = remoteState.branches.length
+          ? '<div class="loading">没有匹配的远端分支</div>'
+          : '<div class="loading">没有远端分支。可点击上方「刷新远端 (fetch)」同步远端状态。</div>';
+      }
+    }
+
+    /**
+     * 只同步指定远端分支条目，创建或删除远端分支时保留其它行和滚动位置。
+     * @param {string[]} names - 受影响的远端分支名
+     * @returns {Promise<void>}
+     */
+    async function refreshRemoteBranchItems(names) {
+      const targets = [...new Set((names || []).filter(Boolean))];
+      if (!currentRepo || targets.length === 0) return;
+      const res = await fetch(`/api/remote-branches?path=${encodeURIComponent(currentRepo)}`);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || '读取远端分支失败');
+      const latest = new Map((data.branches || []).map(branch => [branch.name, branch]));
+      for (const name of targets) {
+        const fresh = latest.get(name);
+        const previous = remoteState.branches.find(branch => branch.name === name);
+        if (fresh) {
+          if (previous) {
+            Object.assign(previous, fresh);
+            const existing = document.getElementById(remoteBranchDomId(name));
+            existing?.remove();
+            insertRemoteBranchItemInPlace(previous);
+          } else {
+            remoteState.branches.push(fresh);
+            insertRemoteBranchItemInPlace(fresh);
+          }
+        } else if (previous) {
+          removeRemoteBranchItemInPlace(name);
+        }
+      }
+      remoteState.lastFetchAt = data.lastFetchAt || remoteState.lastFetchAt;
+      document.getElementById('remoteBranchCount').textContent = `${remoteState.branches.length} 个`;
+    }
+
     /* 渲染远端分支列表（含客户端过滤与排序切换），并逐行绑定操作入口 */
     function renderRemoteBranchList() {
       const container = document.getElementById('remoteBranchList');
@@ -5331,40 +5730,8 @@
         return;
       }
 
-      container.innerHTML = sorted.map(b => `
-        <div class="list-item" data-remote-branch="${escapeHtml(b.name)}">
-          <div class="item-main">
-            <div class="item-header-row">
-              <span class="item-name">${escapeHtml(b.name)}</span>
-              <span class="item-tags">${remoteBranchBadgesHtml(b)}</span>
-            </div>
-            <div class="item-desc">
-              ${escapeHtml(shortSha(b.sha))} · ${escapeHtml(b.author || '-')} ·
-              ${escapeHtml(formatRelativeTimeCn(b.committerDate) || b.committerDate || '-')} ·
-              ${escapeHtml(b.subject || '')}
-            </div>
-          </div>
-          <div class="item-actions">
-            <button class="btn-outline" type="button" data-rb-action="checkout" title="检出为本地跟踪分支（可重命名）到目标工作区">检出</button>
-            <button class="btn-outline" type="button" data-rb-action="merge" title="合并该远端分支到目标工作区当前分支">合并到工作区</button>
-            <button class="btn-outline" type="button" data-rb-action="create" title="以该远端分支为基准创建新的远端分支（纯远端操作）">建远端分支</button>
-            ${b.isProtected ? '' : '<button class="btn-outline branch-delete-btn" type="button" data-rb-action="delete" title="直接删除远端上的该分支（不可恢复）">删除</button>'}
-          </div>
-        </div>
-      `).join('');
-
-      container.querySelectorAll('[data-rb-action]').forEach(btn => {
-        btn.addEventListener('click', (event) => {
-          event.stopPropagation();
-          const row = btn.closest('[data-remote-branch]');
-          const branch = remoteState.branches.find(b => b.name === row.dataset.remoteBranch);
-          if (!branch) return;
-          if (btn.dataset.rbAction === 'checkout') openCheckoutModal(branch);
-          else if (btn.dataset.rbAction === 'merge') mergeRemoteRef(branch);
-          else if (btn.dataset.rbAction === 'create') openCreateRemoteModal(branch);
-          else if (btn.dataset.rbAction === 'delete') deleteRemoteBranchAction(branch);
-        });
-      });
+      container.innerHTML = '';
+      sorted.forEach(branch => container.appendChild(createRemoteBranchItemDom(branch)));
     }
 
     /* 拉取目标工作区的合并进行状态并渲染冲突处理面板 */
@@ -5502,6 +5869,8 @@
         } else {
           showToast(resolution === 'ours' ? `已采用当前分支版本：${filePath}` : `已采用来源分支版本：${filePath}`);
         }
+        const branch = currentWorktrees.find(wt => wt.path === worktree)?.branch;
+        await refreshRepoItems({ worktreePaths: [worktree], branchNames: [branch] });
         refreshMergeState();
       } catch (err) {
         notifyRequestFailure(err, '处理冲突失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
@@ -5541,8 +5910,13 @@
         } else if (data.status === 'conflict') {
           showToast(`合并存在 ${data.conflictFiles.length} 个冲突文件，请在下方处理`);
         }
-        // 合并会改变工作区内容与分支头，全量刷新保持各面板一致
-        inspectRepo(currentRepo);
+        // 合并只影响目标 Worktree 及其当前分支，局部更新对应条目。
+        await refreshRepoItems({
+          worktreePaths: [worktree],
+          branchNames: [wt?.branch]
+        });
+        await refreshLocalBranchItems([wt?.branch]);
+        await refreshRemoteItemsForLocalBranches([wt?.branch]);
         refreshMergeState();
       } catch (err) {
         notifyRequestFailure(err, '合并失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
@@ -5568,9 +5942,14 @@
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || '完成合并失败');
         showToast(`合并提交完成（${shortSha(data.head)}）`);
-        inspectRepo(currentRepo);
+        const mergeWorktree = currentWorktrees.find(item => item.path === worktree);
+        await refreshRepoItems({
+          worktreePaths: [worktree],
+          branchNames: [mergeWorktree?.branch]
+        });
         // 合并提交改变本地分支历史：本地清单的合入状态需同步刷新
-        refreshLocalBranches();
+        await refreshLocalBranchItems([mergeWorktree?.branch]);
+        await refreshRemoteItemsForLocalBranches([mergeWorktree?.branch]);
         refreshMergeState();
       } catch (err) {
         notifyRequestFailure(err, '完成合并失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
@@ -5596,7 +5975,11 @@
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || '放弃合并失败');
         showToast('已放弃合并，现场已恢复');
-        inspectRepo(currentRepo);
+        const abortWorktree = currentWorktrees.find(item => item.path === worktree);
+        await refreshRepoItems({
+          worktreePaths: [worktree],
+          branchNames: [abortWorktree?.branch]
+        });
         refreshMergeState();
       } catch (err) {
         notifyRequestFailure(err, '放弃合并失败：' + toDisplayErrorMessage(err, '无法连接本地服务'));
@@ -5788,11 +6171,11 @@
           closeEditWorktreeModal();
           showToast(`目录与名称已同步为「${data.name}」`);
           // 就地刷新该条目并同步远端 Tab 的目标工作区引用（路径变了，不整页重分析）
-          const oldNodeId = 'wt-item-' + encodeURIComponent(worktreePath).replace(/%/g, '_');
           target.path = data.worktreePath;
           target.name = data.name;
-          const oldNode = document.getElementById(oldNodeId);
-          if (oldNode) oldNode.replaceWith(createWorktreeItemDom(target));
+          replaceWorktreeItemInPlace(target, worktreePath);
+          await refreshLocalBranchItems([target.branch]);
+          await refreshRemoteItemsForLocalBranches([target.branch]);
           if (remoteState.targetWorktree === worktreePath) {
             remoteState.targetWorktree = data.worktreePath;
             const select = document.getElementById('remoteWorktreeSelect');
@@ -5813,7 +6196,9 @@
           if (target) {
             if (data.name) target.name = data.name;
             else delete target.name;
-            refreshWorktreeItemInPlace(worktreePath);
+            replaceWorktreeItemInPlace(target);
+            await refreshLocalBranchItems([target.branch]);
+            await refreshRemoteItemsForLocalBranches([target.branch]);
           }
         }
       } catch (err) {
@@ -6009,7 +6394,12 @@
         closeCreateWorktreeModal();
         showToast(`Worktree 已创建：${data.branch} → ${data.path}`);
         if (data.nameError) showToast(`${data.nameError}`);
-        inspectRepo(currentRepo);
+        await refreshRepoItems({
+          worktreePaths: [data.path],
+          branchNames: [data.branch]
+        });
+        await refreshLocalBranchItems([data.branch]);
+        await refreshRemoteItemsForLocalBranches([data.branch]);
       } catch (err) {
         if (seq !== worktreeCreateSubmitSeq) return;
         errorEl.textContent = toDisplayErrorMessage(err, '创建失败');
@@ -6080,6 +6470,7 @@
       if (!branch) return;
       // 目标工作区以弹层下拉为准；所选与工具栏不同时同步工具栏上下文
       const worktree = document.getElementById('checkoutWorktreeSelect').value || remoteState.targetWorktree;
+      const previousBranch = currentWorktrees.find(wt => wt.path === worktree)?.branch;
       const localName = document.getElementById('checkoutLocalNameInput').value.trim();
       const errorEl = document.getElementById('checkoutModalError');
       const submitBtn = document.getElementById('checkoutSubmitBtn');
@@ -6101,7 +6492,12 @@
         syncTargetWorktreeAfterModal(worktree);
         showToast(`已检出 ${branch.name} 为本地分支「${data.branch}」`);
         // 检出会切换工作区分支：总览面板、目标信息与 merge 状态都需要刷新
-        inspectRepo(currentRepo);
+        await refreshRepoItems({
+          worktreePaths: [worktree],
+          branchNames: [previousBranch, data.branch]
+        });
+        await refreshLocalBranchItems([previousBranch, data.branch]);
+        await refreshRemoteItemsForLocalBranches([previousBranch, data.branch]);
         refreshMergeState();
       } catch (err) {
         errorEl.textContent = toDisplayErrorMessage(err, '检出失败');
@@ -6175,7 +6571,7 @@
         if (!data.ok) throw new Error(data.error || '创建远端分支失败');
         closeCreateRemoteModal();
         showToast(`远端分支「${data.remote}/${data.branch}」创建成功`);
-        refreshRemoteBranches();
+        await refreshRemoteBranchItems([`${data.remote}/${data.branch}`]);
       } catch (err) {
         errorEl.textContent = toDisplayErrorMessage(err, '创建远端分支失败');
       } finally {
@@ -6296,10 +6692,15 @@
         if (!data.ok) throw new Error(data.error || '切换失败');
         closeSwitchBranchModal();
         syncTargetWorktreeAfterModal(worktree);
+        const previousBranch = currentWorktrees.find(wt => wt.path === worktree)?.branch;
         showToast(refType === 'remote' ? `已检出 ${ref} 为本地分支「${data.branch}」` : `已切换到「${data.branch}」`);
-        inspectRepo(currentRepo);
+        await refreshRepoItems({
+          worktreePaths: [worktree],
+          branchNames: [previousBranch, data.branch]
+        });
         // 检出/切换改变本地分支的检出绑定：本地清单需同步刷新
-        refreshLocalBranches();
+        await refreshLocalBranchItems([previousBranch, data.branch]);
+        await refreshRemoteItemsForLocalBranches([previousBranch, data.branch]);
         refreshMergeState();
       } catch (err) {
         errorEl.textContent = toDisplayErrorMessage(err, '切换失败');
@@ -6504,6 +6905,8 @@
         if (!data.ok) throw new Error(data.error || '保存冲突文件失败');
         closeConflictDrawer();
         showToast(`已解决：${filePath}${data.remaining > 0 ? `（剩余 ${data.remaining} 个冲突）` : '（全部冲突已处理）'}`);
+        const branch = currentWorktrees.find(wt => wt.path === worktree)?.branch;
+        await refreshRepoItems({ worktreePaths: [worktree], branchNames: [branch] });
         refreshMergeState();
       } catch (err) {
         errorEl.textContent = toDisplayErrorMessage(err, '保存冲突文件失败');
@@ -6834,7 +7237,7 @@
         const data = await res.json();
         if (data.ok) {
           alert('Worktrees prune 执行成功！');
-          inspectRepo(currentRepo);
+          await refreshRepoItems();
         } else {
           alert('Prune 失败: ' + data.error);
         }
