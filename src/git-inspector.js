@@ -1675,9 +1675,9 @@ export async function getUncommittedDiff(worktreePath) {
   const IGNORED_UNTRACKED_PREFIXES = ['verification/', '.verification/', '.playwright/', '.cypress/'];
 
   try {
-    const untrackedRaw = await runGit(worktreePath, ['ls-files', '--others', '--exclude-standard']);
-    for (const f of untrackedRaw.split('\n')) {
-      const filePath = f.trim();
+    // 用 NUL 分隔的原始路径读盘，避免 Git 转义非 ASCII 字符或丢失文件名中的空白。
+    const untrackedRaw = await runGitRaw(worktreePath, ['ls-files', '--others', '--exclude-standard', '-z']);
+    for (const filePath of untrackedRaw.toString('utf8').split('\0')) {
       if (!filePath || processedFiles.has(filePath)) continue;
       if (IGNORED_UNTRACKED_PREFIXES.some(prefix => filePath.startsWith(prefix))) continue;
       processedFiles.add(filePath);

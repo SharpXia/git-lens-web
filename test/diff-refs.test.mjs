@@ -194,15 +194,17 @@ test('worktree↔worktree：同 Worktree 自审锁定 uncommitted', async (t) =>
   assert.equal(await realp(same.source.path), await realp(repo));
 });
 
-test('首次提交前的工作区自审以空树为基准，展示暂存文件与后续编辑', async (t) => {
+test('首次提交前的工作区自审展示暂存、后续编辑与中文未跟踪文件', async (t) => {
   const root = await makeTempRoot(t);
+  const untrackedPath = ' 资料/未跟踪 文件.txt';
   for (const objectFormat of ['sha1', 'sha256']) {
     await t.test(objectFormat, async () => {
       const repo = path.join(root, objectFormat);
       await git(root, 'init', '-b', 'main', `--object-format=${objectFormat}`, repo);
+      await git(repo, 'config', 'core.quotepath', 'true');
       await write(path.join(repo, '已暂存.txt'), '第一行\n');
       await write(path.join(repo, 'edited.txt'), '暂存的内容\n');
-      await write(path.join(repo, 'untracked.txt'), '未跟踪的内容\n');
+      await write(path.join(repo, untrackedPath), '未跟踪的内容\n');
       await git(repo, 'add', '--', '已暂存.txt', 'edited.txt');
       await write(path.join(repo, 'edited.txt'), '工作区最新内容\n');
 
@@ -214,13 +216,14 @@ test('首次提交前的工作区自审以空树为基准，展示暂存文件�
       assert.equal(await git(repo, 'ls-tree', diff.baseRevision), '');
 
       const files = new Map(diff.files.map(file => [file.filePath, file]));
+      assert.deepEqual([...files.keys()].sort(), ['已暂存.txt', 'edited.txt', untrackedPath].sort());
       assert.equal(files.get('已暂存.txt').status, 'A');
       assert.equal(files.get('已暂存.txt').added, 1);
       assert.match(files.get('已暂存.txt').diffChunk, /\+第一行/);
       assert.match(files.get('edited.txt').diffChunk, /\+工作区最新内容/);
       assert.doesNotMatch(files.get('edited.txt').diffChunk, /暂存的内容/);
-      assert.equal(files.get('untracked.txt').status, '?');
-      assert.match(files.get('untracked.txt').diffChunk, /\+未跟踪的内容/);
+      assert.equal(files.get(untrackedPath).status, '?');
+      assert.match(files.get(untrackedPath).diffChunk, /\+未跟踪的内容/);
     });
   }
 });
